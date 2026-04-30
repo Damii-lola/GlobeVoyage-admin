@@ -1,3 +1,6 @@
+// index.js — Render Backend (Node/Express)
+// All env vars live here on Render dashboard
+
 const express = require("express");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
@@ -6,89 +9,76 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Supabase client — set these in Render environment variables
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// ─── Health check ───────────────────────────────────────────────
-app.get("/", (req, res) => res.json({ status: "GlobeVoyage API live 🌍" }));
+// ──────────────────────────────────────────────
+// HEALTH CHECK
+// ──────────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.json({ status: "GlobeVoyage API is live 🌍" });
+});
 
-// ─── Countries ──────────────────────────────────────────────────
-app.get("/countries", async (req, res) => {
+// ──────────────────────────────────────────────
+// DESTINATIONS — used by Admin, Preview & App
+// ──────────────────────────────────────────────
+
+// GET all destinations
+app.get("/api/destinations", async (req, res) => {
+  const { data, error } = await supabase.from("destinations").select("*");
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// GET single destination
+app.get("/api/destinations/:id", async (req, res) => {
   const { data, error } = await supabase
-    .from("countries")
+    .from("destinations")
     .select("*")
-    .eq("published", true);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.get("/countries/:code", async (req, res) => {
-  const { data, error } = await supabase
-    .from("countries")
-    .select("*, destinations(*)")
-    .eq("code", req.params.code.toUpperCase())
-    .eq("published", true)
-    .single();
-  if (error) return res.status(404).json({ error: "Country not found" });
-  res.json(data);
-});
-
-// ─── Destinations ────────────────────────────────────────────────
-app.get("/destinations", async (req, res) => {
-  const { data, error } = await supabase
-    .from("destinations")
-    .select("*, countries(name, code, flag_url)")
-    .eq("published", true);
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
-app.get("/destinations/:id", async (req, res) => {
-  const { data, error } = await supabase
-    .from("destinations")
-    .select("*, countries(name, code, flag_url)")
     .eq("id", req.params.id)
-    .eq("published", true)
     .single();
-  if (error) return res.status(404).json({ error: "Destination not found" });
+  if (error) return res.status(404).json({ error: error.message });
   res.json(data);
 });
 
-// ─── Admin write routes (protect with secret header in prod) ─────
-const adminAuth = (req, res, next) => {
-  if (req.headers["x-admin-key"] !== process.env.ADMIN_SECRET)
-    return res.status(401).json({ error: "Unauthorized" });
-  next();
-};
-
-app.post("/admin/countries", adminAuth, async (req, res) => {
-  const { data, error } = await supabase.from("countries").insert(req.body).select().single();
-  if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json(data);
-});
-
-app.patch("/admin/countries/:id", adminAuth, async (req, res) => {
+// POST create destination (admin only)
+app.post("/api/destinations", async (req, res) => {
+  const { name, country, description, image_url, price } = req.body;
   const { data, error } = await supabase
-    .from("countries").update(req.body).eq("id", req.params.id).select().single();
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+    .from("destinations")
+    .insert([{ name, country, description, image_url, price }])
+    .select();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json(data[0]);
 });
 
-app.post("/admin/destinations", adminAuth, async (req, res) => {
-  const { data, error } = await supabase.from("destinations").insert(req.body).select().single();
-  if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json(data);
-});
-
-app.patch("/admin/destinations/:id", adminAuth, async (req, res) => {
+// PUT update destination (admin only)
+app.put("/api/destinations/:id", async (req, res) => {
+  const { name, country, description, image_url, price } = req.body;
   const { data, error } = await supabase
-    .from("destinations").update(req.body).eq("id", req.params.id).select().single();
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+    .from("destinations")
+    .update({ name, country, description, image_url, price })
+    .eq("id", req.params.id)
+    .select();
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data[0]);
 });
 
-app.listen(process.env.PORT || 4000, () =>
-  console.log(`API running on port ${process.env.PORT || 4000}`)
-);
+// DELETE destination (admin only)
+app.delete("/api/destinations/:id", async (req, res) => {
+  const { error } = await supabase
+    .from("destinations")
+    .delete()
+    .eq("id", req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ message: "Deleted successfully" });
+});
+
+// ──────────────────────────────────────────────
+// START SERVER
+// ──────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`GlobeVoyage API running on port ${PORT}`));
