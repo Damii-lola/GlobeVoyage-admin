@@ -1,7 +1,6 @@
 {
   "name": "globevoyage-admin",
   "version": "1.0.0",
-  "description": "GlobeVoyage backend API + admin",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -10,7 +9,9 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
     "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "three": "^0.128.0",
+    "earcut": "^2.2.4"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
