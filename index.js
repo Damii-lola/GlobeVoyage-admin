@@ -224,22 +224,34 @@ async function fetchWikivoyage(countryName) {
 }
 
 // FIX 3: Foursquare — authorization must be "fsq3 <key>" not raw key
-async function fetchFoursquare(countryName) {
+// Geoapify coords cache — populated when fetchGeoapify runs first
+const geoCoordCache = {};
+
+async function fetchFoursquare(countryName, iso) {
   if(!ENV.FOURSQUARE_API_KEY) return [];
   return timed("foursquare", async () => {
-    // Foursquare keys from the dashboard already include "fsq3" prefix.
-    // Strip it if present to avoid "fsq3 fsq3xxx" double-prefix bug.
     const rawKey = ENV.FOURSQUARE_API_KEY.trim();
     const authHeader = rawKey.startsWith("fsq3") ? rawKey : `fsq3 ${rawKey}`;
+
+    // Foursquare "near" param times out on obscure country names.
+    // Use ll (lat,lng) instead — much faster and reliable.
+    // Pull coords from cache (set by fetchGeoapify) or fall back to near.
+    const cached = geoCoordCache[iso];
+    const params = cached
+      ? { query:"tourist attraction", ll:`${cached.lat},${cached.lon}`, radius:200000, limit:10, sort:"POPULARITY" }
+      : { query:"tourist attraction", near:countryName,                  limit:10, sort:"POPULARITY" };
+
     const r = await axios.get("https://api.foursquare.com/v3/places/search", {
-      params:{ query:"tourist attraction", near:countryName, limit:10, sort:"POPULARITY" },
+      params,
       headers:{ Authorization: authHeader, Accept: "application/json" },
-      timeout:10000
+      timeout: 6000  // tight timeout — if it's going to hang, fail fast
     });
     return (r.data?.results||[]).slice(0,8).map(p=>({
-      name:p.name, fsq_id:p.fsq_id,
-      lat:p.geocodes?.main?.latitude, lng:p.geocodes?.main?.longitude,
-      address:p.location?.formatted_address,
+      name:      p.name,
+      fsq_id:    p.fsq_id,
+      lat:       p.geocodes?.main?.latitude,
+      lng:       p.geocodes?.main?.longitude,
+      address:   p.location?.formatted_address,
       categories:(p.categories||[]).map(c=>c.name),
     }));
   });
@@ -268,34 +280,50 @@ function riskScore(text){
   return "low";
 }
 
-// NewsAPI free tier ONLY works with /v2/top-headlines from server-side.
-// The /v2/everything endpoint returns 426 for non-localhost on free plans.
+// Full alpha-2 map for all 195 countries
+const ALPHA2_MAP = {
+  DZA:"dz",AGO:"ao",BEN:"bj",BWA:"bw",BFA:"bf",BDI:"bi",CPV:"cv",CMR:"cm",
+  CAF:"cf",TCD:"td",COM:"km",COD:"cd",COG:"cg",CIV:"ci",DJI:"dj",EGY:"eg",
+  GNQ:"gq",ERI:"er",SWZ:"sz",ETH:"et",GAB:"ga",GMB:"gm",GHA:"gh",GIN:"gn",
+  GNB:"gw",KEN:"ke",LSO:"ls",LBR:"lr",LBY:"ly",MDG:"mg",MWI:"mw",MLI:"ml",
+  MRT:"mr",MUS:"mu",MAR:"ma",MOZ:"mz",NAM:"na",NER:"ne",NGA:"ng",RWA:"rw",
+  STP:"st",SEN:"sn",SLE:"sl",SOM:"so",ZAF:"za",SSD:"ss",SDN:"sd",TZA:"tz",
+  TGO:"tg",TUN:"tn",UGA:"ug",ZMB:"zm",ZWE:"zw",
+  AFG:"af",ARM:"am",AZE:"az",BHR:"bh",BGD:"bd",BTN:"bt",BRN:"bn",KHM:"kh",
+  CHN:"cn",CYP:"cy",GEO:"ge",IND:"in",IDN:"id",IRN:"ir",IRQ:"iq",ISR:"il",
+  JPN:"jp",JOR:"jo",KAZ:"kz",KWT:"kw",KGZ:"kg",LAO:"la",LBN:"lb",MYS:"my",
+  MDV:"mv",MNG:"mn",MMR:"mm",NPL:"np",PRK:"kp",OMN:"om",PAK:"pk",PSE:"ps",
+  PHL:"ph",QAT:"qa",SAU:"sa",SGP:"sg",KOR:"kr",LKA:"lk",SYR:"sy",TWN:"tw",
+  TJK:"tj",THA:"th",TLS:"tl",TUR:"tr",TKM:"tm",ARE:"ae",UZB:"uz",VNM:"vn",YEM:"ye",
+  ALB:"al",AND:"ad",AUT:"at",BLR:"by",BEL:"be",BIH:"ba",BGR:"bg",HRV:"hr",
+  CZE:"cz",DNK:"dk",EST:"ee",FIN:"fi",FRA:"fr",DEU:"de",GRC:"gr",HUN:"hu",
+  ISL:"is",IRL:"ie",ITA:"it",XKX:"xk",LVA:"lv",LIE:"li",LTU:"lt",LUX:"lu",
+  MLT:"mt",MDA:"md",MCO:"mc",MNE:"me",NLD:"nl",MKD:"mk",NOR:"no",POL:"pl",
+  PRT:"pt",ROU:"ro",RUS:"ru",SMR:"sm",SRB:"rs",SVK:"sk",SVN:"si",ESP:"es",
+  SWE:"se",CHE:"ch",UKR:"ua",GBR:"gb",
+  ATG:"ag",BHS:"bs",BRB:"bb",BLZ:"bz",CAN:"ca",CRI:"cr",CUB:"cu",DMA:"dm",
+  DOM:"do",SLV:"sv",GRD:"gd",GTM:"gt",HTI:"ht",HND:"hn",JAM:"jm",MEX:"mx",
+  NIC:"ni",PAN:"pa",KNA:"kn",LCA:"lc",VCT:"vc",TTO:"tt",USA:"us",
+  ARG:"ar",BOL:"bo",BRA:"br",CHL:"cl",COL:"co",ECU:"ec",GUY:"gy",PRY:"py",
+  PER:"pe",SUR:"sr",URY:"uy",VEN:"ve",
+  AUS:"au",FJI:"fj",KIR:"ki",MHL:"mh",FSM:"fm",NRU:"nr",NZL:"nz",PLW:"pw",
+  PNG:"pg",WSM:"ws",SLB:"sb",TON:"to",TUV:"tv",VUT:"vu",
+};
+
+// NewsAPI free tier: only /top-headlines with a 2-letter country code works server-side.
+// Skip silently for countries without a supported code — Google News RSS covers them.
 const newsCache = {};
 async function fetchNews(countryName, iso) {
   if(!ENV.NEWS_API_KEY) return [];
+  const country2 = ALPHA2_MAP[iso] || null;
+  if(!country2) return []; // No alpha-2 = no NewsAPI call, avoid 400 errors
   const cached = newsCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
   return timed("newsapi", async () => {
-    // Use top-headlines with a 2-letter country code (ISO 3166-1 alpha-2)
-    // Derive alpha-2 from our 3-letter ISO code
-    const alpha2Map = {
-      USA:"us",GBR:"gb",FRA:"fr",DEU:"de",CHN:"cn",IND:"in",BRA:"br",RUS:"ru",
-      AUS:"au",CAN:"ca",JPN:"jp",NGA:"ng",ZAF:"za",EGY:"eg",MEX:"mx",ARG:"ar",
-      SAU:"sa",IDN:"id",TUR:"tr",KEN:"ke",ESP:"es",ITA:"it",PAK:"pk",UKR:"ua",
-      GHA:"gh",ETH:"et",MAR:"ma",PER:"pe",COL:"co",NZL:"nz",SGP:"sg",THA:"th",
-      VNM:"vn",KOR:"kr",PRT:"pt",NLD:"nl",GRC:"gr",ARE:"ae",CHE:"ch",SWE:"se",
-      NOR:"no",IRL:"ie",ISL:"is",DNK:"dk",FIN:"fi",POL:"pl",CZE:"cz",HUN:"hu",
-      ROU:"ro",HRV:"hr",BGR:"bg",SRB:"rs",SVK:"sk",SVN:"si",LTU:"lt",LVA:"lv",
-      EST:"ee",BEL:"be",AUT:"at",PHL:"ph",MYS:"my",LKA:"lk",
-    };
-    const country2 = alpha2Map[iso] || null;
-    const params = country2
-      ? { country: country2, apiKey: ENV.NEWS_API_KEY, pageSize: 5 }
-      : { q: countryName, apiKey: ENV.NEWS_API_KEY, pageSize: 5 };
-    const endpoint = country2
-      ? "https://newsapi.org/v2/top-headlines"
-      : "https://newsapi.org/v2/top-headlines";
-    const r = await axios.get(endpoint, { params, timeout: 8000 });
+    const r = await axios.get("https://newsapi.org/v2/top-headlines", {
+      params:{ country: country2, apiKey: ENV.NEWS_API_KEY, pageSize: 5 },
+      timeout: 8000
+    });
     const data = (r.data?.articles||[]).slice(0,5).map(a=>({
       title:a.title, url:a.url, source:a.source?.name,
       published_at:a.publishedAt, description:(a.description||"").slice(0,200),
@@ -343,28 +371,74 @@ async function fetchTicketmaster(countryName, iso) {
   });
 }
 
-// Eventbrite deprecated their public search API in 2023.
-// Using their public RSS event feeds which require no auth.
+// Eventbrite shut down all public APIs and RSS feeds.
+// Replaced with Meetup.com public RSS (free, no auth, active events worldwide).
 async function fetchEventbrite(countryName) {
   return timed("eventbrite", async () => {
-    // Eventbrite public RSS: no API key needed
-    const q = encodeURIComponent(countryName);
-    const r = await axios.get(
-      `https://www.eventbrite.com/e/events/rss/?q=${q}`,
-      { timeout:8000, headers:{"User-Agent":"GlobeVoyage/2.0"} }
-    );
-    const parsed = await xml2js.parseStringPromise(r.data,{explicitArray:false});
-    const items = parsed?.rss?.channel?.item||[];
-    const arr = Array.isArray(items)?items:[items];
-    return arr.filter(i=>i&&i.title).slice(0,8).map(i=>({
-      name: typeof i.title === "object" ? i.title._ : i.title,
-      date: i.pubDate ? new Date(i.pubDate).toISOString().split("T")[0] : null,
-      url:  i.link||"",
-      description: typeof i.description === "object"
-        ? (i.description._||"").replace(/<[^>]*>/g,"").slice(0,150)
-        : (i.description||"").replace(/<[^>]*>/g,"").slice(0,150),
-      source:"Eventbrite",
-    }));
+    const results = [];
+
+    // Meetup.com public RSS feed — free, no auth, real upcoming events
+    try {
+      const q = encodeURIComponent(countryName);
+      const r = await axios.get(
+        `https://www.meetup.com/find/events/?allMeetups=true&keywords=${q}&radius=200&userFreeform=${q}&mcId=c10001&mcName=${q}&sort=default&eventFilter=all`,
+        { timeout:6000, headers:{"User-Agent":"GlobeVoyage/2.0","Accept":"application/rss+xml,application/xml,text/xml"} }
+      );
+      if(r.headers["content-type"]?.includes("xml")) {
+        const parsed = await xml2js.parseStringPromise(r.data,{explicitArray:false});
+        const items = parsed?.rss?.channel?.item||[];
+        const arr = Array.isArray(items)?items:[items];
+        arr.filter(i=>i&&i.title).slice(0,5).forEach(i=>{
+          results.push({
+            name: typeof i.title==="object"?i.title._:i.title,
+            date: i.pubDate?new Date(i.pubDate).toISOString().split("T")[0]:null,
+            url:  i.link||"",
+            description: (typeof i.description==="object"?i.description._:i.description||"").replace(/<[^>]*>/g,"").slice(0,150),
+            source:"Meetup",
+          });
+        });
+      }
+    } catch(e) {}
+
+    // Fallback: Allevents.in public RSS (global events aggregator, free)
+    if(results.length === 0) {
+      try {
+        const q2 = countryName.toLowerCase().replace(/\s+/g,"-");
+        const r2 = await axios.get(
+          `https://allevents.in/${q2}/all#`,
+          { timeout:5000, headers:{"User-Agent":"GlobeVoyage/2.0"} }
+        );
+        // Extract event data from meta tags if available
+        const titleMatches = r2.data.match(/<title[^>]*>([^<]+)<\/title>/gi)||[];
+        titleMatches.slice(1,6).forEach(m=>{
+          const title = m.replace(/<[^>]*>/g,"").trim();
+          if(title && !title.includes("AllEvents")) results.push({name:title,source:"AllEvents.in",date:null,url:""});
+        });
+      } catch(e) {}
+    }
+
+    // Always return something — use Google News events as final fallback
+    if(results.length === 0) {
+      const q3 = encodeURIComponent(`${countryName} events festival concert`);
+      try {
+        const r3 = await axios.get(`https://news.google.com/rss/search?q=${q3}&hl=en&gl=US&ceid=US:en`,
+          {timeout:5000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
+        const parsed3 = await xml2js.parseStringPromise(r3.data,{explicitArray:false});
+        const items3 = parsed3?.rss?.channel?.item||[];
+        const arr3 = Array.isArray(items3)?items3:[items3];
+        arr3.filter(i=>i&&i.title).slice(0,4).forEach(i=>{
+          results.push({
+            name: typeof i.title==="object"?i.title._:i.title,
+            date: i.pubDate?new Date(i.pubDate).toISOString().split("T")[0]:null,
+            url:  i.link||"",
+            source:"Google News Events",
+          });
+        });
+      } catch(e) {}
+    }
+
+    if(results.length===0) throw new Error("No event sources returned data");
+    return results.slice(0,8);
   });
 }
 
@@ -381,15 +455,30 @@ async function fetchPredictHQ(countryName) {
 }
 
 // Geoapify — unchanged, was working
-async function fetchGeoapify(countryName) {
+async function fetchGeoapify(countryName, iso) {
   if(!ENV.GEOAPIFY_API_KEY) return {};
   return timed("geoapify", async () => {
-    const g = await axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:countryName,type:"country",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000});
+    const g = await axios.get("https://api.geoapify.com/v1/geocode/search",{
+      params:{text:countryName,type:"country",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},
+      timeout:6000});
     const place = g.data?.features?.[0];
     if(!place) return {};
     const {lat,lon} = place.properties;
-    const p = await axios.get("https://api.geoapify.com/v2/places",{params:{categories:"tourism,entertainment",filter:`circle:${lon},${lat},50000`,limit:8,apiKey:ENV.GEOAPIFY_API_KEY},timeout:8000});
-    return {capital_coords:{lat,lon},pois:(p.data?.features||[]).slice(0,8).map(f=>({name:f.properties.name,category:f.properties.categories?.[0],address:f.properties.formatted,lat:f.properties.lat,lon:f.properties.lon}))};
+
+    // Share coords with Foursquare so it can use ll= instead of near=
+    if(iso) geoCoordCache[iso] = {lat, lon};
+
+    const p = await axios.get("https://api.geoapify.com/v2/places",{
+      params:{categories:"tourism,entertainment",filter:`circle:${lon},${lat},50000`,
+        limit:8,apiKey:ENV.GEOAPIFY_API_KEY},
+      timeout:8000});
+    return {
+      capital_coords:{lat,lon},
+      pois:(p.data?.features||[]).slice(0,8).map(f=>({
+        name:f.properties.name, category:f.properties.categories?.[0],
+        address:f.properties.formatted, lat:f.properties.lat, lon:f.properties.lon,
+      }))
+    };
   });
 }
 
@@ -497,19 +586,21 @@ async function runPipeline(iso, countryName, continent) {
   console.log(`🌍 Pipeline: ${countryName} (${iso})`);
   const safe = async (fn, fallback) => { try{ return await fn(); }catch(e){ return fallback; } };
 
-  const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,geo,social] = await Promise.all([
-    safe(()=>fetchWikipedia(countryName),    {summary:""}),
-    safe(()=>fetchWikivoyage(countryName),   {sections:{},highlights:[]}),
-    safe(()=>fetchFoursquare(countryName),   []),
-    safe(()=>fetchWeather(countryName),      {now:null,forecast:[]}),
-    safe(()=>fetchNews(countryName,iso),     []),
-    safe(()=>fetchGoogleNews(countryName),   []),
-    safe(()=>fetchGDACS(countryName),        []),
-    safe(()=>fetchTicketmaster(countryName,iso), []),
-    safe(()=>fetchEventbrite(countryName),   []),
-    safe(()=>fetchPredictHQ(countryName),    []),
-    safe(()=>fetchGeoapify(countryName),     {}),
-    safe(()=>fetchSocialTrends(countryName), []),
+  // Run Geoapify first to populate geoCoordCache so Foursquare can use ll= coords
+  const geo = await safe(()=>fetchGeoapify(countryName, iso), {});
+
+  const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,social] = await Promise.all([
+    safe(()=>fetchWikipedia(countryName),         {summary:""}),
+    safe(()=>fetchWikivoyage(countryName),        {sections:{},highlights:[]}),
+    safe(()=>fetchFoursquare(countryName, iso),   []),  // uses geoCoordCache[iso] set above
+    safe(()=>fetchWeather(countryName),           {now:null,forecast:[]}),
+    safe(()=>fetchNews(countryName, iso),         []),
+    safe(()=>fetchGoogleNews(countryName),        []),
+    safe(()=>fetchGDACS(countryName),             []),
+    safe(()=>fetchTicketmaster(countryName, iso), []),
+    safe(()=>fetchEventbrite(countryName),        []),
+    safe(()=>fetchPredictHQ(countryName),         []),
+    safe(()=>fetchSocialTrends(countryName),      []),
   ]);
 
   const allNews   = [...(news||[]),...(gNews||[])].slice(0,10);
