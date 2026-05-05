@@ -25,34 +25,10 @@ const ENV = {
   PREDICTHQ_API_KEY:    process.env.PREDICTHQ_API_KEY,
   GNEWS_API_KEY:        process.env.GNEWS_API_KEY,
   GEOAPIFY_API_KEY:     process.env.GEOAPIFY_API_KEY,
-  // NEW CONNECTIONS — add these on Render dashboard:
-  // ─────────────────────────────────────────────────────────────────
-  // UNSPLASH_ACCESS_KEY  → https://unsplash.com/developers
-  //   Free: 50 requests/hour. Create app → copy "Access Key"
-  //
-  // AVIATIONSTACK_API_KEY → https://aviationstack.com
-  //   Free: 100 requests/month. Register → dashboard → copy API key
-  //
-  // OPENAQ_API_KEY       → https://api.openaq.org (register at openaq.org)
-  //   Free tier is generous (no hard daily limit for basic queries)
-  //
-  // SHERPA_API_KEY       → https://developer.joinsherpa.com
-  //   Free developer tier. Apply for access → get client credentials
-  //
-  // AIRBNB: No official public API exists. We use a free unofficial
-  //   scraper-style endpoint via RapidAPI. Get key at:
-  //   https://rapidapi.com/3b-data-3b-data-default/api/airbnb13
-  //   Free tier: 100 requests/month
-  //   Add as RAPIDAPI_KEY on Render.
-  //
-  // REST Countries: 100% free, no key needed — https://restcountries.com
-  // Numbeo: Free public JSON endpoint, no key needed — https://www.numbeo.com
-  // ─────────────────────────────────────────────────────────────────
-  UNSPLASH_ACCESS_KEY:  process.env.UNSPLASH_ACCESS_KEY,
-  AVIATIONSTACK_API_KEY:process.env.AVIATIONSTACK_API_KEY,
-  OPENAQ_API_KEY:       process.env.OPENAQ_API_KEY,
-  SHERPA_API_KEY:       process.env.SHERPA_API_KEY,
-  RAPIDAPI_KEY:         process.env.RAPIDAPI_KEY,
+  // ✅ NEW: Foursquare Places API key — add this on Render as FOURSQUARE_API_KEY
+  // Get a free key at: https://location.foursquare.com/developer/
+  // Free tier: 1000 API calls/day — more than enough
+  FOURSQUARE_API_KEY:   process.env.FOURSQUARE_API_KEY,
 };
 
 // Bundled scripts — try node_modules first, fall back to CDN fetch at startup
@@ -376,357 +352,64 @@ const geoCoordCache = {
 };
 
 // ══════════════════════════════════════════════════════════════════
-// NEW CONNECTION 1: REST Countries API
-// 100% free, no key needed — https://restcountries.com
-// Provides: currency, languages, capital city name, flag emoji,
-// calling code, population, area, borders, timezones, TLD
-// Cached permanently per iso — this data never changes
+// ✅ FIXED: fetchFoursquare — now uses the REAL Foursquare Places API v3
+// Previously this was calling OpenTripMap (wrong API, expired demo key).
+// Foursquare Places API v3:
+//   - Endpoint: https://api.foursquare.com/v3/places/search
+//   - Auth: Authorization header with your API key (Bearer not needed, just the key)
+//   - Params: ll=lat,lon  radius=50000  categories=16000  limit=10
+//   - Category 16000 = Travel & Transport (landmarks, attractions)
+//   - Free tier: 1000 calls/day — get key at https://location.foursquare.com/developer/
 // ══════════════════════════════════════════════════════════════════
-const restCountriesCache = {};
-async function fetchRestCountries(iso) {
-  if(restCountriesCache[iso]) return restCountriesCache[iso];
-  return timed("rest_countries", async () => {
-    const r = await axios.get(`https://restcountries.com/v3.1/alpha/${iso}`, {
-      timeout: 8000,
-      params: { fields: "name,capital,currencies,languages,flags,callingCodes,population,area,borders,timezones,tlds,region,subregion,latlng" }
-    });
-    const d = r.data?.[0] || r.data;
-    if(!d) return {};
-    const currencies = Object.values(d.currencies||{}).map(c=>`${c.name} (${c.symbol||""})`);
-    const languages  = Object.values(d.languages||{});
-    const result = {
-      capital:      d.capital?.[0] || null,
-      flag_emoji:   d.flags?.alt || null,
-      flag_png:     d.flags?.png || null,
-      currencies,
-      languages,
-      calling_codes:(d.idd?.root||"") + (d.idd?.suffixes?.[0]||""),
-      population:   d.population || null,
-      area_km2:     d.area || null,
-      borders:      d.borders || [],
-      timezones:    d.timezones || [],
-      tld:          d.tlds?.[0] || null,
-      region:       d.region || null,
-      subregion:    d.subregion || null,
-    };
-    restCountriesCache[iso] = result;
-    return result;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════
-// NEW CONNECTION 2: Unsplash API
-// Free: 50 requests/hour — https://unsplash.com/developers
-// Get key: unsplash.com/developers → New Application → copy Access Key
-// Provides: 6 high-quality real destination photos per country
-// These are the hero images shown in the app destination cards
-// ══════════════════════════════════════════════════════════════════
-const unsplashCache = {};
-async function fetchUnsplash(countryName, iso) {
-  if(!ENV.UNSPLASH_ACCESS_KEY) {
-    recordHealth("unsplash", false, 0, "No UNSPLASH_ACCESS_KEY — add it on Render");
+async function fetchFoursquare(countryName, iso) {
+  if(!ENV.FOURSQUARE_API_KEY) {
+    // No key configured — record as a known skip rather than a failure
+    recordHealth("foursquare", false, 0, "No FOURSQUARE_API_KEY configured");
     return [];
   }
-  if(unsplashCache[iso]) return unsplashCache[iso];
-  return timed("unsplash", async () => {
-    const r = await axios.get("https://api.unsplash.com/search/photos", {
+
+  return timed("foursquare", async () => {
+    const coords = geoCoordCache[iso] || { lat: 48.8566, lon: 2.3522 }; // fallback to Paris
+    const { lat, lon } = coords;
+
+    // Foursquare Places API v3 — /places/search
+    // Categories for tourist attractions:
+    //   16000 = Travel & Transport
+    //   16032 = Tourist Attraction
+    //   16026 = Scenic Lookout
+    //   10000 = Arts & Entertainment
+    //   12000 = Landmarks & Outdoors
+    const r = await axios.get("https://api.foursquare.com/v3/places/search", {
       params: {
-        query:       `${countryName} travel landmark`,
-        per_page:    6,
-        orientation: "landscape",
-        content_filter: "high",
-      },
-      headers: { "Authorization": `Client-ID ${ENV.UNSPLASH_ACCESS_KEY}` },
-      timeout: 8000,
-    });
-    const photos = (r.data?.results || []).map(p => ({
-      id:          p.id,
-      url_regular: p.urls?.regular,   // ~1080px wide — good for app cards
-      url_small:   p.urls?.small,     // ~400px — thumbnail
-      url_thumb:   p.urls?.thumb,     // ~200px — tiny preview
-      description: p.alt_description || p.description || countryName,
-      photographer:p.user?.name,
-      photographer_url: p.user?.links?.html,
-      color:       p.color,           // dominant hex color for placeholder
-    }));
-    unsplashCache[iso] = photos;
-    return photos;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════
-// NEW CONNECTION 3: OpenAQ — Real-time Air Quality
-// Free, generous limits — https://api.openaq.org
-// Get key: register at openaq.org → API Keys → create one
-// Provides: PM2.5, PM10, NO2, O3 readings from nearest station
-// Feeds the Live Pulse "air quality" layer
-// ══════════════════════════════════════════════════════════════════
-async function fetchAirQuality(countryName, iso) {
-  return timed("openaq", async () => {
-    const coords = geoCoordCache[iso];
-    if(!coords) throw new Error("No coordinates for " + iso);
-    const headers = ENV.OPENAQ_API_KEY ? { "X-API-Key": ENV.OPENAQ_API_KEY } : {};
-    // Find nearest measurement station
-    const r = await axios.get("https://api.openaq.org/v3/locations", {
-      params: {
-        coordinates: `${coords.lat},${coords.lon}`,
-        radius:      50000,   // 50km from capital
-        limit:       3,
-        order_by:    "distance",
-      },
-      headers,
-      timeout: 8000,
-    });
-    const locations = r.data?.results || [];
-    if(!locations.length) return { aqi: null, readings: [], status: "No station nearby" };
-
-    // Get latest measurements from closest station
-    const locId = locations[0].id;
-    const m = await axios.get(`https://api.openaq.org/v3/locations/${locId}/latest`, {
-      headers, timeout: 8000
-    });
-    const measurements = (m.data?.results || []).flatMap(r => r.sensors || []);
-    const readings = measurements.slice(0,6).map(s => ({
-      parameter: s.parameter?.name || s.parameter,
-      value:     s.value,
-      unit:      s.unit,
-      last_updated: s.datetime?.utc,
-    }));
-
-    // Calculate simple AQI from PM2.5 if available
-    const pm25 = readings.find(r => r.parameter === "pm25" || r.parameter === "PM2.5");
-    let aqi_level = "unknown";
-    if(pm25?.value != null) {
-      const v = pm25.value;
-      if(v <= 12)       aqi_level = "good";
-      else if(v <= 35)  aqi_level = "moderate";
-      else if(v <= 55)  aqi_level = "sensitive";
-      else if(v <= 150) aqi_level = "unhealthy";
-      else              aqi_level = "hazardous";
-    }
-
-    return { aqi_level, pm25_value: pm25?.value || null, readings, station: locations[0].name };
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════
-// NEW CONNECTION 4: Sherpa Visa Requirements API
-// Free developer tier — https://developer.joinsherpa.com
-// Get key: apply at developer.joinsherpa.com → OAuth2 client credentials
-// Provides: visa-free/on-arrival/required status, duration, cost
-// This is one of the most practically useful features for travellers
-// NOTE: Sherpa uses country ISO2 codes (not ISO3)
-// ══════════════════════════════════════════════════════════════════
-const ISO3_TO_ISO2 = {
-  AFG:"AF",ALB:"AL",DZA:"DZ",AGO:"AO",ATG:"AG",ARG:"AR",ARM:"AM",AUS:"AU",AUT:"AT",AZE:"AZ",
-  BHS:"BS",BHR:"BH",BGD:"BD",BRB:"BB",BLR:"BY",BEL:"BE",BLZ:"BZ",BEN:"BJ",BTN:"BT",BOL:"BO",
-  BIH:"BA",BWA:"BW",BRA:"BR",BRN:"BN",BGR:"BG",BFA:"BF",BDI:"BI",CPV:"CV",KHM:"KH",CMR:"CM",
-  CAN:"CA",CAF:"CF",TCD:"TD",CHL:"CL",CHN:"CN",COL:"CO",COM:"KM",COD:"CD",COG:"CG",CRI:"CR",
-  CIV:"CI",HRV:"HR",CUB:"CU",CYP:"CY",CZE:"CZ",DNK:"DK",DJI:"DJ",DMA:"DM",DOM:"DO",ECU:"EC",
-  EGY:"EG",SLV:"SV",GNQ:"GQ",ERI:"ER",EST:"EE",SWZ:"SZ",ETH:"ET",FJI:"FJ",FIN:"FI",FRA:"FR",
-  GAB:"GA",GMB:"GM",GEO:"GE",DEU:"DE",GHA:"GH",GRC:"GR",GRD:"GD",GTM:"GT",GIN:"GN",GNB:"GW",
-  GUY:"GY",HTI:"HT",HND:"HN",HUN:"HU",ISL:"IS",IND:"IN",IDN:"ID",IRN:"IR",IRQ:"IQ",IRL:"IE",
-  ISR:"IL",ITA:"IT",JAM:"JM",JPN:"JP",JOR:"JO",KAZ:"KZ",KEN:"KE",KIR:"KI",PRK:"KP",KOR:"KR",
-  KWT:"KW",KGZ:"KG",LAO:"LA",LVA:"LV",LBN:"LB",LSO:"LS",LBR:"LR",LBY:"LY",LIE:"LI",LTU:"LT",
-  LUX:"LU",MDG:"MG",MWI:"MW",MYS:"MY",MDV:"MV",MLI:"ML",MLT:"MT",MHL:"MH",MRT:"MR",MUS:"MU",
-  MEX:"MX",FSM:"FM",MDA:"MD",MCO:"MC",MNG:"MN",MNE:"ME",MAR:"MA",MOZ:"MZ",MMR:"MM",NAM:"NA",
-  NRU:"NR",NPL:"NP",NLD:"NL",NZL:"NZ",NIC:"NI",NER:"NE",NGA:"NG",MKD:"MK",NOR:"NO",OMN:"OM",
-  PAK:"PK",PLW:"PW",PSE:"PS",PAN:"PA",PNG:"PG",PRY:"PY",PER:"PE",PHL:"PH",POL:"PL",PRT:"PT",
-  QAT:"QA",ROU:"RO",RUS:"RU",RWA:"RW",KNA:"KN",LCA:"LC",VCT:"VC",WSM:"WS",SMR:"SM",STP:"ST",
-  SAU:"SA",SEN:"SN",SRB:"RS",SLE:"SL",SGP:"SG",SVK:"SK",SVN:"SI",SLB:"SB",SOM:"SO",ZAF:"ZA",
-  SSD:"SS",ESP:"ES",LKA:"LK",SDN:"SD",SUR:"SR",SWE:"SE",CHE:"CH",SYR:"SY",TWN:"TW",TJK:"TJ",
-  TZA:"TZ",THA:"TH",TLS:"TL",TGO:"TG",TON:"TO",TTO:"TT",TUN:"TN",TUR:"TR",TKM:"TM",TUV:"TV",
-  UGA:"UG",UKR:"UA",ARE:"AE",GBR:"GB",USA:"US",URY:"UY",UZB:"UZ",VUT:"VU",VEN:"VE",VNM:"VN",
-  YEM:"YE",ZMB:"ZM",ZWE:"ZW",XKX:"XK",
-};
-
-// Sherpa token cache — OAuth2 tokens expire, so we cache and refresh
-let sherpaToken = null, sherpaTokenExpiry = 0;
-async function getSherpaToken() {
-  if(sherpaToken && Date.now() < sherpaTokenExpiry) return sherpaToken;
-  if(!ENV.SHERPA_API_KEY) return null;
-  // SHERPA_API_KEY should be stored as "clientId:clientSecret" on Render
-  const [clientId, clientSecret] = (ENV.SHERPA_API_KEY||"").split(":");
-  if(!clientId || !clientSecret) return null;
-  const r = await axios.post("https://requirements-api.joinsherpa.com/v2/token",
-    new URLSearchParams({ grant_type:"client_credentials", client_id:clientId, client_secret:clientSecret }),
-    { headers:{"Content-Type":"application/x-www-form-urlencoded"}, timeout:8000 }
-  );
-  sherpaToken = r.data?.access_token;
-  sherpaTokenExpiry = Date.now() + (r.data?.expires_in||3600)*1000 - 60000;
-  return sherpaToken;
-}
-
-async function fetchVisaRequirements(iso) {
-  if(!ENV.SHERPA_API_KEY) {
-    recordHealth("sherpa_visa", false, 0, "No SHERPA_API_KEY — format: clientId:clientSecret");
-    return null;
-  }
-  return timed("sherpa_visa", async () => {
-    const token = await getSherpaToken();
-    if(!token) throw new Error("Could not obtain Sherpa token");
-    const iso2 = ISO3_TO_ISO2[iso];
-    if(!iso2) throw new Error(`No ISO2 mapping for ${iso}`);
-    // Gets visa requirements for visiting this country — using US passport as reference
-    // In the full app you'd pass the traveller's actual passport country
-    const r = await axios.get(`https://requirements-api.joinsherpa.com/v2/entry-requirements`, {
-      params: { "passport-country": "US", "destination-country": iso2, affiliate_id: "globevoyage" },
-      headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" },
-      timeout: 8000,
-    });
-    const req = r.data?.data?.visaRequirement;
-    return {
-      from_us: {
-        category:    req?.type || "unknown",        // "visa_free", "visa_on_arrival", "e_visa", "visa_required"
-        duration:    req?.duration || null,          // e.g. "90 days"
-        cost:        req?.cost || null,
-        notes:       req?.notes || null,
-      },
-      passports_accepted: r.data?.data?.acceptedPassports || [],
-    };
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════
-// NEW CONNECTION 5: Aviationstack — Flight Disruptions
-// Free: 100 requests/month — https://aviationstack.com
-// Get key: register → dashboard → copy API Access Key
-// Provides: flight routes to/from country, live disruption alerts
-// Feeds the "Pulse" disruption layer with real flight cancellations
-// NOTE: Free tier is HTTP only (not HTTPS) — we handle that below
-// ══════════════════════════════════════════════════════════════════
-async function fetchFlightData(countryName, iso) {
-  if(!ENV.AVIATIONSTACK_API_KEY) {
-    recordHealth("aviationstack", false, 0, "No AVIATIONSTACK_API_KEY — add it on Render");
-    return { routes: [], disruptions: [] };
-  }
-  return timed("aviationstack", async () => {
-    const iso2 = ISO3_TO_ISO2[iso] || iso.slice(0,2);
-    // Free tier uses HTTP — aviationstack blocks HTTPS on free plan
-    const r = await axios.get("http://api.aviationstack.com/v1/flights", {
-      params: {
-        access_key:   ENV.AVIATIONSTACK_API_KEY,
-        arr_country:  iso2,
-        flight_status:"active",
-        limit:        10,
-      },
-      timeout: 10000,
-    });
-    const flights = r.data?.data || [];
-    const disruptions = flights
-      .filter(f => f.flight_status === "cancelled" || f.flight_status === "diverted")
-      .slice(0,5).map(f => ({
-        flight:      f.flight?.iata,
-        from:        f.departure?.airport,
-        to:          f.arrival?.airport,
-        status:      f.flight_status,
-        scheduled:   f.departure?.scheduled,
-      }));
-    const routes = flights.slice(0,6).map(f => ({
-      flight:      f.flight?.iata,
-      airline:     f.airline?.name,
-      from:        f.departure?.airport,
-      from_iata:   f.departure?.iata,
-      to:          f.arrival?.airport,
-      to_iata:     f.arrival?.iata,
-      status:      f.flight_status,
-    }));
-    return { routes, disruptions };
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════
-// NEW CONNECTION 6: Numbeo Cost of Living
-// Free public JSON endpoint, no key needed — https://www.numbeo.com
-// Provides: cost of living index, rent index, groceries index,
-// restaurant price index, local purchasing power index
-// This gives travellers a real "is it expensive?" answer
-// ══════════════════════════════════════════════════════════════════
-const numbeoCache = {};
-async function fetchCostOfLiving(countryName, iso) {
-  if(numbeoCache[iso]) return numbeoCache[iso];
-  return timed("numbeo", async () => {
-    // Numbeo public API — returns cost of living indices by city
-    // We use the capital city from geoCoordCache context
-    const r = await axios.get("https://www.numbeo.com/api/indices_for_country", {
-      params: { api_key: "free", country: countryName },
-      timeout: 8000,
-      headers: { "User-Agent": "GlobeVoyage/2.0" },
-    });
-    // Numbeo free endpoint returns array of city data
-    const cities = r.data?.cities || [];
-    const primary = cities[0] || {};
-    const result = {
-      cost_of_living_index: primary.cost_of_living_index || null,
-      rent_index:           primary.rent_index || null,
-      groceries_index:      primary.groceries_index || null,
-      restaurant_index:     primary.restaurant_price_index || null,
-      purchasing_power:     primary.local_purchasing_power_index || null,
-      // Simple label: under 40 = cheap, 40-70 = moderate, over 70 = expensive
-      budget_label: (() => {
-        const v = primary.cost_of_living_index;
-        if(!v) return null;
-        if(v < 35)  return "budget";
-        if(v < 65)  return "moderate";
-        return "expensive";
-      })(),
-      city_name: primary.city || countryName,
-    };
-    numbeoCache[iso] = result;
-    return result;
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════
-// NEW CONNECTION 7: Airbnb via RapidAPI (unofficial)
-// Free tier: 100 req/month — https://rapidapi.com/3b-data-3b-data-default/api/airbnb13
-// Get key: rapidapi.com → sign up → subscribe to "Airbnb" API (free tier)
-//   → copy your RapidAPI key → add as RAPIDAPI_KEY on Render
-// Provides: average nightly prices, listing types, availability signal
-// ══════════════════════════════════════════════════════════════════
-async function fetchAirbnb(countryName, iso) {
-  if(!ENV.RAPIDAPI_KEY) {
-    recordHealth("airbnb", false, 0, "No RAPIDAPI_KEY — get free key at rapidapi.com/3b-data-3b-data-default/api/airbnb13");
-    return null;
-  }
-  return timed("airbnb", async () => {
-    const coords = geoCoordCache[iso] || { lat: 48.8566, lon: 2.3522 };
-    const r = await axios.get("https://airbnb13.p.rapidapi.com/search-location", {
-      params: {
-        location:  countryName,
-        checkin:   new Date(Date.now() + 14*24*60*60*1000).toISOString().split("T")[0], // 2 weeks from now
-        checkout:  new Date(Date.now() + 21*24*60*60*1000).toISOString().split("T")[0], // 3 weeks from now
-        adults:    "2",
-        children:  "0",
-        infants:   "0",
-        pets:      "0",
-        page:      "1",
-        currency:  "USD",
+        ll:         `${lat},${lon}`,
+        radius:     100000,            // 100km radius around capital
+        categories: "16032,16000,12000,10000", // tourist attractions + landmarks
+        limit:      10,
+        sort:       "POPULARITY",      // most popular places first
+        fields:     "fsq_id,name,location,categories,geocodes,rating,photos",
       },
       headers: {
-        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "airbnb13.p.rapidapi.com",
+        "Authorization": ENV.FOURSQUARE_API_KEY,  // Foursquare v3 uses key directly, no "Bearer"
+        "Accept":        "application/json",
       },
-      timeout: 10000,
+      timeout: 8000,
     });
+
     const results = r.data?.results || [];
-    if(!results.length) return null;
-    const prices = results.map(l => l.price?.rate).filter(Boolean);
-    const avgPrice = prices.length ? Math.round(prices.reduce((a,b)=>a+b,0)/prices.length) : null;
-    const minPrice = prices.length ? Math.min(...prices) : null;
-    return {
-      avg_nightly_usd: avgPrice,
-      min_nightly_usd: minPrice,
-      total_listings:  r.data?.totalCount || results.length,
-      sample_listings: results.slice(0,4).map(l => ({
-        name:       l.name,
-        type:       l.type,
-        price_usd:  l.price?.rate,
-        rating:     l.rating,
-        url:        l.url,
-        image:      l.images?.[0],
-      })),
-    };
+
+    return results.slice(0, 8).map(p => ({
+      name:       p.name,
+      fsq_id:     p.fsq_id,
+      lat:        p.geocodes?.main?.latitude,
+      lng:        p.geocodes?.main?.longitude,
+      address:    [
+        p.location?.address,
+        p.location?.locality,
+        p.location?.country,
+      ].filter(Boolean).join(", ") || countryName,
+      categories: (p.categories||[]).map(c => c.name),
+      rating:     p.rating || null,
+    })).filter(p => p.name);
   });
 }
 
@@ -1032,16 +715,12 @@ WIKIPEDIA: ${(rawData.wiki?.summary||"").slice(0,500)}
 WIKIVOYAGE SEE: ${(rawData.wv?.sections?.See||"").slice(0,300)}
 WIKIVOYAGE DO: ${(rawData.wv?.sections?.Do||"").slice(0,300)}
 WIKIVOYAGE SAFE: ${(rawData.wv?.sections?.["Stay safe"]||"").slice(0,200)}
+PLACES (Foursquare): ${JSON.stringify(rawData.places||[]).slice(0,350)}
 WEATHER: ${JSON.stringify(rawData.weather?.now||{})}
 NEWS: ${(rawData.news||[]).map(n=>`[${n.risk_level}] ${n.title}`).join(" | ").slice(0,500)}
 GDACS ALERTS: ${JSON.stringify(rawData.gdacs||[]).slice(0,250)}
 EVENTS: ${(rawData.events||[]).map(e=>`${e.name} (${e.date})`).join(" | ").slice(0,350)}
 SOCIAL TRENDING: ${(rawData.social||[]).map(s=>s.caption).join(" | ").slice(0,250)}
-COUNTRY INFO: Currency=${JSON.stringify(rawData.countryInfo?.currencies)}, Languages=${JSON.stringify(rawData.countryInfo?.languages)}, TZ=${rawData.countryInfo?.timezones?.[0]}
-AIR QUALITY: Level=${rawData.airQuality?.aqi_level}, PM2.5=${rawData.airQuality?.pm25_value}
-COST OF LIVING: Index=${rawData.costOfLiving?.cost_of_living_index}, Budget=${rawData.costOfLiving?.budget_label}
-VISA (from US): ${JSON.stringify(rawData.visa?.from_us||{})}
-FLIGHT DISRUPTIONS: ${(rawData.flights?.disruptions||[]).length} disruptions
 
 Output ONLY valid JSON, no markdown fences, no preamble:
 {
@@ -1053,9 +732,7 @@ Output ONLY valid JSON, no markdown fences, no preamble:
   "safety_summary": "One honest sentence about current safety",
   "best_months": ["Jan","Feb"],
   "avoid_if": "Who should not visit right now",
-  "hidden_gem": "One under-the-radar recommendation",
-  "budget_summary": "One sentence on what things cost for a typical traveller",
-  "visa_summary": "One sentence on entry requirements for most Western passport holders"
+  "hidden_gem": "One under-the-radar recommendation"
 }
 Max: 6 recommendations, 14 calendar days, 4 trending items.`;
 
@@ -1077,74 +754,37 @@ async function runPipeline(iso, countryName, continent) {
   console.log(`🌍 Pipeline: ${countryName} (${iso})`);
   const safe = async (fn, fallback) => { try{ return await fn(); }catch(e){ return fallback; } };
 
-  // Run Geoapify first to populate geoCoordCache so coord-dependent fetchers work
   const geo = await safe(()=>fetchGeoapify(countryName, iso), {});
 
-  const [wiki,wv,weather,news,gNews,gdacs,tm,eb,phq,social,
-         countryInfo,photos,airQuality,visa,flights,costOfLiving,airbnb] = await Promise.all([
-    safe(()=>fetchWikipedia(countryName),          {summary:""}),
-    safe(()=>fetchWikivoyage(countryName),         {sections:{},highlights:[]}),
-    safe(()=>fetchWeather(countryName),            {now:null,forecast:[]}),
-    safe(()=>fetchNews(countryName, iso),          []),
-    safe(()=>fetchGoogleNews(countryName),         []),
-    safe(()=>fetchGDACS(countryName),              []),
-    safe(()=>fetchTicketmaster(countryName, iso),  []),
-    safe(()=>fetchEventbrite(countryName),         []),
-    safe(()=>fetchPredictHQ(countryName),          []),
-    safe(()=>fetchSocialTrends(countryName),       []),
-    // New connections
-    safe(()=>fetchRestCountries(iso),              {}),
-    safe(()=>fetchUnsplash(countryName, iso),      []),
-    safe(()=>fetchAirQuality(countryName, iso),    {aqi_level:"unknown",readings:[]}),
-    safe(()=>fetchVisaRequirements(iso),           null),
-    safe(()=>fetchFlightData(countryName, iso),    {routes:[],disruptions:[]}),
-    safe(()=>fetchCostOfLiving(countryName, iso),  null),
-    safe(()=>fetchAirbnb(countryName, iso),        null),
+  const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,social] = await Promise.all([
+    safe(()=>fetchWikipedia(countryName),         {summary:""}),
+    safe(()=>fetchWikivoyage(countryName),        {sections:{},highlights:[]}),
+    safe(()=>fetchFoursquare(countryName, iso),   []),
+    safe(()=>fetchWeather(countryName),           {now:null,forecast:[]}),
+    safe(()=>fetchNews(countryName, iso),         []),
+    safe(()=>fetchGoogleNews(countryName),        []),
+    safe(()=>fetchGDACS(countryName),             []),
+    safe(()=>fetchTicketmaster(countryName, iso), []),
+    safe(()=>fetchEventbrite(countryName),        []),
+    safe(()=>fetchPredictHQ(countryName),         []),
+    safe(()=>fetchSocialTrends(countryName),      []),
   ]);
 
   const allNews   = [...(news||[]),...(gNews||[])].slice(0,10);
   const allEvents = [...(tm||[]),...(eb||[]),...(phq||[])].sort((a,b)=>(a.date||"").localeCompare(b.date||"")).slice(0,12);
   const safetyFlags = [
     ...(gdacs||[]).map(g=>({...g,type:"disaster"})),
-    ...allNews.filter(n=>n.risk_level==="high").map(n=>({date:n.published_at?.split("T")[0],type:"news",description:n.title,severity:"high"})),
-    ...((flights?.disruptions||[]).map(d=>({type:"flight",description:`Flight ${d.flight} ${d.status}: ${d.from}→${d.to}`,severity:"medium",date:d.scheduled?.split("T")[0]||null}))),
-  ].slice(0,8);
+    ...allNews.filter(n=>n.risk_level==="high").map(n=>({date:n.published_at?.split("T")[0],type:"news",description:n.title,severity:"high"}))
+  ].slice(0,6);
 
-  // Pulse score: combine AQI, news risk, flight disruptions, GDACS alerts
-  const pulseScore = (() => {
-    let score = 0;
-    if(airQuality?.aqi_level === "hazardous") score += 3;
-    else if(airQuality?.aqi_level === "unhealthy") score += 2;
-    else if(airQuality?.aqi_level === "sensitive") score += 1;
-    if((gdacs||[]).length > 0) score += 2;
-    if(allNews.filter(n=>n.risk_level==="high").length > 1) score += 2;
-    if((flights?.disruptions||[]).length > 0) score += 1;
-    if(score === 0) return "green";
-    if(score <= 2)  return "yellow";
-    return "red";
-  })();
-
-  const ai = await safe(()=>runMistral(countryName,continent,{
-    wiki,wv,weather,news:allNews,gdacs,events:allEvents,social,
-    countryInfo,airQuality,costOfLiving,visa,flights
-  }),null);
+  const ai = await safe(()=>runMistral(countryName,continent,{wiki,wv,places,weather,news:allNews,gdacs,events:allEvents,social}),null);
 
   const {error} = await supabase.from("country_intel").upsert({
     iso, country_name:countryName, continent, last_updated:new Date().toISOString(),
     wiki_summary:wiki?.summary||"", wiki_highlights:wv?.highlights||[], wiki_sections:wv?.sections||{},
-    weather_now:weather?.now, weather_forecast:weather?.forecast||[],
+    top_places:places||[], weather_now:weather?.now, weather_forecast:weather?.forecast||[],
     news_headlines:allNews, safety_flags:safetyFlags, gdacs_alerts:gdacs||[],
     events:allEvents, geoapify:geo||{}, trending_spots:social||[], sentiment:{},
-    // New data fields stored in Supabase
-    country_info:    countryInfo||{},
-    photos:          photos||[],
-    air_quality:     airQuality||{},
-    visa:            visa||null,
-    flights:         flights||{},
-    cost_of_living:  costOfLiving||null,
-    airbnb:          airbnb||null,
-    pulse_score:     pulseScore,
-    // AI outputs
     ai_briefing:ai?.briefing||null, ai_vibe:ai?.vibe||null,
     ai_recommendations:ai?.recommendations||[], ai_calendar:ai?.calendar||[],
     ai_trending_now:ai?.trending_now||[], ai_safety_summary:ai?.safety_summary||null,
@@ -1234,6 +874,10 @@ app.get("/api/pipeline/status", async (req,res) => {
   res.json({total_countries:COUNTRIES.length,countries_processed:(intel||[]).length,coverage_pct:Math.round((intel||[]).length/COUNTRIES.length*100),fresh,recent_runs:runs||[],country_freshness:intel||[]});
 });
 
+// ══════════════════════════════════════════════════════════════════
+// ✅ FIXED: /api/health — label now correctly says "Places (Foursquare)"
+//    and reports whether FOURSQUARE_API_KEY is configured
+// ══════════════════════════════════════════════════════════════════
 app.get("/api/health", async (req,res) => {
   const checks = {};
   try {
@@ -1243,16 +887,14 @@ app.get("/api/health", async (req,res) => {
 
   checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key",...(sourceHealth.mistral||{})};
 
-  const sources = [
-    "wikipedia","wikivoyage","openweathermap","newsapi","google_news",
-    "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy",
-    // New connections
-    "rest_countries","unsplash","openaq","sherpa_visa","aviationstack","numbeo","airbnb",
-  ];
+  const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
+    "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy"];
 
+  // ✅ FIXED label: "Places (Foursquare)" instead of "Places (OpenTripMap)"
   const labelMap = {
     wikipedia:      "Wikipedia",
     wikivoyage:     "Wikivoyage",
+    foursquare:     "Places (Foursquare)",   // ← FIXED
     openweathermap: "OpenWeatherMap",
     newsapi:        "GNews API",
     google_news:    "Google News RSS",
@@ -1262,43 +904,32 @@ app.get("/api/health", async (req,res) => {
     predicthq:      "PredictHQ",
     geoapify:       "Geoapify",
     social_proxy:   "Social Trends (RSS)",
-    // New
-    rest_countries: "REST Countries",
-    unsplash:       "Unsplash Photos",
-    openaq:         "OpenAQ Air Quality",
-    sherpa_visa:    "Sherpa Visa API",
-    aviationstack:  "Aviationstack Flights",
-    numbeo:         "Numbeo Cost of Living",
-    airbnb:         "Airbnb (RapidAPI)",
   };
 
   sources.forEach(k=>{
     const h=sourceHealth[k]||{};
+    // Special case for foursquare: if no key configured, show clear message
     let detail = h.ok!=null?(h.ok?`Last OK (${h.response_ms}ms)`:h.error):"Not yet tested";
-    // Show helpful "no key" messages for optional sources
-    if(k==="newsapi"      && !ENV.GNEWS_API_KEY)          detail = "No GNEWS_API_KEY";
-    if(k==="unsplash"     && !ENV.UNSPLASH_ACCESS_KEY)    detail = "No UNSPLASH_ACCESS_KEY — unsplash.com/developers";
-    if(k==="aviationstack"&& !ENV.AVIATIONSTACK_API_KEY)  detail = "No AVIATIONSTACK_API_KEY — aviationstack.com";
-    if(k==="openaq"       && !ENV.OPENAQ_API_KEY)         detail = "No OPENAQ_API_KEY (optional) — openaq.org";
-    if(k==="sherpa_visa"  && !ENV.SHERPA_API_KEY)         detail = "No SHERPA_API_KEY — developer.joinsherpa.com";
-    if(k==="airbnb"       && !ENV.RAPIDAPI_KEY)           detail = "No RAPIDAPI_KEY — rapidapi.com (airbnb13)";
-    checks[k]={ok:h.ok??null, label:labelMap[k]||k, detail,
-      last_check:h.last_check||null,success_count:h.success_count||0,
-      fail_count:h.fail_count||0,response_ms:h.response_ms||null};
+    if(k==="foursquare" && !ENV.FOURSQUARE_API_KEY) {
+      detail = "No FOURSQUARE_API_KEY — add it on Render dashboard";
+    }
+    if(k==="newsapi" && !ENV.GNEWS_API_KEY) {
+      detail = "No GNEWS_API_KEY — add it on Render dashboard";
+    }
+    checks[k]={ok:h.ok??null, label:labelMap[k]||k,
+      detail,
+      last_check:h.last_check||null,success_count:h.success_count||0,fail_count:h.fail_count||0,response_ms:h.response_ms||null};
   });
 
+  // ✅ FIXED: Added FOURSQUARE_API_KEY to the API keys display panel
   const envKeys=[
-    {label:"Mistral AI",           key:"MISTRAL_API_KEY"},
-    {label:"OpenWeatherMap",       key:"OPENWEATHER_API_KEY"},
-    {label:"Ticketmaster",         key:"TICKETMASTER_API_KEY"},
-    {label:"PredictHQ",            key:"PREDICTHQ_API_KEY"},
-    {label:"GNews API",            key:"GNEWS_API_KEY"},
-    {label:"Geoapify",             key:"GEOAPIFY_API_KEY"},
-    {label:"Unsplash",             key:"UNSPLASH_ACCESS_KEY"},
-    {label:"Aviationstack",        key:"AVIATIONSTACK_API_KEY"},
-    {label:"OpenAQ",               key:"OPENAQ_API_KEY"},
-    {label:"Sherpa Visa",          key:"SHERPA_API_KEY"},
-    {label:"RapidAPI (Airbnb)",    key:"RAPIDAPI_KEY"},
+    {label:"Mistral AI",       key:"MISTRAL_API_KEY"},
+    {label:"OpenWeatherMap",   key:"OPENWEATHER_API_KEY"},
+    {label:"Ticketmaster",     key:"TICKETMASTER_API_KEY"},
+    {label:"PredictHQ",        key:"PREDICTHQ_API_KEY"},
+    {label:"GNews API",        key:"GNEWS_API_KEY"},
+    {label:"Geoapify",         key:"GEOAPIFY_API_KEY"},
+    {label:"Foursquare",       key:"FOURSQUARE_API_KEY"},  // ← NEW
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
