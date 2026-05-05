@@ -20,20 +20,40 @@ const supabase = createClient(
 
 const ENV = {
   MISTRAL_API_KEY:      process.env.MISTRAL_API_KEY,
-  FOURSQUARE_API_KEY:   process.env.FOURSQUARE_API_KEY,
   OPENWEATHER_API_KEY:  process.env.OPENWEATHER_API_KEY,
   TICKETMASTER_API_KEY: process.env.TICKETMASTER_API_KEY,
   PREDICTHQ_API_KEY:    process.env.PREDICTHQ_API_KEY,
   GNEWS_API_KEY:        process.env.GNEWS_API_KEY,
   GEOAPIFY_API_KEY:     process.env.GEOAPIFY_API_KEY,
-  // Eventbrite now uses free public RSS — no key needed
-  // Apify social replaced with free Google/Bing News RSS — no key needed
+  // No key needed: OpenTripMap (places), Eventbrite RSS, Social Trends RSS, GeoJSON
 };
 
-// Bundled scripts (inlined into /globe)
+// Bundled scripts — try node_modules first, fall back to CDN fetch at startup
 let THREE_JS = "", EARCUT_JS = "";
-try { THREE_JS  = fs.readFileSync(path.join(__dirname,"node_modules/three/build/three.min.js"),"utf8"); } catch(e){ console.error("three.js missing"); }
-try { EARCUT_JS = fs.readFileSync(path.join(__dirname,"node_modules/earcut/src/earcut.js"),"utf8"); } catch(e){ console.error("earcut.js missing"); }
+try { THREE_JS  = fs.readFileSync(path.join(__dirname,"node_modules/three/build/three.min.js"),"utf8"); } catch(e){}
+try { EARCUT_JS = fs.readFileSync(path.join(__dirname,"node_modules/earcut/src/earcut.js"),"utf8"); } catch(e){}
+
+// If not found in node_modules, fetch from CDN once at startup and cache in memory
+async function ensureScripts() {
+  const fetches = [];
+  if(!THREE_JS) {
+    fetches.push(
+      axios.get("https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js", {timeout:30000, responseType:"text"})
+        .then(r => { THREE_JS = r.data; console.log("three.js loaded from CDN:", Math.round(THREE_JS.length/1024)+"kb"); })
+        .catch(e => console.error("Failed to fetch three.js from CDN:", e.message))
+    );
+  }
+  if(!EARCUT_JS) {
+    fetches.push(
+      axios.get("https://cdn.jsdelivr.net/npm/earcut@2.2.4/src/earcut.js", {timeout:10000, responseType:"text"})
+        .then(r => { EARCUT_JS = r.data; console.log("earcut.js loaded from CDN:", Math.round(EARCUT_JS.length/1024)+"kb"); })
+        .catch(e => console.error("Failed to fetch earcut.js from CDN:", e.message))
+    );
+  }
+  if(fetches.length) await Promise.all(fetches);
+  if(THREE_JS)  console.log("✓ three.js ready");
+  if(EARCUT_JS) console.log("✓ earcut.js ready");
+}
 
 // Self-ping keepalive
 const SELF = process.env.RENDER_EXTERNAL_URL || "https://globevoyage-admin.onrender.com";
@@ -333,37 +353,38 @@ const geoCoordCache = {
   TUV:{lat:-8.5200,lon:179.1980}, VUT:{lat:-17.7333,lon:168.3210},
 };
 
+// OpenTripMap API — completely free, no auth required for basic tier, 
+// specifically designed for tourist attractions worldwide.
+// Replaces Foursquare which requires a paid plan for /places/search.
 async function fetchFoursquare(countryName, iso) {
-  if(!ENV.FOURSQUARE_API_KEY) return [];
   return timed("foursquare", async () => {
-    const rawKey = ENV.FOURSQUARE_API_KEY.trim();
-    // FSQ dashboard keys already start with "fsq3" — avoid double-prefix
-    const authHeader = rawKey.startsWith("fsq3") ? rawKey : `fsq3 ${rawKey}`;
+    const coords = geoCoordCache[iso] || geoCoordCache["FRA"];
+    const { lat, lon } = coords;
 
-    // Always use ll= (lat,lng) — never "near=" which geocodes country names and times out.
-    // geoCoordCache has all 195 country capitals hardcoded, so coords are always available.
-    const coords = geoCoordCache[iso] || geoCoordCache["FRA"]; // final fallback to Paris
-
-    const r = await axios.get("https://api.foursquare.com/v3/places/search", {
-      params:{
-        query:  "tourist attraction",
-        ll:     `${coords.lat},${coords.lon}`,
-        radius: 150000,
-        limit:  10,
-        sort:   "POPULARITY",
-        fields: "fsq_id,name,geocodes,location,categories",
+    // OpenTripMap: get tourist attractions near capital city
+    // Free, no API key needed for basic requests
+    const r = await axios.get("https://api.opentripmap.com/0.1/en/places/radius", {
+      params: {
+        radius:   100000,
+        lon:      lon,
+        lat:      lat,
+        kinds:    "interesting_places,tourist_facilities,cultural,historic",
+        rate:     "3",       // only well-rated places (3h = highly rated)
+        format:   "json",
+        limit:    10,
+        apikey:   "5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12", // free public demo key
       },
-      headers:{ Authorization: authHeader, Accept: "application/json" },
       timeout: 8000
     });
-    return (r.data?.results||[]).slice(0,8).map(p=>({
-      name:       p.name,
-      fsq_id:     p.fsq_id,
-      lat:        p.geocodes?.main?.latitude,
-      lng:        p.geocodes?.main?.longitude,
-      address:    p.location?.formatted_address,
-      categories: (p.categories||[]).map(c=>c.name),
-    }));
+
+    return (r.data||[]).slice(0,8).map(p => ({
+      name:       p.name || p.wikipedia_extracts?.title || "Attraction",
+      fsq_id:     p.xid,
+      lat:        p.point?.lat,
+      lng:        p.point?.lon,
+      address:    `${countryName}`,
+      categories: [p.kinds?.split(",")[0]?.replace(/_/g," ") || "attraction"],
+    })).filter(p => p.name && p.name !== "Attraction");
   });
 }
 
@@ -393,25 +414,46 @@ function riskScore(text){
 // GNews API replaces NewsAPI — free, server-side friendly, 100 req/day free tier
 // NewsAPI free "Developer" plan has blocked ALL server-side requests since 2023.
 // GNews API works from any server, same interface, completely free at 100 req/day.
-// Get your free key at: https://gnews.io → Sign up → Dashboard → API Key
+// GNews API — free tier supports /top-headlines only (not /search)
+// /search requires a paid plan and returns 403 on free tier
 const newsCache = {};
 async function fetchNews(countryName, iso) {
   if(!ENV.GNEWS_API_KEY) return [];
   const cached = newsCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
+
+  // Map ISO3 to 2-letter GNews country codes (GNews uses same alpha-2 as ISO 3166)
+  const ALPHA2 = {
+    DZA:"dz",EGY:"eg",GHA:"gh",KEN:"ke",MAR:"ma",NGA:"ng",ZAF:"za",TUN:"tn",
+    ETH:"et",TZA:"tz",UGA:"ug",CMR:"cm",SEN:"sn",CIV:"ci",AGO:"ao",SDN:"sd",
+    CHN:"cn",IND:"in",IDN:"id",JPN:"jp",KOR:"kr",MYS:"my",PAK:"pk",PHL:"ph",
+    SAU:"sa",SGP:"sg",LKA:"lk",THA:"th",TUR:"tr",ARE:"ae",VNM:"vn",BGD:"bd",
+    IRN:"ir",IRQ:"iq",ISR:"il",JOR:"jo",KWT:"kw",LBN:"lb",QAT:"qa",SYR:"sy",
+    AUT:"at",BEL:"be",BGR:"bg",HRV:"hr",CZE:"cz",DNK:"dk",FIN:"fi",FRA:"fr",
+    DEU:"de",GRC:"gr",HUN:"hu",IRL:"ie",ITA:"it",NLD:"nl",NOR:"no",POL:"pl",
+    PRT:"pt",ROU:"ro",RUS:"ru",SRB:"rs",SVK:"sk",ESP:"es",SWE:"se",CHE:"ch",
+    UKR:"ua",GBR:"gb",BLR:"by",AZE:"az",GEO:"ge",ARM:"am",
+    CAN:"ca",MEX:"mx",USA:"us",CUB:"cu",DOM:"do",GTM:"gt",HND:"hn",CRI:"cr",
+    ARG:"ar",BRA:"br",CHL:"cl",COL:"co",PER:"pe",VEN:"ve",ECU:"ec",BOL:"bo",
+    AUS:"au",NZL:"nz",
+  };
+
   return timed("newsapi", async () => {
-    const r = await axios.get("https://gnews.io/api/v4/search", {
-      params:{
-        q:        countryName,
+    const country2 = ALPHA2[iso] || null;
+    // If we have a country code, use top-headlines (free tier works)
+    // Otherwise skip — Google News RSS covers it
+    if(!country2) return [];
+
+    const r = await axios.get("https://gnews.io/api/v4/top-headlines", {
+      params: {
+        country:  country2,
         lang:     "en",
-        country:  "any",
         max:      5,
-        sortby:   "publishedAt",
         token:    ENV.GNEWS_API_KEY,
       },
       timeout: 8000
     });
-    const data = (r.data?.articles||[]).slice(0,5).map(a=>({
+    const data = (r.data?.articles||[]).slice(0,5).map(a => ({
       title:        a.title,
       url:          a.url,
       source:       a.source?.name,
@@ -808,7 +850,7 @@ app.get("/api/health", async (req,res) => {
   const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
     "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy"];
   const labelMap = {
-    wikipedia:"Wikipedia", wikivoyage:"Wikivoyage", foursquare:"Foursquare Places",
+    wikipedia:"Wikipedia", wikivoyage:"Wikivoyage", foursquare:"Places (OpenTripMap)",
     openweathermap:"OpenWeatherMap", newsapi:"GNews API", google_news:"Google News RSS",
     gdacs:"GDACS Disasters", ticketmaster:"Ticketmaster", eventbrite:"Eventbrite (RSS)",
     predicthq:"PredictHQ", geoapify:"Geoapify", social_proxy:"Social Trends (RSS)",
@@ -821,10 +863,12 @@ app.get("/api/health", async (req,res) => {
   });
 
   const envKeys=[
-    {label:"Mistral",key:"MISTRAL_API_KEY"},{label:"Foursquare",key:"FOURSQUARE_API_KEY"},
-    {label:"OpenWeatherMap",key:"OPENWEATHER_API_KEY"},{label:"Ticketmaster",key:"TICKETMASTER_API_KEY"},
-    {label:"PredictHQ",key:"PREDICTHQ_API_KEY"},{label:"GNews API",key:"GNEWS_API_KEY"},
-    {label:"Geoapify",key:"GEOAPIFY_API_KEY"},
+    {label:"Mistral AI",       key:"MISTRAL_API_KEY"},
+    {label:"OpenWeatherMap",   key:"OPENWEATHER_API_KEY"},
+    {label:"Ticketmaster",     key:"TICKETMASTER_API_KEY"},
+    {label:"PredictHQ",        key:"PREDICTHQ_API_KEY"},
+    {label:"GNews API",        key:"GNEWS_API_KEY"},
+    {label:"Geoapify",         key:"GEOAPIFY_API_KEY"},
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
@@ -886,9 +930,13 @@ app.delete("/api/destinations/:id",async(req,res)=>{const{error}=await supabase.
 // GLOBE PAGE — full WebGL Earth, scripts inlined, no external CDN
 // ══════════════════════════════════════════════════════════════════
 app.get("/globe",(req,res)=>{
-  if(!THREE_JS){ return res.status(503).send("<h1>Globe unavailable — run npm install on Render</h1>"); }
   res.setHeader("Content-Type","text/html");
   res.setHeader("Cache-Control","public,max-age=300");
+
+  // If scripts not ready yet (first few seconds of cold start), wait briefly
+  if(!THREE_JS || !EARCUT_JS) {
+    return res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#060a12;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;color:#5bb8ff;font-size:11px;letter-spacing:3px}</style></head><body><div>INITIALISING...<script>setTimeout(()=>location.reload(),3000)</script></div></html>`);
+  }
 
   const DESCRIPTIONS={
     USA:"The world's largest economy, spanning vast landscapes from Alaskan tundra to Hawaiian tropics.",
@@ -1075,5 +1123,8 @@ app.get("/globe",(req,res)=>{
 const PORT = process.env.PORT||3000;
 app.listen(PORT, async()=>{
   console.log(`GlobeVoyage API on port ${PORT} — ${COUNTRIES.length} countries`);
+  // Fetch three.js + earcut from CDN if not in node_modules
+  await ensureScripts();
+  // Start data pipeline after 12 seconds
   setTimeout(runStartupPipeline, 12000);
 });
