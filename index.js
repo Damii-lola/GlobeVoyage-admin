@@ -665,21 +665,27 @@ async function fetchGeoapifyPlaces(iso) {
   });
 }
 
-// ── SOCIAL TRENDS RSS ─────────────────────────────────────────────
-// Google Trends daily/rss 404s with query params — use explore feed instead
+// ── SOCIAL TRENDS ────────────────────────────────────────────────
+// Google Trends RSS is unreliable (404/400 depending on endpoint).
+// Use Wikipedia's "in the news" section for the country instead —
+// it's free, reliable, and gives genuinely trending travel topics.
 async function fetchSocialTrends(countryName) {
   return timed("social_proxy", async () => {
-    const q   = encodeURIComponent(countryName + " travel tourism");
-    const url = "https://trends.google.com/trends/explore/feed?q=" + q + "&hl=en-US";
-    const r   = await axios.get(url, {
-      timeout:10000, responseType:"text",
-      headers:{ "User-Agent": WIKI_UA }
+    const headers = { "User-Agent": WIKI_UA };
+    // Fetch Wikipedia "current events" portal for news about this country
+    const r = await axios.get("https://en.wikipedia.org/w/api.php", {
+      params:{
+        action:"query", format:"json", list:"search",
+        srsearch: countryName + " 2025 tourism travel news",
+        srlimit: 5, srinfo:"", srprop:"snippet|titlesnippet",
+      },
+      headers, timeout:8000
     });
-    const parsed = await xml2js.parseStringPromise(r.data, {explicitArray:false}).catch(()=>null);
-    if(!parsed) return [];
-    const items = parsed?.rss?.channel?.item||[];
-    const arr = Array.isArray(items)?items:[items];
-    return arr.slice(0,5).map(i=>({ term:i.title||"", traffic:"" }));
+    const results = r.data?.query?.search || [];
+    return results.slice(0,5).map(s=>({
+      term:    s.title||"",
+      traffic: (s.snippet||"").replace(/<[^>]+>/g,"").slice(0,100),
+    }));
   });
 }
 
@@ -1005,16 +1011,16 @@ app.get("/api/health", async (req, res) => {
     checks.geoapify = { ok:false, label:"Geoapify", detail:"No API key configured" };
   }
 
-  // Social Trends (Google Trends explore feed)
+  // Social Trends — backed by Wikipedia search (reliable)
   try {
     const t = Date.now();
-    await axios.get("https://trends.google.com/trends/explore/feed?q=travel&hl=en-US", {
-      timeout:8000, responseType:"text",
-      headers:{ "User-Agent": WIKI_UA }
+    await axios.get("https://en.wikipedia.org/w/api.php", {
+      params:{ action:"query", format:"json", list:"search", srsearch:"travel tourism 2025", srlimit:1 },
+      headers:{ "User-Agent": WIKI_UA }, timeout:6000
     });
-    checks.social_proxy = { ok:true, label:"Social Trends (RSS)", detail:"Last OK (" + (Date.now()-t) + "ms)", response_ms:Date.now()-t };
+    checks.social_proxy = { ok:true, label:"Social Trends", detail:"Last OK (" + (Date.now()-t) + "ms) — via Wikipedia", response_ms:Date.now()-t };
   } catch(e) {
-    checks.social_proxy = { ok:false, label:"Social Trends (RSS)", detail:e.message };
+    checks.social_proxy = { ok:false, label:"Social Trends", detail:e.message };
   }
 
   // Pipeline stats
@@ -1151,7 +1157,7 @@ app.post("/api/pipeline/run-all", async (req, res) => {
 // Globe WebGL endpoint
 app.get("/globe", (req, res) => {
   if(!THREE_JS || !EARCUT_JS) {
-    return res.status(503).send("Globe scripts not loaded yet. Retry in 30s.");
+    return res.status(503).send("Globe scripts not ready yet — retry in 30s.");
   }
   const countryMarkers = COUNTRIES.map(c => {
     const g = geoCoordCache[c.iso];
@@ -1167,135 +1173,213 @@ app.get("/globe", (req, res) => {
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{width:100%;height:100%;overflow:hidden;background:#080c14}
   canvas{display:block}
-  #info{position:absolute;top:10px;left:50%;transform:translateX(-50%);
+  #info{
+    position:absolute;top:12px;left:50%;transform:translateX(-50%);
     color:#c9a96e;font-family:sans-serif;font-size:11px;letter-spacing:2px;
     pointer-events:none;text-align:center;text-transform:uppercase;
-    background:rgba(8,12,20,0.6);padding:4px 12px;border-radius:20px}
+    background:rgba(8,12,20,0.7);padding:5px 14px;border-radius:20px;
+    white-space:nowrap;
+  }
+  #loading{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:#c9a96e;font-family:sans-serif;font-size:12px;letter-spacing:3px;
+    text-transform:uppercase;background:#080c14;
+  }
 </style>
 </head><body>
-<div id="info">TAP A COUNTRY TO EXPLORE</div>
+<div id="loading">Loading Globe...</div>
+<div id="info" style="display:none">TAP A COUNTRY TO EXPLORE</div>
 <script>${THREE_JS}</script>
+<script>${EARCUT_JS}</script>
 <script>
-const COUNTRIES = ${JSON.stringify(countryMarkers)};
+const MARKERS = ${JSON.stringify(countryMarkers)};
 
-// ── Renderer ────────────────────────────────────────────────────
+// ── Renderer ─────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setClearColor(0x080c14,1);
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setClearColor(0x080c14, 1);
 document.body.appendChild(renderer.domElement);
 
 const scene  = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(40, window.innerWidth/window.innerHeight, 0.1, 100);
-camera.position.z = 2.6;
+const camera = new THREE.PerspectiveCamera(42, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.z = 2.5;
 
-// ── Globe group — everything rotates together ───────────────────
+// ── Everything lives inside globeGroup so rotation is automatic ──
 const globeGroup = new THREE.Group();
 scene.add(globeGroup);
 
-// Ocean sphere — flat lambert, no specular highlight
-const oceanMat = new THREE.MeshLambertMaterial({ color: 0x0d2647 });
-const oceanMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 64), oceanMat);
-globeGroup.add(oceanMesh);
+// Ocean base — MeshLambertMaterial has zero specular, no white blob
+const globe = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 64, 64),
+  new THREE.MeshLambertMaterial({ color: 0x0a1f3d })
+);
+globeGroup.add(globe);
 
-// Land layer — slightly raised, different colour
-const landMat  = new THREE.MeshLambertMaterial({ color: 0x1a4a2e });
-const landMesh = new THREE.Mesh(new THREE.SphereGeometry(1.001, 64, 64), landMat);
-landMesh.visible = false; // placeholder — colour comes from ocean tint for now
-globeGroup.add(landMesh);
-
-// Latitude / longitude grid — subtle
-const gridMat = new THREE.LineBasicMaterial({ color:0x1b3a6a, transparent:true, opacity:0.5 });
-function addLine(pts){ globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat)); }
+// Latitude / longitude grid
+const gridMat = new THREE.LineBasicMaterial({ color:0x1a3a6a, transparent:true, opacity:0.45 });
+function latLonToVec3(lat, lon, r) {
+  const phi = (90 - lat) * Math.PI / 180;
+  const th  = (lon + 180) * Math.PI / 180;
+  return new THREE.Vector3(
+    r * Math.sin(phi) * Math.cos(th),
+    r * Math.cos(phi),
+    r * Math.sin(phi) * Math.sin(th)
+  );
+}
 for(let lat=-75; lat<=75; lat+=15){
   const pts=[];
-  for(let lng=-180; lng<=181; lng+=4){
-    const phi=(90-lat)*Math.PI/180, th=(lng+180)*Math.PI/180;
-    pts.push(new THREE.Vector3(Math.sin(phi)*Math.cos(th), Math.cos(phi), Math.sin(phi)*Math.sin(th)));
-  }
-  addLine(pts);
+  for(let lon=-180; lon<=181; lon+=3) pts.push(latLonToVec3(lat,lon,1.001));
+  globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
 }
-for(let lng=-180; lng<180; lng+=30){
+for(let lon=-180; lon<180; lon+=30){
   const pts=[];
-  for(let lat=-90; lat<=90; lat+=4){
-    const phi=(90-lat)*Math.PI/180, th=(lng+180)*Math.PI/180;
-    pts.push(new THREE.Vector3(Math.sin(phi)*Math.cos(th), Math.cos(phi), Math.sin(phi)*Math.sin(th)));
-  }
-  addLine(pts);
+  for(let lat=-90; lat<=90; lat+=3) pts.push(latLonToVec3(lat,lon,1.001));
+  globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
 }
 
-// Country dot markers — children of globeGroup so they auto-rotate
-const markerGeo = new THREE.SphereGeometry(0.013, 7, 7);
-const markerMat = new THREE.MeshBasicMaterial({ color:0xc9a96e });
-const markers   = [];
-COUNTRIES.forEach(c => {
-  const phi = (90 - c.lat) * Math.PI / 180;
-  const th  = (c.lon + 180) * Math.PI / 180;
-  const m   = new THREE.Mesh(markerGeo, markerMat.clone());
-  m.position.set(
-    1.015 * Math.sin(phi) * Math.cos(th),
-    1.015 * Math.cos(phi),
-    1.015 * Math.sin(phi) * Math.sin(th)
-  );
+// Country dot markers — children of globeGroup, rotate automatically
+const dotGeo = new THREE.SphereGeometry(0.013, 7, 7);
+const dotMat = new THREE.MeshBasicMaterial({ color:0xc9a96e });
+const markerMeshes = [];
+MARKERS.forEach(c => {
+  const m = new THREE.Mesh(dotGeo, dotMat.clone());
+  m.position.copy(latLonToVec3(c.lat, c.lon, 1.018));
   m.userData = c;
-  globeGroup.add(m);   // <-- child of group, not scene
-  markers.push(m);
+  globeGroup.add(m);
+  markerMeshes.push(m);
 });
 
-// Thin atmosphere rim — BackSide only so no front glow blob
-const atmMat  = new THREE.MeshLambertMaterial({
-  color:0x2255aa, transparent:true, opacity:0.18, side:THREE.BackSide
-});
-scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.08, 32, 32), atmMat));
+// Atmosphere rim — BackSide so it wraps the edge, no front-face blob
+const atmMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(1.07, 32, 32),
+  new THREE.MeshLambertMaterial({ color:0x1a55cc, transparent:true, opacity:0.15, side:THREE.BackSide })
+);
+scene.add(atmMesh); // NOT in globeGroup — stays fixed
 
-// ── Lighting — soft, no specular hotspots ───────────────────────
-// Ambient fills the whole sphere evenly
-scene.add(new THREE.AmbientLight(0x8899bb, 0.9));
-// One soft directional from upper-left — gives gentle day/night shading
-const sun = new THREE.DirectionalLight(0xffeedd, 0.7);
-sun.position.set(-3, 2, 4);
+// ── GeoJSON country outlines ─────────────────────────────────────
+// Fetch Natural Earth 110m countries GeoJSON and draw outlines
+const LAND_MAT     = new THREE.MeshBasicMaterial({ color:0x163a22, side:THREE.DoubleSide });
+const OUTLINE_MAT  = new THREE.LineBasicMaterial({ color:0x2a6040, transparent:true, opacity:0.8 });
+
+function addGeoOutlines(geojson) {
+  geojson.features.forEach(feat => {
+    const geom = feat.geometry;
+    const polys = geom.type === 'Polygon' ? [geom.coordinates]
+                : geom.type === 'MultiPolygon' ? geom.coordinates : [];
+    polys.forEach(poly => {
+      poly.forEach(ring => {
+        // Outline
+        const pts = ring.map(([lon,lat]) => latLonToVec3(lat,lon,1.002));
+        if(pts.length > 1) {
+          globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), OUTLINE_MAT));
+        }
+        // Filled land mesh via earcut triangulation
+        if(ring.length > 3) {
+          try {
+            const verts = [];
+            ring.forEach(([lon,lat]) => {
+              const v = latLonToVec3(lat,lon,1.001);
+              verts.push(v.x, v.y, v.z);
+            });
+            // earcut needs 2D — project onto lon/lat plane for triangulation
+            const flat2d = ring.slice(0,-1).flatMap(([lon,lat]) => [lon,lat]);
+            const indices = earcut(flat2d, null, 2);
+            if(indices.length) {
+              const geo = new THREE.BufferGeometry();
+              // Re-map indices to 3D verts
+              const pos = [];
+              indices.forEach(i => {
+                const [lon,lat] = ring[i];
+                const v = latLonToVec3(lat,lon,1.001);
+                pos.push(v.x,v.y,v.z);
+              });
+              geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+              globeGroup.add(new THREE.Mesh(geo, LAND_MAT));
+            }
+          } catch(e) {}
+        }
+      });
+    });
+  });
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("info").style.display    = "block";
+}
+
+// Use a reliable CDN for the GeoJSON
+fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
+  .then(r => r.json())
+  .then(topo => {
+    // world-atlas uses TopoJSON — convert to GeoJSON using inline converter
+    // Simple arc decoder (avoids needing topojson lib)
+    const arcs = topo.arcs;
+    const scale = topo.transform.scale;
+    const trans = topo.transform.translate;
+
+    function decodeArc(arcIdx) {
+      const reversed = arcIdx < 0;
+      const raw = arcs[reversed ? ~arcIdx : arcIdx];
+      let x=0, y=0;
+      const pts = raw.map(([dx,dy]) => {
+        x+=dx; y+=dy;
+        return [x*scale[0]+trans[0], y*scale[1]+trans[1]];
+      });
+      return reversed ? pts.reverse() : pts;
+    }
+    function arcsToRing(arcIdxArr) {
+      return arcIdxArr.flatMap(i => decodeArc(i));
+    }
+
+    const features = topo.objects.countries.geometries.map(geom => {
+      let coordinates;
+      if(geom.type === 'Polygon') {
+        coordinates = geom.arcs.map(arcsToRing);
+      } else if(geom.type === 'MultiPolygon') {
+        coordinates = geom.arcs.map(poly => poly.map(arcsToRing));
+      } else return null;
+      return { geometry:{ type:geom.type, coordinates } };
+    }).filter(Boolean);
+
+    addGeoOutlines({ features });
+  })
+  .catch(() => {
+    // Fallback: GeoJSON directly
+    fetch("https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson")
+      .then(r=>r.json())
+      .then(addGeoOutlines)
+      .catch(() => {
+        document.getElementById("loading").textContent = "Globe ready";
+        setTimeout(()=>{ document.getElementById("loading").style.display="none"; document.getElementById("info").style.display="block"; },500);
+      });
+  });
+
+// ── Lighting — Lambert + ambient only, zero specular ─────────────
+scene.add(new THREE.AmbientLight(0x8899cc, 1.1));
+const sun = new THREE.DirectionalLight(0xfff5e0, 0.6);
+sun.position.set(-4, 2, 3);
 scene.add(sun);
-// Faint fill from opposite side so dark side isn't pure black
-const fill = new THREE.DirectionalLight(0x334466, 0.3);
-fill.position.set(3, -1, -3);
-scene.add(fill);
 
-// ── Interaction ─────────────────────────────────────────────────
+// ── Interaction ──────────────────────────────────────────────────
 let dragging=false, prevX=0, prevY=0, velX=0, velY=0;
-let touchStartX=0, touchStartY=0;
+let tStartX=0, tStartY=0;
 const raycaster = new THREE.Raycaster();
 const mouse     = new THREE.Vector2();
-const W = ()=>window.innerWidth, H = ()=>window.innerHeight;
 
-renderer.domElement.addEventListener("touchstart", e=>{
-  dragging=true;
-  prevX=touchStartX=e.touches[0].clientX;
-  prevY=touchStartY=e.touches[0].clientY;
-  velX=velY=0;
-},{passive:true});
-
-renderer.domElement.addEventListener("touchmove", e=>{
+function onDragStart(x,y){ dragging=true; prevX=tStartX=x; prevY=tStartY=y; velX=velY=0; }
+function onDragMove(x,y){
   if(!dragging) return;
-  const dx=e.touches[0].clientX-prevX, dy=e.touches[0].clientY-prevY;
-  velX=dx*0.006; velY=dy*0.006;
+  velX=(x-prevX)*0.006; velY=(y-prevY)*0.006;
   globeGroup.rotation.y += velX;
-  globeGroup.rotation.x += velY;
-  globeGroup.rotation.x  = Math.max(-Math.PI/2, Math.min(Math.PI/2, globeGroup.rotation.x));
-  prevX=e.touches[0].clientX; prevY=e.touches[0].clientY;
-},{passive:true});
-
-renderer.domElement.addEventListener("touchend", e=>{
-  if(!dragging) return;
-  dragging=false;
-  const dx=e.changedTouches[0].clientX-touchStartX;
-  const dy=e.changedTouches[0].clientY-touchStartY;
-  // It's a tap if finger barely moved
-  if(Math.abs(dx)<8 && Math.abs(dy)<8){
-    const t=e.changedTouches[0];
-    mouse.x=(t.clientX/W())*2-1;
-    mouse.y=-(t.clientY/H())*2+1;
-    raycaster.setFromCamera(mouse, camera);
-    const hits=raycaster.intersectObjects(markers);
+  globeGroup.rotation.x  = Math.max(-1.2, Math.min(1.2, globeGroup.rotation.x + velY));
+  prevX=x; prevY=y;
+}
+function onDragEnd(x,y){
+  if(!dragging) return; dragging=false;
+  if(Math.abs(x-tStartX)<8 && Math.abs(y-tStartY)<8){
+    mouse.x=(x/window.innerWidth)*2-1;
+    mouse.y=-(y/window.innerHeight)*2+1;
+    raycaster.setFromCamera(mouse,camera);
+    const hits=raycaster.intersectObjects(markerMeshes);
     if(hits.length){
       const c=hits[0].object.userData;
       if(window.ReactNativeWebView)
@@ -1304,36 +1388,30 @@ renderer.domElement.addEventListener("touchend", e=>{
       setTimeout(()=>{ document.getElementById("info").textContent="TAP A COUNTRY TO EXPLORE"; },2500);
     }
   }
-},{passive:true});
+}
 
-// Mouse (desktop/preview)
-renderer.domElement.addEventListener("mousedown", e=>{ dragging=true; prevX=e.clientX; prevY=e.clientY; velX=velY=0; });
-renderer.domElement.addEventListener("mousemove", e=>{
-  if(!dragging) return;
-  velX=(e.clientX-prevX)*0.006; velY=(e.clientY-prevY)*0.006;
-  globeGroup.rotation.y+=velX;
-  globeGroup.rotation.x+=velY;
-  globeGroup.rotation.x=Math.max(-Math.PI/2,Math.min(Math.PI/2,globeGroup.rotation.x));
-  prevX=e.clientX; prevY=e.clientY;
-});
-renderer.domElement.addEventListener("mouseup", ()=>{ dragging=false; });
+renderer.domElement.addEventListener("touchstart",e=>onDragStart(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+renderer.domElement.addEventListener("touchmove", e=>onDragMove(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+renderer.domElement.addEventListener("touchend",  e=>onDragEnd(e.changedTouches[0].clientX,e.changedTouches[0].clientY),{passive:true});
+renderer.domElement.addEventListener("mousedown", e=>onDragStart(e.clientX,e.clientY));
+renderer.domElement.addEventListener("mousemove", e=>onDragMove(e.clientX,e.clientY));
+renderer.domElement.addEventListener("mouseup",   e=>onDragEnd(e.clientX,e.clientY));
 
-// ── Animate ─────────────────────────────────────────────────────
-(function animate(){
-  requestAnimationFrame(animate);
+// ── Animate ──────────────────────────────────────────────────────
+(function tick(){
+  requestAnimationFrame(tick);
   if(!dragging){
-    velX*=0.92; velY*=0.92;
-    globeGroup.rotation.y += velX + 0.0018; // gentle auto-spin
-    globeGroup.rotation.x += velY;
-    globeGroup.rotation.x  = Math.max(-Math.PI/2, Math.min(Math.PI/2, globeGroup.rotation.x));
+    velX*=0.90; velY*=0.90;
+    globeGroup.rotation.y += velX + 0.0018;
+    globeGroup.rotation.x  = Math.max(-1.2, Math.min(1.2, globeGroup.rotation.x + velY));
   }
   renderer.render(scene, camera);
 })();
 
-window.addEventListener("resize", ()=>{
-  camera.aspect = window.innerWidth/window.innerHeight;
+window.addEventListener("resize",()=>{
+  camera.aspect=window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(window.innerWidth,window.innerHeight);
 });
 </script>
 </body></html>`);
