@@ -888,11 +888,46 @@ app.get("/api/countries", (req,res) => {
 
 // Texture proxy
 const TEXTURES={"earth-day":"https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg","earth-night":"https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg","earth-clouds":"https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png","earth-water":"https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png"};
+
+// Texture cache — fetch once, serve from memory (avoids repeated unpkg calls)
+const textureCache = {};
+
+app.options("/texture/:name", (req,res) => {
+  res.setHeader("Access-Control-Allow-Origin","*");
+  res.setHeader("Access-Control-Allow-Methods","GET,HEAD,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers","*");
+  res.status(204).end();
+});
+
 app.get("/texture/:name",(req,res)=>{
-  const url=TEXTURES[req.params.name];if(!url)return res.status(404).end();
-  res.setHeader("Access-Control-Allow-Origin","*");res.setHeader("Cache-Control","public,max-age=86400");
-  res.setHeader("Content-Type",url.endsWith(".png")?"image/png":"image/jpeg");
-  https.get(url,u=>u.pipe(res)).on("error",()=>res.status(502).end());
+  const name = req.params.name;
+  const sourceUrl = TEXTURES[name];
+  if(!sourceUrl) return res.status(404).end();
+
+  res.setHeader("Access-Control-Allow-Origin","*");
+  res.setHeader("Access-Control-Allow-Methods","GET,HEAD,OPTIONS");
+  res.setHeader("Cache-Control","public,max-age=86400");
+  res.setHeader("Content-Type", sourceUrl.endsWith(".png")?"image/png":"image/jpeg");
+
+  // Serve from memory cache if available
+  if(textureCache[name]) {
+    return res.send(textureCache[name]);
+  }
+
+  // Fetch and cache using axios (follows redirects automatically unlike https.get)
+  axios.get(sourceUrl, {
+    responseType: "arraybuffer",
+    timeout: 15000,
+    headers: { "User-Agent": "GlobeVoyage/2.0" }
+  }).then(r => {
+    const buf = Buffer.from(r.data);
+    textureCache[name] = buf;
+    console.log(`Texture cached: ${name} (${Math.round(buf.length/1024)}kb)`);
+    res.send(buf);
+  }).catch(e => {
+    console.error(`Texture fetch failed: ${name}`, e.message);
+    res.status(502).end();
+  });
 });
 
 // GeoJSON proxy
@@ -1081,13 +1116,90 @@ app.get("/globe",(req,res)=>{
     fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,sun);float dayA=smoothstep(-0.18,0.45,cosA);vec3 day=texture2D(dayTexture,vUv).rgb;float lum=dot(day,vec3(0.299,0.587,0.114));day=mix(vec3(lum),day,1.35);day=pow(day,vec3(0.88));vec3 night=texture2D(nightTexture,vUv).rgb;night=pow(night,vec3(0.75))*2.2;vec3 spec=texture2D(specTexture,vUv).rgb;vec3 color=mix(night,day,dayA);vec3 vd=normalize(cameraPosition-vWorldPos);vec3 hv=normalize(sun+vd);float sp=pow(max(dot(n,hv),0.0),90.0);float sp2=pow(max(dot(n,hv),0.0),18.0)*0.06;color+=vec3(0.7,0.82,1.0)*(sp*0.9+sp2)*spec.r*dayA;float term=smoothstep(0.0,0.18,cosA)*smoothstep(0.38,0.18,cosA);color+=vec3(0.9,0.45,0.15)*term*0.28;float rim=pow(1.0-max(dot(n,vd),0.0),3.8);color=mix(color,mix(vec3(0.04,0.08,0.28),vec3(0.28,0.62,1.0),smoothstep(-0.3,0.6,cosA)),rim*0.72);gl_FragColor=vec4(color,1.0);}'}));
   earthGroup.add(earthMesh);
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.09,48,48),new THREE.ShaderMaterial({uniforms:{sd:{value:new THREE.Vector3(5,2.5,4).normalize()}},vertexShader:'varying vec3 vN,vP;void main(){vN=normal;vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'uniform vec3 sd;varying vec3 vN,vP;void main(){vec3 vd=normalize(cameraPosition-(modelMatrix*vec4(vP,1.0)).xyz);float rim=pow(1.0-abs(dot(normalize(vN),vd)),2.4);float d=dot(normalize((normalMatrix*vec4(vN,0.0)).xyz),normalize(sd));vec3 col=mix(vec3(0.03,0.06,0.28),vec3(0.22,0.56,1.0),smoothstep(-0.15,0.6,d));gl_FragColor=vec4(col,rim*0.62);}',transparent:true,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending})));
-  var BASE='https://globevoyage-admin.onrender.com/texture/';
-  var texLoader=new THREE.TextureLoader();texLoader.crossOrigin='anonymous';
-  var texDone=0;function onTex(){texDone++;progress(25+texDone*18);}
-  texLoader.load(BASE+'earth-day',function(t){t.anisotropy=renderer.capabilities.getMaxAnisotropy();uEarth.dayTexture.value=t;onTex();},undefined,function(){onTex();});
-  texLoader.load(BASE+'earth-night',function(t){uEarth.nightTexture.value=t;onTex();},undefined,function(){onTex();});
-  texLoader.load(BASE+'earth-water',function(t){uEarth.specTexture.value=t;onTex();},undefined,function(){onTex();});
-  var cloudMesh;texLoader.load(BASE+'earth-clouds',function(t){cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.013,48,48),new THREE.MeshPhongMaterial({map:t,transparent:true,opacity:0.75,depthWrite:false,blending:THREE.AdditiveBlending}));earthGroup.add(cloudMesh);});
+  // Texture URLs — multiple CDN fallbacks so globe always loads
+  // Primary: NASA via three-globe unpkg (most reliable)
+  // Fallback 1: jsDelivr mirror
+  // Fallback 2: raw GitHub
+  var TEXTURE_SETS = [
+    {
+      day:    'https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg',
+      night:  'https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg',
+      water:  'https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png',
+      clouds: 'https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png',
+    },
+    {
+      day:    'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-blue-marble.jpg',
+      night:  'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-night.jpg',
+      water:  'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-water.png',
+      clouds: 'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-clouds.png',
+    },
+    {
+      day:    'https://globevoyage-admin.onrender.com/texture/earth-day',
+      night:  'https://globevoyage-admin.onrender.com/texture/earth-night',
+      water:  'https://globevoyage-admin.onrender.com/texture/earth-water',
+      clouds: 'https://globevoyage-admin.onrender.com/texture/earth-clouds',
+    },
+  ];
+
+  var texLoader=new THREE.TextureLoader();
+  texLoader.crossOrigin='anonymous';
+  var texDone=0;
+  var currentTextureSet=0;
+
+  function onTex(){texDone++;progress(25+texDone*18);}
+
+  function loadTexturesFromSet(setIdx) {
+    if(setIdx >= TEXTURE_SETS.length) {
+      // All CDNs failed — use procedural fallback (plain colored sphere)
+      console.warn('All texture CDNs failed, using fallback colors');
+      // Create simple colored textures as canvas fallback
+      function makeCanvas(r,g,b){var c=document.createElement('canvas');c.width=2;c.height=2;var ctx=c.getContext('2d');ctx.fillStyle='rgb('+r+','+g+','+b+')';ctx.fillRect(0,0,2,2);return new THREE.CanvasTexture(c);}
+      uEarth.dayTexture.value   = makeCanvas(30,80,140);
+      uEarth.nightTexture.value = makeCanvas(5,10,30);
+      uEarth.specTexture.value  = makeCanvas(200,200,200);
+      progress(100);
+      return;
+    }
+    var set = TEXTURE_SETS[setIdx];
+    var failed = 0;
+    var loaded = 0;
+    var total  = 3;
+
+    function onSuccess(){ loaded++; onTex(); }
+    function onFail(name){
+      failed++;
+      console.warn('Texture CDN',setIdx,'failed for',name,', trying next...');
+      if(failed === 1) {
+        // First failure in this set — try next CDN set
+        loadTexturesFromSet(setIdx+1);
+      }
+    }
+
+    texLoader.load(set.day,
+      function(t){t.anisotropy=renderer.capabilities.getMaxAnisotropy();uEarth.dayTexture.value=t;onSuccess();},
+      undefined,
+      function(){onFail('day');}
+    );
+    texLoader.load(set.night,
+      function(t){uEarth.nightTexture.value=t;onSuccess();},
+      undefined,
+      function(){onFail('night');}
+    );
+    texLoader.load(set.water,
+      function(t){uEarth.specTexture.value=t;onSuccess();},
+      undefined,
+      function(){onFail('water');}
+    );
+    // Clouds are optional — don't block loading
+    texLoader.load(set.clouds,function(t){
+      cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.013,48,48),
+        new THREE.MeshPhongMaterial({map:t,transparent:true,opacity:0.75,depthWrite:false,blending:THREE.AdditiveBlending}));
+      earthGroup.add(cloudMesh);
+    });
+  }
+
+  var cloudMesh;
+  loadTexturesFromSet(0);
   var FILL_R=1.003,BORDER_R=1.0042,countryMap={},allFeatures=[],highlightTargets={};
   function ll2v(lon,lat,r){var phi=(90-lat)*Math.PI/180,theta=(lon+180)*Math.PI/180;return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));}
   function triPoly(rings){var coords=[];rings[0].forEach(function(p){coords.push(p[0],p[1]);});var holes=[],off=rings[0].length;for(var i=1;i<rings.length;i++){holes.push(off);rings[i].forEach(function(p){coords.push(p[0],p[1]);});off+=rings[i].length;}var idx=earcut(coords,holes.length?holes:null,2);if(!idx||!idx.length)return null;var pos=[];for(var t=0;t<idx.length;t++){var k=idx[t];var v=ll2v(coords[k*2],coords[k*2+1],FILL_R);pos.push(v.x,v.y,v.z);}var geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));return geo;}
@@ -1123,8 +1235,21 @@ app.get("/globe",(req,res)=>{
 const PORT = process.env.PORT||3000;
 app.listen(PORT, async()=>{
   console.log(`GlobeVoyage API on port ${PORT} — ${COUNTRIES.length} countries`);
-  // Fetch three.js + earcut from CDN if not in node_modules
+
+  // Step 1: Fetch three.js + earcut from CDN if not in node_modules
   await ensureScripts();
-  // Start data pipeline after 12 seconds
-  setTimeout(runStartupPipeline, 12000);
+
+  // Step 2: Pre-warm texture cache so /texture/* responds instantly
+  console.log("Pre-warming texture cache...");
+  for(const [name, url] of Object.entries(TEXTURES)) {
+    axios.get(url, {responseType:"arraybuffer",timeout:20000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
+      .then(r => {
+        textureCache[name] = Buffer.from(r.data);
+        console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`);
+      })
+      .catch(e => console.error(`✗ Texture pre-warm failed: ${name}`, e.message));
+  }
+
+  // Step 3: Start data pipeline after 15 seconds
+  setTimeout(runStartupPipeline, 15000);
 });
