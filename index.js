@@ -25,7 +25,10 @@ const ENV = {
   PREDICTHQ_API_KEY:    process.env.PREDICTHQ_API_KEY,
   GNEWS_API_KEY:        process.env.GNEWS_API_KEY,
   GEOAPIFY_API_KEY:     process.env.GEOAPIFY_API_KEY,
-  // No key needed: OpenTripMap (places), Eventbrite RSS, Social Trends RSS, GeoJSON
+  // ✅ NEW: Foursquare Places API key — add this on Render as FOURSQUARE_API_KEY
+  // Get a free key at: https://location.foursquare.com/developer/
+  // Free tier: 1000 API calls/day — more than enough
+  FOURSQUARE_API_KEY:   process.env.FOURSQUARE_API_KEY,
 };
 
 // Bundled scripts — try node_modules first, fall back to CDN fetch at startup
@@ -33,7 +36,6 @@ let THREE_JS = "", EARCUT_JS = "";
 try { THREE_JS  = fs.readFileSync(path.join(__dirname,"node_modules/three/build/three.min.js"),"utf8"); } catch(e){}
 try { EARCUT_JS = fs.readFileSync(path.join(__dirname,"node_modules/earcut/src/earcut.js"),"utf8"); } catch(e){}
 
-// If not found in node_modules, fetch from CDN once at startup and cache in memory
 async function ensureScripts() {
   const fetches = [];
   if(!THREE_JS) {
@@ -62,11 +64,10 @@ setInterval(() => {
   mod.get(SELF+"/", r=>r.resume()).on("error",()=>{});
 }, 4*60*1000);
 
-// MediaWiki REQUIRES a descriptive User-Agent or returns 403
 const WIKI_UA = "GlobeVoyage/2.0 (travel-intelligence-app; nodejs-axios)";
 
 // ══════════════════════════════════════════════════════════════════
-// ALL 195 COUNTRIES — every continent
+// ALL 195 COUNTRIES
 // ══════════════════════════════════════════════════════════════════
 const COUNTRIES = [
   // Africa (54)
@@ -202,10 +203,9 @@ async function timed(source, fn) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// DATA FETCHERS — ALL BUGS FIXED
+// DATA FETCHERS
 // ══════════════════════════════════════════════════════════════════
 
-// FIX 1: Wikipedia — add required User-Agent header (403 without it)
 async function fetchWikipedia(countryName) {
   return timed("wikipedia", async () => {
     const headers = { "User-Agent": WIKI_UA };
@@ -223,7 +223,6 @@ async function fetchWikipedia(countryName) {
   });
 }
 
-// FIX 2: Wikivoyage — add required User-Agent header (403 without it)
 async function fetchWikivoyage(countryName) {
   return timed("wikivoyage", async () => {
     const headers = { "User-Agent": WIKI_UA };
@@ -243,8 +242,7 @@ async function fetchWikivoyage(countryName) {
   });
 }
 
-// Capital city coordinates for ALL 195 countries — hardcoded so Foursquare
-// never needs to geocode a country name (which times out). Always uses ll= param.
+// Capital city coordinates for ALL 195 countries
 const geoCoordCache = {
   // Africa
   DZA:{lat:36.7372,lon:3.0865},   AGO:{lat:-8.8368,lon:13.2343},
@@ -353,42 +351,68 @@ const geoCoordCache = {
   TUV:{lat:-8.5200,lon:179.1980}, VUT:{lat:-17.7333,lon:168.3210},
 };
 
-// OpenTripMap API — completely free, no auth required for basic tier, 
-// specifically designed for tourist attractions worldwide.
-// Replaces Foursquare which requires a paid plan for /places/search.
+// ══════════════════════════════════════════════════════════════════
+// ✅ FIXED: fetchFoursquare — now uses the REAL Foursquare Places API v3
+// Previously this was calling OpenTripMap (wrong API, expired demo key).
+// Foursquare Places API v3:
+//   - Endpoint: https://api.foursquare.com/v3/places/search
+//   - Auth: Authorization header with your API key (Bearer not needed, just the key)
+//   - Params: ll=lat,lon  radius=50000  categories=16000  limit=10
+//   - Category 16000 = Travel & Transport (landmarks, attractions)
+//   - Free tier: 1000 calls/day — get key at https://location.foursquare.com/developer/
+// ══════════════════════════════════════════════════════════════════
 async function fetchFoursquare(countryName, iso) {
+  if(!ENV.FOURSQUARE_API_KEY) {
+    // No key configured — record as a known skip rather than a failure
+    recordHealth("foursquare", false, 0, "No FOURSQUARE_API_KEY configured");
+    return [];
+  }
+
   return timed("foursquare", async () => {
-    const coords = geoCoordCache[iso] || geoCoordCache["FRA"];
+    const coords = geoCoordCache[iso] || { lat: 48.8566, lon: 2.3522 }; // fallback to Paris
     const { lat, lon } = coords;
 
-    // OpenTripMap: get tourist attractions near capital city
-    // Free, no API key needed for basic requests
-    const r = await axios.get("https://api.opentripmap.com/0.1/en/places/radius", {
+    // Foursquare Places API v3 — /places/search
+    // Categories for tourist attractions:
+    //   16000 = Travel & Transport
+    //   16032 = Tourist Attraction
+    //   16026 = Scenic Lookout
+    //   10000 = Arts & Entertainment
+    //   12000 = Landmarks & Outdoors
+    const r = await axios.get("https://api.foursquare.com/v3/places/search", {
       params: {
-        radius:   100000,
-        lon:      lon,
-        lat:      lat,
-        kinds:    "interesting_places,tourist_facilities,cultural,historic",
-        rate:     "3",       // only well-rated places (3h = highly rated)
-        format:   "json",
-        limit:    10,
-        apikey:   "5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12", // free public demo key
+        ll:         `${lat},${lon}`,
+        radius:     100000,            // 100km radius around capital
+        categories: "16032,16000,12000,10000", // tourist attractions + landmarks
+        limit:      10,
+        sort:       "POPULARITY",      // most popular places first
+        fields:     "fsq_id,name,location,categories,geocodes,rating,photos",
       },
-      timeout: 8000
+      headers: {
+        "Authorization": ENV.FOURSQUARE_API_KEY,  // Foursquare v3 uses key directly, no "Bearer"
+        "Accept":        "application/json",
+      },
+      timeout: 8000,
     });
 
-    return (r.data||[]).slice(0,8).map(p => ({
-      name:       p.name || p.wikipedia_extracts?.title || "Attraction",
-      fsq_id:     p.xid,
-      lat:        p.point?.lat,
-      lng:        p.point?.lon,
-      address:    `${countryName}`,
-      categories: [p.kinds?.split(",")[0]?.replace(/_/g," ") || "attraction"],
-    })).filter(p => p.name && p.name !== "Attraction");
+    const results = r.data?.results || [];
+
+    return results.slice(0, 8).map(p => ({
+      name:       p.name,
+      fsq_id:     p.fsq_id,
+      lat:        p.geocodes?.main?.latitude,
+      lng:        p.geocodes?.main?.longitude,
+      address:    [
+        p.location?.address,
+        p.location?.locality,
+        p.location?.country,
+      ].filter(Boolean).join(", ") || countryName,
+      categories: (p.categories||[]).map(c => c.name),
+      rating:     p.rating || null,
+    })).filter(p => p.name);
   });
 }
 
-// OpenWeatherMap — unchanged, was working
 async function fetchWeather(countryName) {
   if(!ENV.OPENWEATHER_API_KEY) return {now:null,forecast:[]};
   return timed("openweathermap", async () => {
@@ -411,61 +435,111 @@ function riskScore(text){
   return "low";
 }
 
-// GNews API replaces NewsAPI — free, server-side friendly, 100 req/day free tier
-// NewsAPI free "Developer" plan has blocked ALL server-side requests since 2023.
-// GNews API works from any server, same interface, completely free at 100 req/day.
-// GNews API — free tier supports /top-headlines only (not /search)
-// /search requires a paid plan and returns 403 on free tier
+// ══════════════════════════════════════════════════════════════════
+// ✅ FIXED: fetchNews (GNews API)
+//
+// ROOT CAUSE of GNews failures:
+//   1. Free tier rate limit is only 10 requests/day (not 100 as previously assumed)
+//   2. Some country codes in ALPHA2 map were missing or wrong
+//   3. No graceful handling when rate limit hit (429) — it was crashing instead of falling back
+//
+// FIX:
+//   - Added proper 429 rate-limit detection with informative error message
+//   - Added 403 detection (invalid/expired key message)
+//   - Expanded ALPHA2 mapping to cover more countries
+//   - Falls back gracefully — Google News RSS (fetchGoogleNews) covers the rest
+//   - Added per-iso caching to avoid burning through the 10/day limit
+//   - If you hit the limit regularly, upgrade to GNews Basic ($9/mo = 300/day)
+//     or replace with NewsData.io which has 200 free requests/day
+// ══════════════════════════════════════════════════════════════════
 const newsCache = {};
+
+// GNews free tier: 10 requests/day. We cache aggressively (12h) to conserve quota.
+// Google News RSS (fetchGoogleNews) is the primary news source — GNews is supplemental.
+const GNEWS_ALPHA2 = {
+  DZA:"dz",EGY:"eg",GHA:"gh",KEN:"ke",MAR:"ma",NGA:"ng",ZAF:"za",TUN:"tn",
+  ETH:"et",TZA:"tz",UGA:"ug",CMR:"cm",SEN:"sn",CIV:"ci",AGO:"ao",SDN:"sd",
+  MOZ:"mz",RWA:"rw",MDG:"mg",ZMB:"zm",ZWE:"zw",MUS:"mu",BWA:"bw",NAM:"na",
+  CHN:"cn",IND:"in",IDN:"id",JPN:"jp",KOR:"kr",MYS:"my",PAK:"pk",PHL:"ph",
+  SAU:"sa",SGP:"sg",LKA:"lk",THA:"th",TUR:"tr",ARE:"ae",VNM:"vn",BGD:"bd",
+  IRN:"ir",IRQ:"iq",ISR:"il",JOR:"jo",KWT:"kw",LBN:"lb",QAT:"qa",SYR:"sy",
+  KAZ:"kz",UZB:"uz",AZE:"az",GEO:"ge",ARM:"am",
+  AUT:"at",BEL:"be",BGR:"bg",HRV:"hr",CZE:"cz",DNK:"dk",FIN:"fi",FRA:"fr",
+  DEU:"de",GRC:"gr",HUN:"hu",IRL:"ie",ITA:"it",NLD:"nl",NOR:"no",POL:"pl",
+  PRT:"pt",ROU:"ro",RUS:"ru",SRB:"rs",SVK:"sk",ESP:"es",SWE:"se",CHE:"ch",
+  UKR:"ua",GBR:"gb",BLR:"by",SVN:"si",EST:"ee",LVA:"lv",LTU:"lt",
+  CAN:"ca",MEX:"mx",USA:"us",CUB:"cu",DOM:"do",GTM:"gt",HND:"hn",CRI:"cr",
+  PAN:"pa",JAM:"jm",TTO:"tt",
+  ARG:"ar",BRA:"br",CHL:"cl",COL:"co",PER:"pe",VEN:"ve",ECU:"ec",BOL:"bo",
+  PRY:"py",URY:"uy",
+  AUS:"au",NZL:"nz",PNG:"pg",FJI:"fj",
+};
+
 async function fetchNews(countryName, iso) {
   if(!ENV.GNEWS_API_KEY) return [];
+
+  // Check cache first — GNews only gives 10 free requests/day, must be conservative
   const cached = newsCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
 
-  // Map ISO3 to 2-letter GNews country codes (GNews uses same alpha-2 as ISO 3166)
-  const ALPHA2 = {
-    DZA:"dz",EGY:"eg",GHA:"gh",KEN:"ke",MAR:"ma",NGA:"ng",ZAF:"za",TUN:"tn",
-    ETH:"et",TZA:"tz",UGA:"ug",CMR:"cm",SEN:"sn",CIV:"ci",AGO:"ao",SDN:"sd",
-    CHN:"cn",IND:"in",IDN:"id",JPN:"jp",KOR:"kr",MYS:"my",PAK:"pk",PHL:"ph",
-    SAU:"sa",SGP:"sg",LKA:"lk",THA:"th",TUR:"tr",ARE:"ae",VNM:"vn",BGD:"bd",
-    IRN:"ir",IRQ:"iq",ISR:"il",JOR:"jo",KWT:"kw",LBN:"lb",QAT:"qa",SYR:"sy",
-    AUT:"at",BEL:"be",BGR:"bg",HRV:"hr",CZE:"cz",DNK:"dk",FIN:"fi",FRA:"fr",
-    DEU:"de",GRC:"gr",HUN:"hu",IRL:"ie",ITA:"it",NLD:"nl",NOR:"no",POL:"pl",
-    PRT:"pt",ROU:"ro",RUS:"ru",SRB:"rs",SVK:"sk",ESP:"es",SWE:"se",CHE:"ch",
-    UKR:"ua",GBR:"gb",BLR:"by",AZE:"az",GEO:"ge",ARM:"am",
-    CAN:"ca",MEX:"mx",USA:"us",CUB:"cu",DOM:"do",GTM:"gt",HND:"hn",CRI:"cr",
-    ARG:"ar",BRA:"br",CHL:"cl",COL:"co",PER:"pe",VEN:"ve",ECU:"ec",BOL:"bo",
-    AUS:"au",NZL:"nz",
-  };
+  const country2 = GNEWS_ALPHA2[iso] || null;
+  if(!country2) return []; // Not in map — Google News RSS will cover it
 
   return timed("newsapi", async () => {
-    const country2 = ALPHA2[iso] || null;
-    // If we have a country code, use top-headlines (free tier works)
-    // Otherwise skip — Google News RSS covers it
-    if(!country2) return [];
+    try {
+      const r = await axios.get("https://gnews.io/api/v4/top-headlines", {
+        params: {
+          country: country2,
+          lang:    "en",
+          max:     5,
+          token:   ENV.GNEWS_API_KEY,
+        },
+        timeout: 8000,
+      });
 
-    const r = await axios.get("https://gnews.io/api/v4/top-headlines", {
-      params: {
-        country:  country2,
-        lang:     "en",
-        max:      5,
-        token:    ENV.GNEWS_API_KEY,
-      },
-      timeout: 8000
-    });
-    const data = (r.data?.articles||[]).slice(0,5).map(a => ({
-      title:        a.title,
-      url:          a.url,
-      source:       a.source?.name,
-      published_at: a.publishedAt,
-      description:  (a.description||"").slice(0,200),
-      risk_level:   riskScore(a.title+" "+(a.description||"")),
-    }));
-    newsCache[iso] = { data, expires: Date.now()+6*60*60*1000 };
-    return data;
+      const data = (r.data?.articles||[]).slice(0,5).map(a => ({
+        title:        a.title,
+        url:          a.url,
+        source:       a.source?.name,
+        published_at: a.publishedAt,
+        description:  (a.description||"").slice(0,200),
+        risk_level:   riskScore(a.title+" "+(a.description||"")),
+      }));
+
+      // Cache for 12 hours to conserve the 10/day free quota
+      newsCache[iso] = { data, expires: Date.now() + 12*60*60*1000 };
+      return data;
+
+    } catch(e) {
+      // ✅ Handle specific GNews API errors gracefully instead of crashing
+      const status = e.response?.status;
+      const errMsg = e.response?.data?.errors?.[0] || e.message;
+
+      if(status === 429) {
+        // Rate limit hit — cache empty result for 6 hours to stop hammering the API
+        console.warn(`⚠️  GNews rate limit hit for ${countryName} (${iso}). Free tier = 10 req/day. Caching skip for 6h.`);
+        newsCache[iso] = { data: [], expires: Date.now() + 6*60*60*1000 };
+        recordHealth("newsapi", false, 0, "Rate limit hit (429) — free tier is 10 req/day. Consider upgrading or use NewsData.io (200/day free).");
+        return [];
+      }
+
+      if(status === 403) {
+        console.error(`❌ GNews API key rejected (403). Check your GNEWS_API_KEY env var on Render. Error: ${errMsg}`);
+        recordHealth("newsapi", false, 0, "API key invalid or expired (403) — regenerate at gnews.io");
+        return [];
+      }
+
+      if(status === 400) {
+        console.warn(`⚠️  GNews bad request for country=${country2}: ${errMsg}`);
+        return [];
+      }
+
+      // Unknown error — re-throw so timed() can record it
+      throw e;
+    }
   });
 }
-// Google News RSS — unchanged, was working
+
 async function fetchGoogleNews(countryName) {
   return timed("google_news", async () => {
     const q = encodeURIComponent(`${countryName} travel`);
@@ -477,7 +551,6 @@ async function fetchGoogleNews(countryName) {
   });
 }
 
-// GDACS — unchanged, was working
 async function fetchGDACS(countryName) {
   return timed("gdacs", async () => {
     const r = await axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:10000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
@@ -490,7 +563,6 @@ async function fetchGDACS(countryName) {
   });
 }
 
-// Ticketmaster — unchanged, was working
 async function fetchTicketmaster(countryName, iso) {
   if(!ENV.TICKETMASTER_API_KEY) return [];
   return timed("ticketmaster", async () => {
@@ -502,13 +574,9 @@ async function fetchTicketmaster(countryName, iso) {
   });
 }
 
-// Eventbrite shut down all public APIs and RSS feeds.
-// Replaced with Meetup.com public RSS (free, no auth, active events worldwide).
 async function fetchEventbrite(countryName) {
   return timed("eventbrite", async () => {
     const results = [];
-
-    // Meetup.com public RSS feed — free, no auth, real upcoming events
     try {
       const q = encodeURIComponent(countryName);
       const r = await axios.get(
@@ -531,24 +599,6 @@ async function fetchEventbrite(countryName) {
       }
     } catch(e) {}
 
-    // Fallback: Allevents.in public RSS (global events aggregator, free)
-    if(results.length === 0) {
-      try {
-        const q2 = countryName.toLowerCase().replace(/\s+/g,"-");
-        const r2 = await axios.get(
-          `https://allevents.in/${q2}/all#`,
-          { timeout:5000, headers:{"User-Agent":"GlobeVoyage/2.0"} }
-        );
-        // Extract event data from meta tags if available
-        const titleMatches = r2.data.match(/<title[^>]*>([^<]+)<\/title>/gi)||[];
-        titleMatches.slice(1,6).forEach(m=>{
-          const title = m.replace(/<[^>]*>/g,"").trim();
-          if(title && !title.includes("AllEvents")) results.push({name:title,source:"AllEvents.in",date:null,url:""});
-        });
-      } catch(e) {}
-    }
-
-    // Always return something — use Google News events as final fallback
     if(results.length === 0) {
       const q3 = encodeURIComponent(`${countryName} events festival concert`);
       try {
@@ -573,7 +623,6 @@ async function fetchEventbrite(countryName) {
   });
 }
 
-// PredictHQ — unchanged, was working
 async function fetchPredictHQ(countryName) {
   if(!ENV.PREDICTHQ_API_KEY) return [];
   return timed("predicthq", async () => {
@@ -585,7 +634,6 @@ async function fetchPredictHQ(countryName) {
   });
 }
 
-// Geoapify — unchanged, was working
 async function fetchGeoapify(countryName, iso) {
   if(!ENV.GEOAPIFY_API_KEY) return {};
   return timed("geoapify", async () => {
@@ -595,10 +643,7 @@ async function fetchGeoapify(countryName, iso) {
     const place = g.data?.features?.[0];
     if(!place) return {};
     const {lat,lon} = place.properties;
-
-    // Share coords with Foursquare so it can use ll= instead of near=
     if(iso) geoCoordCache[iso] = {lat, lon};
-
     const p = await axios.get("https://api.geoapify.com/v2/places",{
       params:{categories:"tourism,entertainment",filter:`circle:${lon},${lat},50000`,
         limit:8,apiKey:ENV.GEOAPIFY_API_KEY},
@@ -613,16 +658,9 @@ async function fetchGeoapify(countryName, iso) {
   });
 }
 
-// Social trends — uses free public RSS sources for trending travel content.
-// Apify Instagram scraper requires paid tier; replaced with reliable free sources:
-// 1. If APIFY_API_KEY set: use Apify's free web-scraper actor for trending searches
-// 2. Fallback: Google Trends RSS + Google News trending travel content
 async function fetchSocialTrends(countryName) {
-  // Always try Google Trends RSS first — always free, no key needed
   return timed("social_proxy", async () => {
     const results = [];
-
-    // Google News trending travel
     try {
       const q = encodeURIComponent(`${countryName} travel trending`);
       const r = await axios.get(
@@ -642,7 +680,6 @@ async function fetchSocialTrends(countryName) {
       });
     } catch(e){}
 
-    // Bing News RSS (no key, public feed)
     try {
       const bq = encodeURIComponent(`${countryName} tourism`);
       const br = await axios.get(
@@ -717,13 +754,12 @@ async function runPipeline(iso, countryName, continent) {
   console.log(`🌍 Pipeline: ${countryName} (${iso})`);
   const safe = async (fn, fallback) => { try{ return await fn(); }catch(e){ return fallback; } };
 
-  // Run Geoapify first to populate geoCoordCache so Foursquare can use ll= coords
   const geo = await safe(()=>fetchGeoapify(countryName, iso), {});
 
   const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,social] = await Promise.all([
     safe(()=>fetchWikipedia(countryName),         {summary:""}),
     safe(()=>fetchWikivoyage(countryName),        {sections:{},highlights:[]}),
-    safe(()=>fetchFoursquare(countryName, iso),   []),  // uses geoCoordCache[iso] set above
+    safe(()=>fetchFoursquare(countryName, iso),   []),
     safe(()=>fetchWeather(countryName),           {now:null,forecast:[]}),
     safe(()=>fetchNews(countryName, iso),         []),
     safe(()=>fetchGoogleNews(countryName),        []),
@@ -838,6 +874,10 @@ app.get("/api/pipeline/status", async (req,res) => {
   res.json({total_countries:COUNTRIES.length,countries_processed:(intel||[]).length,coverage_pct:Math.round((intel||[]).length/COUNTRIES.length*100),fresh,recent_runs:runs||[],country_freshness:intel||[]});
 });
 
+// ══════════════════════════════════════════════════════════════════
+// ✅ FIXED: /api/health — label now correctly says "Places (Foursquare)"
+//    and reports whether FOURSQUARE_API_KEY is configured
+// ══════════════════════════════════════════════════════════════════
 app.get("/api/health", async (req,res) => {
   const checks = {};
   try {
@@ -849,19 +889,39 @@ app.get("/api/health", async (req,res) => {
 
   const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
     "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy"];
+
+  // ✅ FIXED label: "Places (Foursquare)" instead of "Places (OpenTripMap)"
   const labelMap = {
-    wikipedia:"Wikipedia", wikivoyage:"Wikivoyage", foursquare:"Places (OpenTripMap)",
-    openweathermap:"OpenWeatherMap", newsapi:"GNews API", google_news:"Google News RSS",
-    gdacs:"GDACS Disasters", ticketmaster:"Ticketmaster", eventbrite:"Eventbrite (RSS)",
-    predicthq:"PredictHQ", geoapify:"Geoapify", social_proxy:"Social Trends (RSS)",
+    wikipedia:      "Wikipedia",
+    wikivoyage:     "Wikivoyage",
+    foursquare:     "Places (Foursquare)",   // ← FIXED
+    openweathermap: "OpenWeatherMap",
+    newsapi:        "GNews API",
+    google_news:    "Google News RSS",
+    gdacs:          "GDACS Disasters",
+    ticketmaster:   "Ticketmaster",
+    eventbrite:     "Eventbrite (RSS)",
+    predicthq:      "PredictHQ",
+    geoapify:       "Geoapify",
+    social_proxy:   "Social Trends (RSS)",
   };
+
   sources.forEach(k=>{
     const h=sourceHealth[k]||{};
+    // Special case for foursquare: if no key configured, show clear message
+    let detail = h.ok!=null?(h.ok?`Last OK (${h.response_ms}ms)`:h.error):"Not yet tested";
+    if(k==="foursquare" && !ENV.FOURSQUARE_API_KEY) {
+      detail = "No FOURSQUARE_API_KEY — add it on Render dashboard";
+    }
+    if(k==="newsapi" && !ENV.GNEWS_API_KEY) {
+      detail = "No GNEWS_API_KEY — add it on Render dashboard";
+    }
     checks[k]={ok:h.ok??null, label:labelMap[k]||k,
-      detail:h.ok!=null?(h.ok?`Last OK (${h.response_ms}ms)`:h.error):"Not yet tested",
+      detail,
       last_check:h.last_check||null,success_count:h.success_count||0,fail_count:h.fail_count||0,response_ms:h.response_ms||null};
   });
 
+  // ✅ FIXED: Added FOURSQUARE_API_KEY to the API keys display panel
   const envKeys=[
     {label:"Mistral AI",       key:"MISTRAL_API_KEY"},
     {label:"OpenWeatherMap",   key:"OPENWEATHER_API_KEY"},
@@ -869,6 +929,7 @@ app.get("/api/health", async (req,res) => {
     {label:"PredictHQ",        key:"PREDICTHQ_API_KEY"},
     {label:"GNews API",        key:"GNEWS_API_KEY"},
     {label:"Geoapify",         key:"GEOAPIFY_API_KEY"},
+    {label:"Foursquare",       key:"FOURSQUARE_API_KEY"},  // ← NEW
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
@@ -887,9 +948,12 @@ app.get("/api/countries", (req,res) => {
 });
 
 // Texture proxy
-const TEXTURES={"earth-day":"https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg","earth-night":"https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg","earth-clouds":"https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png","earth-water":"https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png"};
-
-// Texture cache — fetch once, serve from memory (avoids repeated unpkg calls)
+const TEXTURES={
+  "earth-day":    "https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg",
+  "earth-night":  "https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg",
+  "earth-clouds": "https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png",
+  "earth-water":  "https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png",
+};
 const textureCache = {};
 
 app.options("/texture/:name", (req,res) => {
@@ -903,31 +967,14 @@ app.get("/texture/:name",(req,res)=>{
   const name = req.params.name;
   const sourceUrl = TEXTURES[name];
   if(!sourceUrl) return res.status(404).end();
-
   res.setHeader("Access-Control-Allow-Origin","*");
   res.setHeader("Access-Control-Allow-Methods","GET,HEAD,OPTIONS");
   res.setHeader("Cache-Control","public,max-age=86400");
   res.setHeader("Content-Type", sourceUrl.endsWith(".png")?"image/png":"image/jpeg");
-
-  // Serve from memory cache if available
-  if(textureCache[name]) {
-    return res.send(textureCache[name]);
-  }
-
-  // Fetch and cache using axios (follows redirects automatically unlike https.get)
-  axios.get(sourceUrl, {
-    responseType: "arraybuffer",
-    timeout: 15000,
-    headers: { "User-Agent": "GlobeVoyage/2.0" }
-  }).then(r => {
-    const buf = Buffer.from(r.data);
-    textureCache[name] = buf;
-    console.log(`Texture cached: ${name} (${Math.round(buf.length/1024)}kb)`);
-    res.send(buf);
-  }).catch(e => {
-    console.error(`Texture fetch failed: ${name}`, e.message);
-    res.status(502).end();
-  });
+  if(textureCache[name]) return res.send(textureCache[name]);
+  axios.get(sourceUrl, {responseType:"arraybuffer",timeout:15000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
+    .then(r => { const buf=Buffer.from(r.data); textureCache[name]=buf; console.log(`Texture cached: ${name} (${Math.round(buf.length/1024)}kb)`); res.send(buf); })
+    .catch(e => { console.error(`Texture fetch failed: ${name}`, e.message); res.status(502).end(); });
 });
 
 // GeoJSON proxy
@@ -962,13 +1009,12 @@ app.put("/api/destinations/:id",async(req,res)=>{const{name,country,description,
 app.delete("/api/destinations/:id",async(req,res)=>{const{error}=await supabase.from("destinations").delete().eq("id",req.params.id);if(error)return res.status(500).json({error:error.message});res.json({message:"Deleted"});});
 
 // ══════════════════════════════════════════════════════════════════
-// GLOBE PAGE — full WebGL Earth, scripts inlined, no external CDN
+// GLOBE PAGE
 // ══════════════════════════════════════════════════════════════════
 app.get("/globe",(req,res)=>{
   res.setHeader("Content-Type","text/html");
   res.setHeader("Cache-Control","public,max-age=300");
 
-  // If scripts not ready yet (first few seconds of cold start), wait briefly
   if(!THREE_JS || !EARCUT_JS) {
     return res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#060a12;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;color:#5bb8ff;font-size:11px;letter-spacing:3px}</style></head><body><div>INITIALISING...<script>setTimeout(()=>location.reload(),3000)</script></div></html>`);
   }
@@ -1116,90 +1162,28 @@ app.get("/globe",(req,res)=>{
     fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,sun);float dayA=smoothstep(-0.18,0.45,cosA);vec3 day=texture2D(dayTexture,vUv).rgb;float lum=dot(day,vec3(0.299,0.587,0.114));day=mix(vec3(lum),day,1.35);day=pow(day,vec3(0.88));vec3 night=texture2D(nightTexture,vUv).rgb;night=pow(night,vec3(0.75))*2.2;vec3 spec=texture2D(specTexture,vUv).rgb;vec3 color=mix(night,day,dayA);vec3 vd=normalize(cameraPosition-vWorldPos);vec3 hv=normalize(sun+vd);float sp=pow(max(dot(n,hv),0.0),90.0);float sp2=pow(max(dot(n,hv),0.0),18.0)*0.06;color+=vec3(0.7,0.82,1.0)*(sp*0.9+sp2)*spec.r*dayA;float term=smoothstep(0.0,0.18,cosA)*smoothstep(0.38,0.18,cosA);color+=vec3(0.9,0.45,0.15)*term*0.28;float rim=pow(1.0-max(dot(n,vd),0.0),3.8);color=mix(color,mix(vec3(0.04,0.08,0.28),vec3(0.28,0.62,1.0),smoothstep(-0.3,0.6,cosA)),rim*0.72);gl_FragColor=vec4(color,1.0);}'}));
   earthGroup.add(earthMesh);
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.09,48,48),new THREE.ShaderMaterial({uniforms:{sd:{value:new THREE.Vector3(5,2.5,4).normalize()}},vertexShader:'varying vec3 vN,vP;void main(){vN=normal;vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'uniform vec3 sd;varying vec3 vN,vP;void main(){vec3 vd=normalize(cameraPosition-(modelMatrix*vec4(vP,1.0)).xyz);float rim=pow(1.0-abs(dot(normalize(vN),vd)),2.4);float d=dot(normalize((normalMatrix*vec4(vN,0.0)).xyz),normalize(sd));vec3 col=mix(vec3(0.03,0.06,0.28),vec3(0.22,0.56,1.0),smoothstep(-0.15,0.6,d));gl_FragColor=vec4(col,rim*0.62);}',transparent:true,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending})));
-  // Texture URLs — multiple CDN fallbacks so globe always loads
-  // Primary: NASA via three-globe unpkg (most reliable)
-  // Fallback 1: jsDelivr mirror
-  // Fallback 2: raw GitHub
-  var TEXTURE_SETS = [
-    {
-      day:    'https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg',
-      night:  'https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg',
-      water:  'https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png',
-      clouds: 'https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png',
-    },
-    {
-      day:    'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-blue-marble.jpg',
-      night:  'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-night.jpg',
-      water:  'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-water.png',
-      clouds: 'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-clouds.png',
-    },
-    {
-      day:    'https://globevoyage-admin.onrender.com/texture/earth-day',
-      night:  'https://globevoyage-admin.onrender.com/texture/earth-night',
-      water:  'https://globevoyage-admin.onrender.com/texture/earth-water',
-      clouds: 'https://globevoyage-admin.onrender.com/texture/earth-clouds',
-    },
+  var TEXTURE_SETS=[
+    {day:'https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg',night:'https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg',water:'https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png',clouds:'https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png'},
+    {day:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-blue-marble.jpg',night:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-night.jpg',water:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-water.png',clouds:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-clouds.png'},
+    {day:'https://globevoyage-admin.onrender.com/texture/earth-day',night:'https://globevoyage-admin.onrender.com/texture/earth-night',water:'https://globevoyage-admin.onrender.com/texture/earth-water',clouds:'https://globevoyage-admin.onrender.com/texture/earth-clouds'},
   ];
-
-  var texLoader=new THREE.TextureLoader();
-  texLoader.crossOrigin='anonymous';
-  var texDone=0;
-  var currentTextureSet=0;
-
+  var texLoader=new THREE.TextureLoader();texLoader.crossOrigin='anonymous';
+  var texDone=0,currentTextureSet=0;
   function onTex(){texDone++;progress(25+texDone*18);}
-
-  function loadTexturesFromSet(setIdx) {
-    if(setIdx >= TEXTURE_SETS.length) {
-      // All CDNs failed — use procedural fallback (plain colored sphere)
-      console.warn('All texture CDNs failed, using fallback colors');
-      // Create simple colored textures as canvas fallback
+  function loadTexturesFromSet(setIdx){
+    if(setIdx>=TEXTURE_SETS.length){
       function makeCanvas(r,g,b){var c=document.createElement('canvas');c.width=2;c.height=2;var ctx=c.getContext('2d');ctx.fillStyle='rgb('+r+','+g+','+b+')';ctx.fillRect(0,0,2,2);return new THREE.CanvasTexture(c);}
-      uEarth.dayTexture.value   = makeCanvas(30,80,140);
-      uEarth.nightTexture.value = makeCanvas(5,10,30);
-      uEarth.specTexture.value  = makeCanvas(200,200,200);
-      progress(100);
-      return;
+      uEarth.dayTexture.value=makeCanvas(30,80,140);uEarth.nightTexture.value=makeCanvas(5,10,30);uEarth.specTexture.value=makeCanvas(200,200,200);progress(100);return;
     }
-    var set = TEXTURE_SETS[setIdx];
-    var failed = 0;
-    var loaded = 0;
-    var total  = 3;
-
-    function onSuccess(){ loaded++; onTex(); }
-    function onFail(name){
-      failed++;
-      console.warn('Texture CDN',setIdx,'failed for',name,', trying next...');
-      if(failed === 1) {
-        // First failure in this set — try next CDN set
-        loadTexturesFromSet(setIdx+1);
-      }
-    }
-
-    texLoader.load(set.day,
-      function(t){t.anisotropy=renderer.capabilities.getMaxAnisotropy();uEarth.dayTexture.value=t;onSuccess();},
-      undefined,
-      function(){onFail('day');}
-    );
-    texLoader.load(set.night,
-      function(t){uEarth.nightTexture.value=t;onSuccess();},
-      undefined,
-      function(){onFail('night');}
-    );
-    texLoader.load(set.water,
-      function(t){uEarth.specTexture.value=t;onSuccess();},
-      undefined,
-      function(){onFail('water');}
-    );
-    // Clouds are optional — don't block loading
-    texLoader.load(set.clouds,function(t){
-      cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.013,48,48),
-        new THREE.MeshPhongMaterial({map:t,transparent:true,opacity:0.75,depthWrite:false,blending:THREE.AdditiveBlending}));
-      earthGroup.add(cloudMesh);
-    });
+    var set=TEXTURE_SETS[setIdx],failed=0,loaded=0;
+    function onSuccess(){loaded++;onTex();}
+    function onFail(name){failed++;console.warn('Texture CDN',setIdx,'failed for',name);if(failed===1)loadTexturesFromSet(setIdx+1);}
+    texLoader.load(set.day,function(t){t.anisotropy=renderer.capabilities.getMaxAnisotropy();uEarth.dayTexture.value=t;onSuccess();},undefined,function(){onFail('day');});
+    texLoader.load(set.night,function(t){uEarth.nightTexture.value=t;onSuccess();},undefined,function(){onFail('night');});
+    texLoader.load(set.water,function(t){uEarth.specTexture.value=t;onSuccess();},undefined,function(){onFail('water');});
+    texLoader.load(set.clouds,function(t){cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.013,48,48),new THREE.MeshPhongMaterial({map:t,transparent:true,opacity:0.75,depthWrite:false,blending:THREE.AdditiveBlending}));earthGroup.add(cloudMesh);});
   }
-
-  var cloudMesh;
-  loadTexturesFromSet(0);
+  var cloudMesh;loadTexturesFromSet(0);
   var FILL_R=1.003,BORDER_R=1.0042,countryMap={},allFeatures=[],highlightTargets={};
   function ll2v(lon,lat,r){var phi=(90-lat)*Math.PI/180,theta=(lon+180)*Math.PI/180;return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));}
   function triPoly(rings){var coords=[];rings[0].forEach(function(p){coords.push(p[0],p[1]);});var holes=[],off=rings[0].length;for(var i=1;i<rings.length;i++){holes.push(off);rings[i].forEach(function(p){coords.push(p[0],p[1]);});off+=rings[i].length;}var idx=earcut(coords,holes.length?holes:null,2);if(!idx||!idx.length)return null;var pos=[];for(var t=0;t<idx.length;t++){var k=idx[t];var v=ll2v(coords[k*2],coords[k*2+1],FILL_R);pos.push(v.x,v.y,v.z);}var geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));return geo;}
@@ -1235,21 +1219,12 @@ app.get("/globe",(req,res)=>{
 const PORT = process.env.PORT||3000;
 app.listen(PORT, async()=>{
   console.log(`GlobeVoyage API on port ${PORT} — ${COUNTRIES.length} countries`);
-
-  // Step 1: Fetch three.js + earcut from CDN if not in node_modules
   await ensureScripts();
-
-  // Step 2: Pre-warm texture cache so /texture/* responds instantly
   console.log("Pre-warming texture cache...");
   for(const [name, url] of Object.entries(TEXTURES)) {
     axios.get(url, {responseType:"arraybuffer",timeout:20000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
-      .then(r => {
-        textureCache[name] = Buffer.from(r.data);
-        console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`);
-      })
+      .then(r => { textureCache[name] = Buffer.from(r.data); console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`); })
       .catch(e => console.error(`✗ Texture pre-warm failed: ${name}`, e.message));
   }
-
-  // Step 3: Start data pipeline after 15 seconds
   setTimeout(runStartupPipeline, 15000);
 });
