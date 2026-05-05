@@ -666,17 +666,20 @@ async function fetchGeoapifyPlaces(iso) {
 }
 
 // ── SOCIAL TRENDS RSS ─────────────────────────────────────────────
+// Google Trends daily/rss 404s with query params — use explore feed instead
 async function fetchSocialTrends(countryName) {
   return timed("social_proxy", async () => {
-    const q = encodeURIComponent(`${countryName} travel`);
-    const r = await axios.get(`https://trends.google.com/trends/trendingsearches/daily/rss?geo=US&q=${q}`, {
-      timeout:10000, responseType:"text"
+    const q   = encodeURIComponent(countryName + " travel tourism");
+    const url = "https://trends.google.com/trends/explore/feed?q=" + q + "&hl=en-US";
+    const r   = await axios.get(url, {
+      timeout:10000, responseType:"text",
+      headers:{ "User-Agent": WIKI_UA }
     });
     const parsed = await xml2js.parseStringPromise(r.data, {explicitArray:false}).catch(()=>null);
     if(!parsed) return [];
     const items = parsed?.rss?.channel?.item||[];
     const arr = Array.isArray(items)?items:[items];
-    return arr.slice(0,5).map(i=>({ term:i.title||"", traffic:i["ht:approx_traffic"]||"" }));
+    return arr.slice(0,5).map(i=>({ term:i.title||"", traffic:"" }));
   });
 }
 
@@ -1002,13 +1005,14 @@ app.get("/api/health", async (req, res) => {
     checks.geoapify = { ok:false, label:"Geoapify", detail:"No API key configured" };
   }
 
-  // Social Trends (Google Trends RSS)
+  // Social Trends (Google Trends explore feed)
   try {
     const t = Date.now();
-    await axios.get("https://trends.google.com/trends/trendingsearches/daily/rss?geo=US", {
-      timeout:8000, responseType:"text"
+    await axios.get("https://trends.google.com/trends/explore/feed?q=travel&hl=en-US", {
+      timeout:8000, responseType:"text",
+      headers:{ "User-Agent": WIKI_UA }
     });
-    checks.social_proxy = { ok:true, label:"Social Trends (RSS)", detail:`Last OK (${Date.now()-t}ms)`, response_ms:Date.now()-t };
+    checks.social_proxy = { ok:true, label:"Social Trends (RSS)", detail:"Last OK (" + (Date.now()-t) + "ms)", response_ms:Date.now()-t };
   } catch(e) {
     checks.social_proxy = { ok:false, label:"Social Trends (RSS)", detail:e.message };
   }
@@ -1149,7 +1153,6 @@ app.get("/globe", (req, res) => {
   if(!THREE_JS || !EARCUT_JS) {
     return res.status(503).send("Globe scripts not loaded yet. Retry in 30s.");
   }
-  // Fetch country coordinates for globe markers
   const countryMarkers = COUNTRIES.map(c => {
     const g = geoCoordCache[c.iso];
     return g ? { iso:c.iso, name:c.name, lat:g.lat, lon:g.lon } : null;
@@ -1163,154 +1166,174 @@ app.get("/globe", (req, res) => {
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   html,body{width:100%;height:100%;overflow:hidden;background:#080c14}
-  canvas{display:block;width:100%!important;height:100%!important}
+  canvas{display:block}
   #info{position:absolute;top:10px;left:50%;transform:translateX(-50%);
     color:#c9a96e;font-family:sans-serif;font-size:11px;letter-spacing:2px;
-    pointer-events:none;text-align:center;text-transform:uppercase}
+    pointer-events:none;text-align:center;text-transform:uppercase;
+    background:rgba(8,12,20,0.6);padding:4px 12px;border-radius:20px}
 </style>
 </head><body>
-<div id="info">Tap a country to explore</div>
+<div id="info">TAP A COUNTRY TO EXPLORE</div>
 <script>${THREE_JS}</script>
-<script>${EARCUT_JS}</script>
 <script>
 const COUNTRIES = ${JSON.stringify(countryMarkers)};
-const W = window.innerWidth, H = window.innerHeight;
-const scene    = new THREE.Scene();
-const camera   = new THREE.PerspectiveCamera(45, W/H, 0.1, 1000);
-camera.position.set(0, 0, 2.8);
-const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-renderer.setSize(W, H);
+
+// ── Renderer ────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false });
+renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x080c14, 1);
 document.body.appendChild(renderer.domElement);
 
-// Globe
-const globeGeo  = new THREE.SphereGeometry(1, 64, 64);
-const globeMat  = new THREE.MeshPhongMaterial({ color:0x1a3a5c, shininess:30, specular:0x224466 });
-const globe     = new THREE.Mesh(globeGeo, globeMat);
-scene.add(globe);
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.z = 2.6;
 
-// Atmosphere glow
-const atmGeo    = new THREE.SphereGeometry(1.03, 32, 32);
-const atmMat    = new THREE.MeshPhongMaterial({
-  color:0x2277cc, transparent:true, opacity:0.12, side:THREE.FrontSide
-});
-scene.add(new THREE.Mesh(atmGeo, atmMat));
+// ── Globe group — everything rotates together ───────────────────
+const globeGroup = new THREE.Group();
+scene.add(globeGroup);
 
-// Grid lines
-const gridMat = new THREE.LineBasicMaterial({ color:0x1e3a5f, transparent:true, opacity:0.4 });
-for(let lat=-75; lat<=75; lat+=15) {
+// Ocean sphere — flat lambert, no specular highlight
+const oceanMat = new THREE.MeshLambertMaterial({ color: 0x0d2647 });
+const oceanMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 64), oceanMat);
+globeGroup.add(oceanMesh);
+
+// Land layer — slightly raised, different colour
+const landMat  = new THREE.MeshLambertMaterial({ color: 0x1a4a2e });
+const landMesh = new THREE.Mesh(new THREE.SphereGeometry(1.001, 64, 64), landMat);
+landMesh.visible = false; // placeholder — colour comes from ocean tint for now
+globeGroup.add(landMesh);
+
+// Latitude / longitude grid — subtle
+const gridMat = new THREE.LineBasicMaterial({ color:0x1b3a6a, transparent:true, opacity:0.5 });
+function addLine(pts){ globeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat)); }
+for(let lat=-75; lat<=75; lat+=15){
   const pts=[];
-  for(let lng=-180; lng<=180; lng+=5) {
-    const phi=(90-lat)*Math.PI/180, theta=(lng+180)*Math.PI/180;
-    pts.push(new THREE.Vector3(Math.sin(phi)*Math.cos(theta),Math.cos(phi),Math.sin(phi)*Math.sin(theta)));
+  for(let lng=-180; lng<=181; lng+=4){
+    const phi=(90-lat)*Math.PI/180, th=(lng+180)*Math.PI/180;
+    pts.push(new THREE.Vector3(Math.sin(phi)*Math.cos(th), Math.cos(phi), Math.sin(phi)*Math.sin(th)));
   }
-  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
+  addLine(pts);
 }
-for(let lng=-180; lng<=180; lng+=30) {
+for(let lng=-180; lng<180; lng+=30){
   const pts=[];
-  for(let lat=-90; lat<=90; lat+=5) {
-    const phi=(90-lat)*Math.PI/180, theta=(lng+180)*Math.PI/180;
-    pts.push(new THREE.Vector3(Math.sin(phi)*Math.cos(theta),Math.cos(phi),Math.sin(phi)*Math.sin(theta)));
+  for(let lat=-90; lat<=90; lat+=4){
+    const phi=(90-lat)*Math.PI/180, th=(lng+180)*Math.PI/180;
+    pts.push(new THREE.Vector3(Math.sin(phi)*Math.cos(th), Math.cos(phi), Math.sin(phi)*Math.sin(th)));
   }
-  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), gridMat));
+  addLine(pts);
 }
 
-// Country markers
+// Country dot markers — children of globeGroup so they auto-rotate
+const markerGeo = new THREE.SphereGeometry(0.013, 7, 7);
 const markerMat = new THREE.MeshBasicMaterial({ color:0xc9a96e });
-const markerGeo = new THREE.SphereGeometry(0.012, 8, 8);
 const markers   = [];
 COUNTRIES.forEach(c => {
-  const phi   = (90-c.lat)*Math.PI/180;
-  const theta = (c.lon+180)*Math.PI/180;
-  const mesh  = new THREE.Mesh(markerGeo, markerMat.clone());
-  mesh.position.set(
-    1.02*Math.sin(phi)*Math.cos(theta),
-    1.02*Math.cos(phi),
-    1.02*Math.sin(phi)*Math.sin(theta)
+  const phi = (90 - c.lat) * Math.PI / 180;
+  const th  = (c.lon + 180) * Math.PI / 180;
+  const m   = new THREE.Mesh(markerGeo, markerMat.clone());
+  m.position.set(
+    1.015 * Math.sin(phi) * Math.cos(th),
+    1.015 * Math.cos(phi),
+    1.015 * Math.sin(phi) * Math.sin(th)
   );
-  mesh.userData = c;
-  scene.add(mesh);
-  markers.push(mesh);
+  m.userData = c;
+  globeGroup.add(m);   // <-- child of group, not scene
+  markers.push(m);
 });
 
-// Lighting
-scene.add(new THREE.AmbientLight(0x334466, 0.8));
-const sun = new THREE.DirectionalLight(0xffffff, 1.2);
-sun.position.set(5, 3, 5);
-scene.add(sun);
+// Thin atmosphere rim — BackSide only so no front glow blob
+const atmMat  = new THREE.MeshLambertMaterial({
+  color:0x2255aa, transparent:true, opacity:0.18, side:THREE.BackSide
+});
+scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.08, 32, 32), atmMat));
 
-// Interaction
-let isDragging=false, prevX=0, prevY=0, velX=0, velY=0;
+// ── Lighting — soft, no specular hotspots ───────────────────────
+// Ambient fills the whole sphere evenly
+scene.add(new THREE.AmbientLight(0x8899bb, 0.9));
+// One soft directional from upper-left — gives gentle day/night shading
+const sun = new THREE.DirectionalLight(0xffeedd, 0.7);
+sun.position.set(-3, 2, 4);
+scene.add(sun);
+// Faint fill from opposite side so dark side isn't pure black
+const fill = new THREE.DirectionalLight(0x334466, 0.3);
+fill.position.set(3, -1, -3);
+scene.add(fill);
+
+// ── Interaction ─────────────────────────────────────────────────
+let dragging=false, prevX=0, prevY=0, velX=0, velY=0;
+let touchStartX=0, touchStartY=0;
 const raycaster = new THREE.Raycaster();
 const mouse     = new THREE.Vector2();
+const W = ()=>window.innerWidth, H = ()=>window.innerHeight;
 
 renderer.domElement.addEventListener("touchstart", e=>{
-  isDragging=true; prevX=e.touches[0].clientX; prevY=e.touches[0].clientY; velX=velY=0;
+  dragging=true;
+  prevX=touchStartX=e.touches[0].clientX;
+  prevY=touchStartY=e.touches[0].clientY;
+  velX=velY=0;
 },{passive:true});
+
 renderer.domElement.addEventListener("touchmove", e=>{
-  if(!isDragging) return;
-  velX=(e.touches[0].clientX-prevX)*0.005;
-  velY=(e.touches[0].clientY-prevY)*0.005;
-  globe.rotation.y+=velX; globe.rotation.x+=velY;
-  markers.forEach(m=>{m.parent.rotation.y=globe.rotation.y;m.parent.rotation.x=globe.rotation.x;});
-  scene.children.filter(c=>c.type==="Line").forEach(l=>{l.rotation.copy(globe.rotation);});
+  if(!dragging) return;
+  const dx=e.touches[0].clientX-prevX, dy=e.touches[0].clientY-prevY;
+  velX=dx*0.006; velY=dy*0.006;
+  globeGroup.rotation.y += velX;
+  globeGroup.rotation.x += velY;
+  globeGroup.rotation.x  = Math.max(-Math.PI/2, Math.min(Math.PI/2, globeGroup.rotation.x));
   prevX=e.touches[0].clientX; prevY=e.touches[0].clientY;
 },{passive:true});
+
 renderer.domElement.addEventListener("touchend", e=>{
-  if(!isDragging){return;}
-  isDragging=false;
-  // Tap detection
-  if(Math.abs(velX)<0.002 && Math.abs(velY)<0.002){
-    const touch=e.changedTouches[0];
-    mouse.x=(touch.clientX/W)*2-1; mouse.y=-(touch.clientY/H)*2+1;
+  if(!dragging) return;
+  dragging=false;
+  const dx=e.changedTouches[0].clientX-touchStartX;
+  const dy=e.changedTouches[0].clientY-touchStartY;
+  // It's a tap if finger barely moved
+  if(Math.abs(dx)<8 && Math.abs(dy)<8){
+    const t=e.changedTouches[0];
+    mouse.x=(t.clientX/W())*2-1;
+    mouse.y=-(t.clientY/H())*2+1;
     raycaster.setFromCamera(mouse, camera);
     const hits=raycaster.intersectObjects(markers);
     if(hits.length){
       const c=hits[0].object.userData;
-      if(window.ReactNativeWebView) window.ReactNativeWebView.postMessage(JSON.stringify({type:"DESTINATIONS",name:c.name,iso:c.iso}));
-      document.getElementById("info").textContent="✈ "+c.name;
-      setTimeout(()=>{ document.getElementById("info").textContent="Tap a country to explore"; },3000);
+      if(window.ReactNativeWebView)
+        window.ReactNativeWebView.postMessage(JSON.stringify({type:"DESTINATIONS",name:c.name,iso:c.iso}));
+      document.getElementById("info").textContent="✈  "+c.name.toUpperCase();
+      setTimeout(()=>{ document.getElementById("info").textContent="TAP A COUNTRY TO EXPLORE"; },2500);
     }
   }
 },{passive:true});
 
-// Mouse support (desktop preview)
-renderer.domElement.addEventListener("mousedown",e=>{isDragging=true;prevX=e.clientX;prevY=e.clientY;velX=velY=0;});
-renderer.domElement.addEventListener("mousemove",e=>{
-  if(!isDragging)return;
-  velX=(e.clientX-prevX)*0.005; velY=(e.clientY-prevY)*0.005;
-  globe.rotation.y+=velX; globe.rotation.x+=velY;
+// Mouse (desktop/preview)
+renderer.domElement.addEventListener("mousedown", e=>{ dragging=true; prevX=e.clientX; prevY=e.clientY; velX=velY=0; });
+renderer.domElement.addEventListener("mousemove", e=>{
+  if(!dragging) return;
+  velX=(e.clientX-prevX)*0.006; velY=(e.clientY-prevY)*0.006;
+  globeGroup.rotation.y+=velX;
+  globeGroup.rotation.x+=velY;
+  globeGroup.rotation.x=Math.max(-Math.PI/2,Math.min(Math.PI/2,globeGroup.rotation.x));
   prevX=e.clientX; prevY=e.clientY;
 });
-renderer.domElement.addEventListener("mouseup",()=>{isDragging=false;});
+renderer.domElement.addEventListener("mouseup", ()=>{ dragging=false; });
 
-// Animate
+// ── Animate ─────────────────────────────────────────────────────
 (function animate(){
   requestAnimationFrame(animate);
-  if(!isDragging){
-    velX*=0.95; velY*=0.95;
-    globe.rotation.y+=velX+0.002;
-    globe.rotation.x+=velY;
+  if(!dragging){
+    velX*=0.92; velY*=0.92;
+    globeGroup.rotation.y += velX + 0.0018; // gentle auto-spin
+    globeGroup.rotation.x += velY;
+    globeGroup.rotation.x  = Math.max(-Math.PI/2, Math.min(Math.PI/2, globeGroup.rotation.x));
   }
-  // Keep markers/grid synced with globe rotation
-  markers.forEach(m=>{
-    const phi=(90-m.userData.lat)*Math.PI/180;
-    const theta=(m.userData.lon+180)*Math.PI/180;
-    const base = new THREE.Vector3(
-      Math.sin(phi)*Math.cos(theta),
-      Math.cos(phi),
-      Math.sin(phi)*Math.sin(theta)
-    );
-    base.applyEuler(globe.rotation).multiplyScalar(1.02);
-    m.position.copy(base);
-  });
   renderer.render(scene, camera);
 })();
 
-window.addEventListener("resize",()=>{
-  camera.aspect=window.innerWidth/window.innerHeight;
+window.addEventListener("resize", ()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth,window.innerHeight);
+  renderer.setSize(window.innerWidth, window.innerHeight);
 });
 </script>
 </body></html>`);
