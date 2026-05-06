@@ -1044,7 +1044,7 @@ app.get("/globe",(req,res)=>{
 </div>
 <script>${THREE_JS}</script>
 <script>${EARCUT_JS}</script>
-<script>var DESCRIPTIONS=${JSON.stringify(DESCRIPTIONS)};var FLAGS=${JSON.stringify(FLAGS)};</script>
+<script>var __API_URL__='${SELF}';var DESCRIPTIONS=${JSON.stringify(DESCRIPTIONS)};var FLAGS=${JSON.stringify(FLAGS)};</script>
 <script>
 (function(){
   var W=window.innerWidth,H=window.innerHeight;
@@ -1078,10 +1078,13 @@ app.get("/globe",(req,res)=>{
     fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,sun);float dayA=smoothstep(-0.18,0.45,cosA);vec3 day=texture2D(dayTexture,vUv).rgb;float lum=dot(day,vec3(0.299,0.587,0.114));day=mix(vec3(lum),day,1.35);day=pow(day,vec3(0.88));vec3 night=texture2D(nightTexture,vUv).rgb;night=pow(night,vec3(0.75))*2.2;vec3 spec=texture2D(specTexture,vUv).rgb;vec3 color=mix(night,day,dayA);vec3 vd=normalize(cameraPosition-vWorldPos);vec3 hv=normalize(sun+vd);float sp=pow(max(dot(n,hv),0.0),90.0);float sp2=pow(max(dot(n,hv),0.0),18.0)*0.06;color+=vec3(0.7,0.82,1.0)*(sp*0.9+sp2)*spec.r*dayA;float term=smoothstep(0.0,0.18,cosA)*smoothstep(0.38,0.18,cosA);color+=vec3(0.9,0.45,0.15)*term*0.28;float rim=pow(1.0-max(dot(n,vd),0.0),3.8);color=mix(color,mix(vec3(0.04,0.08,0.28),vec3(0.28,0.62,1.0),smoothstep(-0.3,0.6,cosA)),rim*0.72);gl_FragColor=vec4(color,1.0);}'}));
   earthGroup.add(earthMesh);
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.09,48,48),new THREE.ShaderMaterial({uniforms:{sd:{value:new THREE.Vector3(5,2.5,4).normalize()}},vertexShader:'varying vec3 vN,vP;void main(){vN=normal;vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'uniform vec3 sd;varying vec3 vN,vP;void main(){vec3 vd=normalize(cameraPosition-(modelMatrix*vec4(vP,1.0)).xyz);float rim=pow(1.0-abs(dot(normalize(vN),vd)),2.4);float d=dot(normalize((normalMatrix*vec4(vN,0.0)).xyz),normalize(sd));vec3 col=mix(vec3(0.03,0.06,0.28),vec3(0.22,0.56,1.0),smoothstep(-0.15,0.6,d));gl_FragColor=vec4(col,rim*0.62);}',transparent:true,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending})));
+  var API=typeof __API_URL__==='string'?__API_URL__:'https://globevoyage-admin.onrender.com';
   var TEXTURE_SETS=[
-    {day:'https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg',night:'https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg',water:'https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png',clouds:'https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png'},
+    // Own backend FIRST — textures are pre-warmed at startup so this is fastest
+    {day:API+'/texture/earth-day',night:API+'/texture/earth-night',water:API+'/texture/earth-water',clouds:API+'/texture/earth-clouds'},
+    // CDN fallbacks if own backend is cold
     {day:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-blue-marble.jpg',night:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-night.jpg',water:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-water.png',clouds:'https://cdn.jsdelivr.net/npm/three-globe@2.30.0/example/img/earth-clouds.png'},
-    {day:'https://globevoyage-admin.onrender.com/texture/earth-day',night:'https://globevoyage-admin.onrender.com/texture/earth-night',water:'https://globevoyage-admin.onrender.com/texture/earth-water',clouds:'https://globevoyage-admin.onrender.com/texture/earth-clouds'},
+    {day:'https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg',night:'https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg',water:'https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png',clouds:'https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png'},
   ];
   var texLoader=new THREE.TextureLoader();texLoader.crossOrigin='anonymous';
   var texDone=0,currentTextureSet=0;
@@ -1117,7 +1120,19 @@ app.get("/globe",(req,res)=>{
   function setSelected(iso){if(selectedISO&&countryMap[selectedISO]){highlightTargets[selectedISO]=0.0;countryMap[selectedISO].borderMat.color.setHex(0xffffff);countryMap[selectedISO].borderMat.opacity=0.25;}if(iso===selectedISO){dismissSelection();return;}selectedISO=iso;if(countryMap[iso]){highlightTargets[iso]=0.48;countryMap[iso].borderMat.color.setHex(0x88ccff);countryMap[iso].borderMat.opacity=1.0;openCard(iso,countryMap[iso].props);}autoSpin=false;}
   var raycaster=new THREE.Raycaster();
   function handleTap(sx,sy){var cardEl=document.getElementById('card');if(cardOpen&&sy>cardEl.getBoundingClientRect().top)return;var ndc=new THREE.Vector2((sx/W)*2-1,-(sy/H)*2+1);raycaster.setFromCamera(ndc,camera);var sh=raycaster.intersectObject(earthMesh);if(!sh.length){if(selectedISO)dismissSelection();return;}var fills=[];earthGroup.traverse(function(o){if(o.isMesh&&o.userData.iso)fills.push(o);});var hits=raycaster.intersectObjects(fills,false);if(hits.length>0){setSelected(hits[0].object.userData.iso);return;}var lp=earthGroup.worldToLocal(sh[0].point.clone());var ll=v3toll(lp);for(var i=0;i<allFeatures.length;i++){if(pipFeature(ll.lon,ll.lat,allFeatures[i])){setSelected(allFeatures[i].properties.iso);return;}}if(selectedISO)dismissSelection();}
-  fetch('https://globevoyage-admin.onrender.com/geodata').then(function(r){return r.json();}).then(function(g){progress(82);allFeatures=g.features;var i=0;function batch(){var end=Math.min(i+15,allFeatures.length);for(;i<end;i++)buildCountry(allFeatures[i]);progress(82+Math.round((i/allFeatures.length)*17));if(i<allFeatures.length)setTimeout(batch,0);else progress(100);}batch();}).catch(function(){progress(100);});
+  // Fetch geodata with retry — if first attempt fails, try once more after 3s
+  function loadGeoData(attempt){
+    fetch(API+'/geodata').then(function(r){return r.json();}).then(function(g){
+      progress(82);allFeatures=g.features;var i=0;
+      function batch(){var end=Math.min(i+15,allFeatures.length);for(;i<end;i++)buildCountry(allFeatures[i]);progress(82+Math.round((i/allFeatures.length)*17));if(i<allFeatures.length)setTimeout(batch,0);else progress(100);}
+      batch();
+    }).catch(function(e){
+      console.warn('Geodata fetch failed attempt '+(attempt||1)+':',e);
+      if(!attempt||attempt<2){setTimeout(function(){loadGeoData((attempt||1)+1);},3000);}
+      else{progress(100);} // give up after 2 tries — globe still works without country outlines
+    });
+  }
+  loadGeoData(1);
   function tDist(a,b){var dx=a.clientX-b.clientX,dy=a.clientY-b.clientY;return Math.sqrt(dx*dx+dy*dy);}
   canvas.addEventListener('touchstart',function(e){e.preventDefault();if(e.touches.length===1){var t=e.touches[0];lx=t.clientX;ly=t.clientY;tapX=t.clientX;tapY=t.clientY;tapT=Date.now();isDrag=true;isPinch=false;momX=0;momY=0;isHeld=false;holdTimer=setTimeout(function(){isHeld=true;autoSpin=false;},600);}else if(e.touches.length===2){clearTimeout(holdTimer);isDrag=false;isPinch=true;lDist=tDist(e.touches[0],e.touches[1]);}},{passive:false});
   canvas.addEventListener('touchmove',function(e){e.preventDefault();if(isDrag&&e.touches.length===1){clearTimeout(holdTimer);var t=e.touches[0],dx=t.clientX-lx,dy=t.clientY-ly;var s=0.004*(camZ/CAM_DEFAULT);earthGroup.rotation.y+=dx*s;earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+dy*s));momX=dx*s;momY=dy*s;lx=t.clientX;ly=t.clientY;autoSpin=false;}else if(isPinch&&e.touches.length===2){var d=tDist(e.touches[0],e.touches[1]);var delta=(lDist-d)*0.014;if(targetZ+delta<CAM_MIN)delta*=0.2;if(targetZ+delta>CAM_MAX)delta*=0.2;targetZ=Math.max(CAM_MIN,Math.min(CAM_MAX,targetZ+delta));lDist=d;}},{passive:false});
