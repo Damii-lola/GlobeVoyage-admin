@@ -25,6 +25,11 @@ const ENV = {
   PREDICTHQ_API_KEY:    process.env.PREDICTHQ_API_KEY,
   GNEWS_API_KEY:        process.env.GNEWS_API_KEY,
   GEOAPIFY_API_KEY:     process.env.GEOAPIFY_API_KEY,
+  // New integrations
+  UNSPLASH_ACCESS_KEY:  process.env.UNSPLASH_ACCESS_KEY,
+  OPENAQ_API_KEY:       process.env.OPENAQ_API_KEY,
+  AVIATIONSTACK_API_KEY:process.env.AVIATIONSTACK_API_KEY,
+  RAPIDAPI_KEY:         process.env.RAPIDAPI_KEY,   // covers Numbeo + Airbnb via RapidAPI
 };
 
 // Bundled scripts — try node_modules first, fall back to CDN fetch at startup
@@ -632,6 +637,293 @@ async function fetchSocialTrends(countryName) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// NEW DATA SOURCES
+// ══════════════════════════════════════════════════════════════════
+
+// ── 1. UNSPLASH — high quality country/destination photos ─────────
+async function fetchUnsplash(countryName) {
+  if(!ENV.UNSPLASH_ACCESS_KEY) return [];
+  return timed("unsplash", async () => {
+    const r = await axios.get("https://api.unsplash.com/search/photos", {
+      params:{
+        query:     `${countryName} travel landscape`,
+        per_page:  9,
+        order_by:  "relevant",
+        orientation: "landscape",
+      },
+      headers:{ Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}` },
+      timeout: 8000,
+    });
+    return (r.data?.results||[]).map(p => ({
+      id:          p.id,
+      url_small:   p.urls?.small,
+      url_regular: p.urls?.regular,
+      url_full:    p.urls?.full,
+      alt:         p.alt_description||p.description||countryName,
+      credit:      p.user?.name||"",
+      credit_link: p.user?.links?.html||"",
+      color:       p.color||"#000",
+      width:       p.width,
+      height:      p.height,
+    }));
+  });
+}
+
+// ── 2. OPENAQ — real-time air quality ────────────────────────────
+// Free, no key required (key gives higher rate limits)
+async function fetchAirQuality(countryName, iso) {
+  return timed("openaq", async () => {
+    // Use ISO2 code — OpenAQ uses alpha-2
+    const ALPHA2 = {
+      DZA:"DZ",EGY:"EG",GHA:"GH",KEN:"KE",MAR:"MA",NGA:"NG",ZAF:"ZA",TUN:"TN",
+      ETH:"ET",TZA:"TZ",UGA:"UG",CMR:"CM",SEN:"SN",CIV:"CI",AGO:"AO",SDN:"SD",
+      CHN:"CN",IND:"IN",IDN:"ID",JPN:"JP",KOR:"KR",MYS:"MY",PAK:"PK",PHL:"PH",
+      SAU:"SA",SGP:"SG",LKA:"LK",THA:"TH",TUR:"TR",ARE:"AE",VNM:"VN",BGD:"BD",
+      IRN:"IR",IRQ:"IQ",ISR:"IL",JOR:"JO",KWT:"KW",LBN:"LB",QAT:"QA",SYR:"SY",
+      AUT:"AT",BEL:"BE",BGR:"BG",HRV:"HR",CZE:"CZ",DNK:"DK",FIN:"FI",FRA:"FR",
+      DEU:"DE",GRC:"GR",HUN:"HU",IRL:"IE",ITA:"IT",NLD:"NL",NOR:"NO",POL:"PL",
+      PRT:"PT",ROU:"RO",RUS:"RU",SRB:"RS",SVK:"SK",ESP:"ES",SWE:"SE",CHE:"CH",
+      UKR:"UA",GBR:"GB",BLR:"BY",AZE:"AZ",GEO:"GE",ARM:"AM",
+      CAN:"CA",MEX:"MX",USA:"US",CUB:"CU",DOM:"DO",GTM:"GT",HND:"HN",CRI:"CR",
+      ARG:"AR",BRA:"BR",CHL:"CL",COL:"CO",PER:"PE",VEN:"VE",ECU:"EC",BOL:"BO",
+      AUS:"AU",NZL:"NZ",
+    };
+    const cc = ALPHA2[iso];
+    if(!cc) return null;
+
+    const headers = ENV.OPENAQ_API_KEY ? { "X-API-Key": ENV.OPENAQ_API_KEY } : {};
+    const r = await axios.get("https://api.openaq.org/v3/locations", {
+      params:{ countries_id: cc, limit: 5, order_by: "lastUpdated", sort_order: "desc" },
+      headers,
+      timeout: 8000,
+    });
+
+    const locations = r.data?.results||[];
+    if(!locations.length) return null;
+
+    // Get latest measurements from first location
+    const locId = locations[0].id;
+    const m = await axios.get(`https://api.openaq.org/v3/locations/${locId}/latest`, {
+      headers,
+      timeout: 8000,
+    });
+
+    const measurements = m.data?.results||[];
+    const byParam = {};
+    measurements.forEach(x => { byParam[x.parameter] = x.value; });
+
+    const pm25 = byParam["pm25"] ?? byParam["pm2.5"] ?? null;
+    const pm10 = byParam["pm10"] ?? null;
+    const aqi  = pm25 !== null ? calcAQI(pm25) : null;
+
+    return {
+      location:  locations[0].name||countryName,
+      pm25:      pm25 !== null ? Math.round(pm25*10)/10 : null,
+      pm10:      pm10 !== null ? Math.round(pm10*10)/10 : null,
+      aqi,
+      aqi_label: aqi !== null ? aqiLabel(aqi) : null,
+      updated:   locations[0].lastUpdated||null,
+    };
+  });
+}
+
+function calcAQI(pm25) {
+  // US EPA AQI breakpoints for PM2.5
+  const bp = [
+    [0,12,0,50],[12.1,35.4,51,100],[35.5,55.4,101,150],
+    [55.5,150.4,151,200],[150.5,250.4,201,300],[250.5,500.4,301,500],
+  ];
+  for(const [cLow,cHigh,iLow,iHigh] of bp) {
+    if(pm25 >= cLow && pm25 <= cHigh) {
+      return Math.round(((iHigh-iLow)/(cHigh-cLow))*(pm25-cLow)+iLow);
+    }
+  }
+  return null;
+}
+
+function aqiLabel(aqi) {
+  if(aqi<=50)  return "Good";
+  if(aqi<=100) return "Moderate";
+  if(aqi<=150) return "Unhealthy for Sensitive Groups";
+  if(aqi<=200) return "Unhealthy";
+  if(aqi<=300) return "Very Unhealthy";
+  return "Hazardous";
+}
+
+// ── 3. AVIATIONSTACK — live flights & major airports ─────────────
+// Free tier: 100 req/month. We cache aggressively (24h per country).
+const aviationCache = {};
+async function fetchFlights(countryName, iso) {
+  if(!ENV.AVIATIONSTACK_API_KEY) return null;
+  const cached = aviationCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+
+  return timed("aviationstack", async () => {
+    // Get airports in country first
+    const r = await axios.get("http://api.aviationstack.com/v1/airports", {
+      params:{
+        access_key: ENV.AVIATIONSTACK_API_KEY,
+        country_name: countryName,
+        limit: 5,
+      },
+      timeout: 10000,
+    });
+    const airports = (r.data?.data||[]).map(a => ({
+      name:      a.airport_name,
+      iata:      a.iata_code,
+      city:      a.city_iata_code||a.city||"",
+      latitude:  a.latitude,
+      longitude: a.longitude,
+    })).filter(a => a.iata);
+
+    const data = { airports, major_hub: airports[0]||null };
+    aviationCache[iso] = { data, expires: Date.now()+24*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 4. NUMBEO COST OF LIVING — via RapidAPI ───────────────────────
+const numbeoCache = {};
+async function fetchCostOfLiving(countryName) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = numbeoCache[countryName];
+  if(cached && Date.now() < cached.expires) return cached.data;
+
+  return timed("numbeo", async () => {
+    const r = await axios.get("https://numbeo-cost-of-living.p.rapidapi.com/api/cost-of-living", {
+      params:{ country: countryName },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "numbeo-cost-of-living.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const d = r.data;
+    const data = {
+      city:               d.city||countryName,
+      cost_index:         d.cost_of_living_index,
+      rent_index:         d.rent_index,
+      restaurant_index:   d.restaurant_price_index,
+      groceries_index:    d.groceries_index,
+      purchasing_power:   d.local_purchasing_power_index,
+      meal_cheap:         d.meal_inexpensive_restaurant,
+      meal_mid:           d.meal_for_2_mid_range_restaurant,
+      cappuccino:         d.cappuccino,
+      beer_local:         d.domestic_beer_restaurant,
+      one_bed_city_rent:  d.apartment_1_bedroom_city_centre,
+      monthly_net_salary: d.average_monthly_net_salary,
+      currency:           d.currency||"USD",
+    };
+    numbeoCache[countryName] = { data, expires: Date.now()+24*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 5. REST COUNTRIES — rich country metadata (free, no key) ─────
+const restCountriesCache = {};
+async function fetchRestCountries(iso) {
+  if(restCountriesCache[iso]) return restCountriesCache[iso];
+  return timed("rest_countries", async () => {
+    // REST Countries uses alpha-3 ISO codes
+    const r = await axios.get(`https://restcountries.com/v3.1/alpha/${iso}`, {
+      timeout: 8000,
+    });
+    const c = r.data?.[0];
+    if(!c) return null;
+    const data = {
+      name:         c.name?.common,
+      official:     c.name?.official,
+      capital:      c.capital?.[0]||null,
+      region:       c.region,
+      subregion:    c.subregion,
+      population:   c.population,
+      area_km2:     c.area,
+      languages:    Object.values(c.languages||{}),
+      currencies:   Object.values(c.currencies||{}).map(x=>({name:x.name,symbol:x.symbol})),
+      timezones:    c.timezones||[],
+      calling_code: c.idd?.root+(c.idd?.suffixes?.[0]||""),
+      flag_png:     c.flags?.png,
+      flag_svg:     c.flags?.svg,
+      coat_of_arms: c.coatOfArms?.png||null,
+      maps:         c.maps?.googleMaps||null,
+      borders:      c.borders||[],
+      landlocked:   c.landlocked,
+      un_member:    c.unMember,
+      driving_side: c.car?.side||null,
+      start_of_week:c.startOfWeek||null,
+      tlds:         c.tld||[],
+      gini:         c.gini ? Object.values(c.gini)[0] : null,
+    };
+    restCountriesCache[iso] = data;
+    return data;
+  });
+}
+
+// ── 6. AIRBNB — via RapidAPI ──────────────────────────────────────
+const airbnbCache = {};
+async function fetchAirbnb(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = airbnbCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+
+  const geo = geoCoordCache[iso];
+  if(!geo) return null;
+
+  return timed("airbnb", async () => {
+    const r = await axios.get("https://airbnb13.p.rapidapi.com/search-location", {
+      params:{
+        location: countryName,
+        checkin:  getFutureDate(14),
+        checkout: getFutureDate(17),
+        adults:   2,
+        children: 0,
+        infants:  0,
+        pets:     0,
+        page:     1,
+        currency: "USD",
+      },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "airbnb13.p.rapidapi.com",
+      },
+      timeout: 12000,
+    });
+
+    const results = r.data?.results||[];
+    const listings = results.slice(0,6).map(l => ({
+      id:          l.id,
+      name:        l.name,
+      type:        l.type,
+      beds:        l.beds,
+      bathrooms:   l.bathrooms,
+      price:       l.price?.rate,
+      currency:    l.price?.currency||"USD",
+      rating:      l.rating?.guestSatisfactionOverall,
+      reviews:     l.reviewsCount,
+      image:       l.images?.[0]||null,
+      url:         l.url||null,
+      city:        l.city||countryName,
+    }));
+
+    const prices = listings.map(l=>l.price).filter(Boolean);
+    const data = {
+      listings,
+      avg_price_per_night: prices.length ? Math.round(prices.reduce((a,b)=>a+b,0)/prices.length) : null,
+      currency: "USD",
+      sample_size: listings.length,
+    };
+    airbnbCache[iso] = { data, expires: Date.now()+6*60*60*1000 };
+    return data;
+  });
+}
+
+function getFutureDate(daysAhead) {
+  const d = new Date();
+  d.setDate(d.getDate()+daysAhead);
+  return d.toISOString().split("T")[0];
+}
+
+// ══════════════════════════════════════════════════════════════════
 // MISTRAL AI SYNTHESIS
 // ══════════════════════════════════════════════════════════════════
 async function runMistral(countryName, continent, rawData) {
@@ -649,6 +941,9 @@ NEWS: ${(rawData.news||[]).map(n=>`[${n.risk_level}] ${n.title}`).join(" | ").sl
 GDACS ALERTS: ${JSON.stringify(rawData.gdacs||[]).slice(0,250)}
 EVENTS: ${(rawData.events||[]).map(e=>`${e.name} (${e.date})`).join(" | ").slice(0,350)}
 SOCIAL TRENDING: ${(rawData.social||[]).map(s=>s.caption).join(" | ").slice(0,250)}
+AIR QUALITY: ${rawData.airQuality ? "AQI "+rawData.airQuality.aqi+" ("+rawData.airQuality.aqi_label+"), PM2.5: "+rawData.airQuality.pm25 : "N/A"}
+COST OF LIVING: ${rawData.costOfLiving ? "Index "+rawData.costOfLiving.cost_index+", Cheap meal $"+rawData.costOfLiving.meal_cheap+", 1-bed rent $"+rawData.costOfLiving.one_bed_city_rent+"/mo" : "N/A"}
+COUNTRY META: ${rawData.countryMeta ? "Capital: "+rawData.countryMeta.capital+", Languages: "+(rawData.countryMeta.languages||[]).join(", ")+", Currency: "+(rawData.countryMeta.currencies||[]).map(c=>c.symbol+" "+c.name).join(", ") : "N/A"}
 
 Output ONLY valid JSON, no markdown fences, no preamble:
 {
@@ -684,7 +979,8 @@ async function runPipeline(iso, countryName, continent) {
 
   const geo = await safe(()=>fetchGeoapify(countryName, iso), {});
 
-  const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,social] = await Promise.all([
+  const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,social,
+         photos,airQuality,flights,costOfLiving,countryMeta,airbnb] = await Promise.all([
     safe(()=>fetchWikipedia(countryName),         {summary:""}),
     safe(()=>fetchWikivoyage(countryName),        {sections:{},highlights:[]}),
     safe(()=>fetchFoursquare(countryName, iso),   []),
@@ -696,6 +992,13 @@ async function runPipeline(iso, countryName, continent) {
     safe(()=>fetchEventbrite(countryName),        []),
     safe(()=>fetchPredictHQ(countryName),         []),
     safe(()=>fetchSocialTrends(countryName),      []),
+    // New sources
+    safe(()=>fetchUnsplash(countryName),          []),
+    safe(()=>fetchAirQuality(countryName, iso),   null),
+    safe(()=>fetchFlights(countryName, iso),      null),
+    safe(()=>fetchCostOfLiving(countryName),      null),
+    safe(()=>fetchRestCountries(iso),             null),
+    safe(()=>fetchAirbnb(countryName, iso),       null),
   ]);
 
   const allNews   = [...(news||[]),...(gNews||[])].slice(0,10);
@@ -705,7 +1008,7 @@ async function runPipeline(iso, countryName, continent) {
     ...allNews.filter(n=>n.risk_level==="high").map(n=>({date:n.published_at?.split("T")[0],type:"news",description:n.title,severity:"high"}))
   ].slice(0,6);
 
-  const ai = await safe(()=>runMistral(countryName,continent,{wiki,wv,places,weather,news:allNews,gdacs,events:allEvents,social}),null);
+  const ai = await safe(()=>runMistral(countryName,continent,{wiki,wv,places,weather,news:allNews,gdacs,events:allEvents,social,airQuality,costOfLiving,countryMeta}),null);
 
   const {error} = await supabase.from("country_intel").upsert({
     iso, country_name:countryName, continent, last_updated:new Date().toISOString(),
@@ -717,6 +1020,13 @@ async function runPipeline(iso, countryName, continent) {
     ai_recommendations:ai?.recommendations||[], ai_calendar:ai?.calendar||[],
     ai_trending_now:ai?.trending_now||[], ai_safety_summary:ai?.safety_summary||null,
     ai_best_months:ai?.best_months||[], ai_avoid_if:ai?.avoid_if||null, ai_hidden_gem:ai?.hidden_gem||null,
+    // New data sources
+    photos:          photos||[],
+    air_quality:     airQuality||null,
+    flights:         flights||null,
+    cost_of_living:  costOfLiving||null,
+    country_meta:    countryMeta||null,
+    airbnb:          airbnb||null,
   },{onConflict:"iso"});
 
   const duration = Date.now()-start;
@@ -824,12 +1134,15 @@ app.get("/api/health", async (req,res) => {
   };
 
   const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
-    "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy"];
+    "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy",
+    "unsplash","openaq","aviationstack","numbeo","rest_countries","airbnb"];
   const labelMap = {
     wikipedia:"Wikipedia", wikivoyage:"Wikivoyage", foursquare:"Places (OpenTripMap)",
     openweathermap:"OpenWeatherMap", newsapi:"GNews API", google_news:"Google News RSS",
     gdacs:"GDACS Disasters", ticketmaster:"Ticketmaster", eventbrite:"Eventbrite (RSS)",
     predicthq:"PredictHQ", geoapify:"Geoapify", social_proxy:"Social Trends (RSS)",
+    unsplash:"Unsplash Photos", openaq:"OpenAQ Air Quality", aviationstack:"Aviationstack Flights",
+    numbeo:"Numbeo Cost of Living", rest_countries:"REST Countries", airbnb:"Airbnb (RapidAPI)",
   };
   sources.forEach(k=>{
     const h=sourceHealth[k]||{};
@@ -839,12 +1152,16 @@ app.get("/api/health", async (req,res) => {
   });
 
   const envKeys=[
-    {label:"Mistral AI",       key:"MISTRAL_API_KEY"},
-    {label:"OpenWeatherMap",   key:"OPENWEATHER_API_KEY"},
-    {label:"Ticketmaster",     key:"TICKETMASTER_API_KEY"},
-    {label:"PredictHQ",        key:"PREDICTHQ_API_KEY"},
-    {label:"GNews API",        key:"GNEWS_API_KEY"},
-    {label:"Geoapify",         key:"GEOAPIFY_API_KEY"},
+    {label:"Mistral AI",        key:"MISTRAL_API_KEY"},
+    {label:"OpenWeatherMap",    key:"OPENWEATHER_API_KEY"},
+    {label:"Ticketmaster",      key:"TICKETMASTER_API_KEY"},
+    {label:"PredictHQ",         key:"PREDICTHQ_API_KEY"},
+    {label:"GNews API",         key:"GNEWS_API_KEY"},
+    {label:"Geoapify",          key:"GEOAPIFY_API_KEY"},
+    {label:"Unsplash",          key:"UNSPLASH_ACCESS_KEY"},
+    {label:"OpenAQ",            key:"OPENAQ_API_KEY"},
+    {label:"Aviationstack",     key:"AVIATIONSTACK_API_KEY"},
+    {label:"RapidAPI",          key:"RAPIDAPI_KEY"},
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
