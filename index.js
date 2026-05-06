@@ -1114,57 +1114,179 @@ app.get("/api/pipeline/status", async (req,res) => {
 
 app.get("/api/health", async (req,res) => {
   const checks = {};
-  try {
-    const {error,count} = await supabase.from("country_intel").select("*",{count:"exact",head:true});
-    checks.supabase = {ok:!error,label:"Supabase DB",detail:error?error.message:`Connected — ${count} countries stored`};
-  } catch(e) { checks.supabase={ok:false,label:"Supabase DB",detail:e.message}; }
 
-  checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key",...(sourceHealth.mistral||{})};
+  // Helper: run a live test and return result object
+  async function liveTest(label, fn) {
+    const t = Date.now();
+    try {
+      await fn();
+      const ms = Date.now()-t;
+      return { ok:true, label, detail:`Last OK (${ms}ms)`, response_ms:ms };
+    } catch(e) {
+      return { ok:false, label, detail: e.response?.status ? `HTTP ${e.response.status}: ${e.message}` : e.message, response_ms: Date.now()-t };
+    }
+  }
 
-  // GNews: NEVER call the live API from health check — just report budget status
+  // Run all live tests in parallel
+  const [
+    supabaseRes, mistralRes, wikiRes, wikivoyageRes, weatherRes,
+    googleNewsRes, gdacsRes, tmRes, phqRes, geoapifyRes, socialRes,
+    unsplashRes, openaqRes, aviationRes, numbeoRes, restCountriesRes,
+    foursquareRes
+  ] = await Promise.all([
+    // Supabase
+    (async()=>{
+      try {
+        const t=Date.now();
+        const {error,count} = await supabase.from("country_intel").select("*",{count:"exact",head:true});
+        const ms=Date.now()-t;
+        return {ok:!error,label:"Supabase DB",detail:error?error.message:`Connected — ${count} countries stored`,response_ms:ms};
+      } catch(e){return{ok:false,label:"Supabase DB",detail:e.message};}
+    })(),
+    // Mistral
+    liveTest("Mistral AI", async()=>{
+      if(!ENV.MISTRAL_API_KEY) throw new Error("No API key");
+      await axios.get("https://api.mistral.ai/v1/models",{headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`},timeout:6000});
+    }),
+    // Wikipedia
+    liveTest("Wikipedia", async()=>{
+      await axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000});
+    }),
+    // Wikivoyage
+    liveTest("Wikivoyage", async()=>{
+      await axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000});
+    }),
+    // OpenWeatherMap
+    liveTest("OpenWeatherMap", async()=>{
+      if(!ENV.OPENWEATHER_API_KEY) throw new Error("No API key");
+      await axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000});
+    }),
+    // Google News RSS
+    liveTest("Google News RSS", async()=>{
+      await axios.get("https://news.google.com/rss/search?q=travel&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
+    }),
+    // GDACS
+    liveTest("GDACS Disasters", async()=>{
+      await axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
+    }),
+    // Ticketmaster
+    liveTest("Ticketmaster", async()=>{
+      if(!ENV.TICKETMASTER_API_KEY) throw new Error("No API key");
+      await axios.get("https://app.ticketmaster.com/discovery/v2/events.json",{params:{apikey:ENV.TICKETMASTER_API_KEY,size:1},timeout:6000});
+    }),
+    // PredictHQ
+    liveTest("PredictHQ", async()=>{
+      if(!ENV.PREDICTHQ_API_KEY) throw new Error("No API key");
+      await axios.get("https://api.predicthq.com/v1/events/",{headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},params:{limit:1},timeout:6000});
+    }),
+    // Geoapify
+    liveTest("Geoapify", async()=>{
+      if(!ENV.GEOAPIFY_API_KEY) throw new Error("No API key");
+      await axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:"France",type:"country",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000});
+    }),
+    // Social Trends (Bing RSS)
+    liveTest("Social Trends (RSS)", async()=>{
+      await axios.get("https://www.bing.com/news/search?q=travel+tourism&format=RSS",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
+    }),
+    // Unsplash
+    liveTest("Unsplash Photos", async()=>{
+      if(!ENV.UNSPLASH_ACCESS_KEY) throw new Error("No API key");
+      await axios.get("https://api.unsplash.com/search/photos",{params:{query:"travel",per_page:1},headers:{Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}`},timeout:6000});
+    }),
+    // OpenAQ
+    liveTest("OpenAQ Air Quality", async()=>{
+      const headers = ENV.OPENAQ_API_KEY ? {"X-API-Key":ENV.OPENAQ_API_KEY} : {};
+      await axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},headers,timeout:8000});
+    }),
+    // Aviationstack
+    liveTest("Aviationstack Flights", async()=>{
+      if(!ENV.AVIATIONSTACK_API_KEY) throw new Error("No API key");
+      await axios.get("http://api.aviationstack.com/v1/airports",{params:{access_key:ENV.AVIATIONSTACK_API_KEY,limit:1},timeout:8000});
+    }),
+    // Numbeo via RapidAPI
+    liveTest("Numbeo Cost of Living", async()=>{
+      if(!ENV.RAPIDAPI_KEY) throw new Error("No RapidAPI key");
+      await axios.get("https://numbeo-cost-of-living.p.rapidapi.com/api/cost-of-living",{
+        params:{country:"France"},
+        headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"numbeo-cost-of-living.p.rapidapi.com"},
+        timeout:8000
+      });
+    }),
+    // REST Countries (free, no key)
+    liveTest("REST Countries", async()=>{
+      await axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000});
+    }),
+    // OpenTripMap (foursquare slot)
+    liveTest("Places (OpenTripMap)", async()=>{
+      await axios.get("https://api.opentripmap.com/0.1/en/places/radius",{
+        params:{radius:10000,lon:2.35,lat:48.85,format:"json",limit:1,apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12"},
+        timeout:8000
+      });
+    }),
+  ]);
+
+  // Map results to checks
+  checks.supabase       = supabaseRes;
+  checks.mistral        = mistralRes;
+  checks.wikipedia      = wikiRes;
+  checks.wikivoyage     = wikivoyageRes;
+  checks.openweathermap = weatherRes;
+  checks.google_news    = googleNewsRes;
+  checks.gdacs          = gdacsRes;
+  checks.ticketmaster   = tmRes;
+  checks.predicthq      = phqRes;
+  checks.geoapify       = geoapifyRes;
+  checks.social_proxy   = socialRes;
+  checks.unsplash       = unsplashRes;
+  checks.openaq         = openaqRes;
+  checks.aviationstack  = aviationRes;
+  checks.numbeo         = numbeoRes;
+  checks.rest_countries = restCountriesRes;
+  checks.foursquare     = foursquareRes;
+
+  // GNews: never call live — just report budget
   gnewsResetIfNeeded();
   const gnewsRemaining = GNEWS_DAILY_CAP - gnewsCallsToday;
-  sourceHealth.newsapi = {
-    ...sourceHealth.newsapi,
+  checks.newsapi = {
     ok: !!ENV.GNEWS_API_KEY,
-    last_check: new Date().toISOString(),
-    _detail_override: ENV.GNEWS_API_KEY
+    label: "GNews API",
+    detail: ENV.GNEWS_API_KEY
       ? `Key configured — ${gnewsRemaining}/${GNEWS_DAILY_CAP} calls remaining today (resets in ${hoursUntilReset()}h)`
       : "No API key — set GNEWS_API_KEY in Render env vars",
   };
 
-  const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
-    "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy",
-    "unsplash","openaq","aviationstack","numbeo","rest_countries","airbnb"];
-  const labelMap = {
-    wikipedia:"Wikipedia", wikivoyage:"Wikivoyage", foursquare:"Places (OpenTripMap)",
-    openweathermap:"OpenWeatherMap", newsapi:"GNews API", google_news:"Google News RSS",
-    gdacs:"GDACS Disasters", ticketmaster:"Ticketmaster", eventbrite:"Eventbrite (RSS)",
-    predicthq:"PredictHQ", geoapify:"Geoapify", social_proxy:"Social Trends (RSS)",
-    unsplash:"Unsplash Photos", openaq:"OpenAQ Air Quality", aviationstack:"Aviationstack Flights",
-    numbeo:"Numbeo Cost of Living", rest_countries:"REST Countries", airbnb:"Airbnb (RapidAPI)",
+  // Airbnb — RapidAPI key check only (don't burn quota on health check)
+  checks.airbnb = {
+    ok: !!ENV.RAPIDAPI_KEY,
+    label: "Airbnb (RapidAPI)",
+    detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key",
   };
-  sources.forEach(k=>{
-    const h=sourceHealth[k]||{};
-    const detail = h._detail_override || (h.ok!=null?(h.ok?`Last OK (${h.response_ms}ms)`:h.error):"Not yet tested");
-    checks[k]={ok:h.ok??null,label:labelMap[k]||k,detail,last_check:h.last_check||null,
-      success_count:h.success_count||0,fail_count:h.fail_count||0,response_ms:h.response_ms||null};
-  });
 
+  // Eventbrite (Meetup RSS — just check Meetup is reachable)
+  try {
+    const t=Date.now();
+    await axios.get("https://www.meetup.com",{timeout:5000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
+    checks.eventbrite={ok:true,label:"Eventbrite (RSS)",detail:`Last OK (${Date.now()-t}ms)`};
+  } catch(e){
+    checks.eventbrite={ok:false,label:"Eventbrite (RSS)",detail:e.message};
+  }
+
+  // Env keys panel
   const envKeys=[
-    {label:"Mistral AI",        key:"MISTRAL_API_KEY"},
-    {label:"OpenWeatherMap",    key:"OPENWEATHER_API_KEY"},
-    {label:"Ticketmaster",      key:"TICKETMASTER_API_KEY"},
-    {label:"PredictHQ",         key:"PREDICTHQ_API_KEY"},
-    {label:"GNews API",         key:"GNEWS_API_KEY"},
-    {label:"Geoapify",          key:"GEOAPIFY_API_KEY"},
-    {label:"Unsplash",          key:"UNSPLASH_ACCESS_KEY"},
-    {label:"OpenAQ",            key:"OPENAQ_API_KEY"},
-    {label:"Aviationstack",     key:"AVIATIONSTACK_API_KEY"},
-    {label:"RapidAPI",          key:"RAPIDAPI_KEY"},
+    {label:"Mistral AI",    key:"MISTRAL_API_KEY"},
+    {label:"OpenWeatherMap",key:"OPENWEATHER_API_KEY"},
+    {label:"Ticketmaster",  key:"TICKETMASTER_API_KEY"},
+    {label:"PredictHQ",     key:"PREDICTHQ_API_KEY"},
+    {label:"GNews API",     key:"GNEWS_API_KEY"},
+    {label:"Geoapify",      key:"GEOAPIFY_API_KEY"},
+    {label:"Unsplash",      key:"UNSPLASH_ACCESS_KEY"},
+    {label:"OpenAQ",        key:"OPENAQ_API_KEY"},
+    {label:"Aviationstack", key:"AVIATIONSTACK_API_KEY"},
+    {label:"RapidAPI",      key:"RAPIDAPI_KEY"},
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
+  // Pipeline stats
   const {data:pipeData} = await supabase.from("country_intel").select("iso,last_updated");
   const fc = Date.now()-6*60*60*1000;
   const freshCount = (pipeData||[]).filter(r=>new Date(r.last_updated).getTime()>fc).length;
