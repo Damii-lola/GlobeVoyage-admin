@@ -931,9 +931,8 @@ app.get("/globe",(req,res)=>{
   res.setHeader("Content-Type","text/html");
   res.setHeader("Cache-Control","public,max-age=300");
 
-  if(!THREE_JS || !EARCUT_JS) {
-    return res.send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#060a12;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;color:#5bb8ff;font-size:11px;letter-spacing:3px}</style></head><body><div>INITIALISING...<script>setTimeout(()=>location.reload(),3000)</script></div></html>`);
-  }
+  // THREE_JS/EARCUT_JS are no longer inlined — loaded via CDN script tags in HTML
+  // So we always serve the globe regardless of cold-start state
 
   const DESCRIPTIONS={
     USA:"The world's largest economy, spanning vast landscapes from Alaskan tundra to Hawaiian tropics.",
@@ -1042,8 +1041,12 @@ app.get("/globe",(req,res)=>{
   </div>
   <button id="card-btn">✈️&nbsp; View Destinations</button>
 </div>
-<script>${THREE_JS}</script>
-<script>${EARCUT_JS}</script>
+<script>
+// Load Three.js + earcut from CDN directly in WebView
+// This is more reliable than server-side inlining on cold start
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/earcut@2.2.4/src/earcut.js"></script>
 <script>var __API_URL__='${SELF}';var DESCRIPTIONS=${JSON.stringify(DESCRIPTIONS)};var FLAGS=${JSON.stringify(FLAGS)};</script>
 <script>
 (function(){
@@ -1090,7 +1093,32 @@ app.get("/globe",(req,res)=>{
   var texDone=0,currentTextureSet=0;
   function onTex(){texDone++;progress(25+texDone*18);}
   function loadTexturesFromSet(setIdx){
-    if(setIdx>=TEXTURE_SETS.length){function makeCanvas(r,g,b){var c=document.createElement('canvas');c.width=2;c.height=2;var ctx=c.getContext('2d');ctx.fillStyle='rgb('+r+','+g+','+b+')';ctx.fillRect(0,0,2,2);return new THREE.CanvasTexture(c);}uEarth.dayTexture.value=makeCanvas(30,80,140);uEarth.nightTexture.value=makeCanvas(5,10,30);uEarth.specTexture.value=makeCanvas(200,200,200);progress(100);return;}
+    if(setIdx>=TEXTURE_SETS.length){
+      // All CDNs failed — draw a procedural Earth with canvas so globe still shows
+      console.warn('All texture sources failed, using procedural fallback');
+      function makeGradientCanvas(w,h,stops){var c=document.createElement('canvas');c.width=w;c.height=h;var ctx=c.getContext('2d');var grd=ctx.createLinearGradient(0,0,w,0);stops.forEach(function(s){ctx.fillStyle=s[1];});ctx.fillStyle=stops[0][1];ctx.fillRect(0,0,w,h);return new THREE.CanvasTexture(c);}
+      // Day: blue ocean
+      var dayC=document.createElement('canvas');dayC.width=256;dayC.height=128;
+      var dCtx=dayC.getContext('2d');
+      dCtx.fillStyle='#1a3a6e';dCtx.fillRect(0,0,256,128);
+      // Add some green land masses roughly
+      dCtx.fillStyle='#2d5a27';
+      dCtx.fillRect(60,30,40,40);dCtx.fillRect(110,20,50,50);dCtx.fillRect(170,35,30,35);
+      dCtx.fillRect(40,60,20,25);dCtx.fillRect(130,70,25,20);
+      uEarth.dayTexture.value=new THREE.CanvasTexture(dayC);
+      // Night: dark with city lights
+      var nightC=document.createElement('canvas');nightC.width=256;nightC.height=128;
+      var nCtx=nightC.getContext('2d');nCtx.fillStyle='#050810';nCtx.fillRect(0,0,256,128);
+      nCtx.fillStyle='rgba(255,220,100,0.6)';
+      [[65,35],[115,25],[175,38],[180,42],[45,62]].forEach(function(p){nCtx.fillRect(p[0],p[1],3,3);});
+      uEarth.nightTexture.value=new THREE.CanvasTexture(nightC);
+      // Spec: ocean shiny (white), land matte (black)
+      var specC=document.createElement('canvas');specC.width=256;specC.height=128;
+      var sCtx=specC.getContext('2d');sCtx.fillStyle='#ffffff';sCtx.fillRect(0,0,256,128);
+      sCtx.fillStyle='#000000';
+      sCtx.fillRect(60,30,40,40);sCtx.fillRect(110,20,50,50);sCtx.fillRect(170,35,30,35);
+      uEarth.specTexture.value=new THREE.CanvasTexture(specC);
+      progress(100);return;}
     var set=TEXTURE_SETS[setIdx],failed=0,loaded=0;
     function onSuccess(){loaded++;onTex();}
     function onFail(name){failed++;console.warn('Texture CDN',setIdx,'failed for',name);if(failed===1)loadTexturesFromSet(setIdx+1);}
