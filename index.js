@@ -58,12 +58,13 @@ async function ensureScripts() {
   if(EARCUT_JS) console.log("✓ earcut.js ready");
 }
 
-// Self-ping keepalive
+// Self-ping keepalive — every 5s so Render never sleeps
+// The app and website also ping every 5s independently (belt + braces)
 const SELF = process.env.RENDER_EXTERNAL_URL || "https://globevoyage-admin.onrender.com";
 setInterval(() => {
   const mod = SELF.startsWith("https") ? https : http;
   mod.get(SELF+"/", r=>r.resume()).on("error",()=>{});
-}, 4*60*1000);
+}, 5000); // 5 seconds
 
 const WIKI_UA = "GlobeVoyage/2.0 (travel-intelligence-app; nodejs-axios)";
 
@@ -1398,34 +1399,77 @@ async function runPipeline(iso, countryName, continent) {
   if(error) console.error(`❌ DB error ${countryName}:`, error.message);
   else      console.log(`✅ ${countryName} done in ${duration}ms`);
 
+  // Insert new run log then trim to keep only latest 3 per country
   await supabase.from("pipeline_runs").insert({
     iso, status:error?"error":"success",
     sources:Object.fromEntries(Object.entries(sourceHealth).map(([k,v])=>[k,v.ok?"ok":"fail"])),
     duration_ms:duration, error:error?.message||null,
+    ran_at: new Date().toISOString(),
   });
+
+  // Delete all but the 3 most recent runs for this country
+  try {
+    const { data: runs } = await supabase
+      .from("pipeline_runs")
+      .select("id, ran_at")
+      .eq("iso", iso)
+      .order("ran_at", { ascending: false });
+
+    if(runs && runs.length > 3) {
+      const toDelete = runs.slice(3).map(r => r.id);
+      await supabase.from("pipeline_runs").delete().in("id", toDelete);
+      console.log(`🗑  Trimmed ${toDelete.length} old run log(s) for ${iso}`);
+    }
+  } catch(e) {
+    console.error("Log trim error:", e.message);
+  }
+
   return {success:!error,duration};
 }
 
-async function runStartupPipeline() {
-  console.log(`🚀 Pipeline starting for ${COUNTRIES.length} countries...`);
+// ── Pipeline runner — processes all 195 countries with throttle ──
+async function runFullPipeline(triggerName) {
+  console.log(`🚀 [${triggerName}] Pipeline starting for ${COUNTRIES.length} countries...`);
+  let ran=0, skipped=0;
   for(let i=0;i<COUNTRIES.length;i++){
     const {iso,name,continent} = COUNTRIES[i];
-    const {data} = await supabase.from("country_intel").select("last_updated").eq("iso",iso).single();
-    if(data?.last_updated && Date.now()-new Date(data.last_updated).getTime() < 6*60*60*1000){
-      console.log(`⏭  ${name} is fresh`); continue;
+    try {
+      await runPipeline(iso,name,continent);
+      ran++;
+    } catch(e) {
+      console.error(`Pipeline error for ${name}:`, e.message);
     }
-    await runPipeline(iso,name,continent);
+    // 20s between each country — prevents API hammering
     await new Promise(r=>setTimeout(r,20000));
   }
-  console.log("✅ Startup pipeline complete");
+  console.log(`✅ [${triggerName}] Pipeline complete — ${ran} ran, ${skipped} skipped`);
 }
 
-cron.schedule("0 */6 * * *", async () => {
-  for(const c of COUNTRIES){ await runPipeline(c.iso,c.name,c.continent); await new Promise(r=>setTimeout(r,15000)); }
-});
-cron.schedule("0 */2 * * *", async () => {
-  for(const c of COUNTRIES.filter(x=>HOT_ISOS.has(x.iso))){ await runPipeline(c.iso,c.name,c.continent); await new Promise(r=>setTimeout(r,8000)); }
-});
+// ── Scheduled runs: 6AM, 2PM, 10PM (8-hour intervals) ────────────
+// Cron syntax: minute hour * * *
+cron.schedule("0 6  * * *", () => runFullPipeline("06:00"), { timezone:"UTC" });
+cron.schedule("0 14 * * *", () => runFullPipeline("14:00"), { timezone:"UTC" });
+cron.schedule("0 22 * * *", () => runFullPipeline("22:00"), { timezone:"UTC" });
+
+// ── Startup pipeline — only runs countries that have no data yet ──
+async function runStartupPipeline() {
+  console.log("🚀 [Startup] Checking for countries with no data...");
+  const { data: existing } = await supabase
+    .from("country_intel")
+    .select("iso");
+  const existingISOs = new Set((existing||[]).map(r=>r.iso));
+  const missing = COUNTRIES.filter(c => !existingISOs.has(c.iso));
+  if(missing.length === 0) {
+    console.log("✅ [Startup] All countries already have data — skipping pipeline");
+    return;
+  }
+  console.log(`🌍 [Startup] ${missing.length} countries have no data yet — running pipeline for them...`);
+  for(const c of missing) {
+    try { await runPipeline(c.iso,c.name,c.continent); } catch(e) { console.error(e.message); }
+    await new Promise(r=>setTimeout(r,20000));
+  }
+  console.log("✅ [Startup] Missing countries pipeline complete");
+}
 
 // ══════════════════════════════════════════════════════════════════
 // API ENDPOINTS
