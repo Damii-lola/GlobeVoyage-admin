@@ -58,12 +58,25 @@ async function ensureScripts() {
   if(EARCUT_JS) console.log("✓ earcut.js ready");
 }
 
+// ── Server status tracking ───────────────────────────────────────
+const SELF       = process.env.RENDER_EXTERNAL_URL || "https://globevoyage-admin.onrender.com";
+const serverBoot = new Date().toISOString();
+let   pingCount  = 0;
+let   lastPingAt = null;
+let   pipelineStatus = {
+  running:     false,
+  lastRunAt:   null,
+  lastRunName: null,
+  nextRuns:    ["06:00 UTC","14:00 UTC","22:00 UTC"],
+  countriesLastRun: 0,
+};
+
 // Self-ping keepalive — every 5s so Render never sleeps
-// The app and website also ping every 5s independently (belt + braces)
-const SELF = process.env.RENDER_EXTERNAL_URL || "https://globevoyage-admin.onrender.com";
 setInterval(() => {
   const mod = SELF.startsWith("https") ? https : http;
   mod.get(SELF+"/", r=>r.resume()).on("error",()=>{});
+  pingCount++;
+  lastPingAt = new Date().toISOString();
 }, 5000); // 5 seconds
 
 const WIKI_UA = "GlobeVoyage/2.0 (travel-intelligence-app; nodejs-axios)";
@@ -1430,19 +1443,24 @@ async function runPipeline(iso, countryName, continent) {
 // ── Pipeline runner — processes all 195 countries with throttle ──
 async function runFullPipeline(triggerName) {
   console.log(`🚀 [${triggerName}] Pipeline starting for ${COUNTRIES.length} countries...`);
-  let ran=0, skipped=0;
+  pipelineStatus.running     = true;
+  pipelineStatus.lastRunAt   = new Date().toISOString();
+  pipelineStatus.lastRunName = triggerName;
+  pipelineStatus.countriesLastRun = 0;
+  let ran=0;
   for(let i=0;i<COUNTRIES.length;i++){
     const {iso,name,continent} = COUNTRIES[i];
     try {
       await runPipeline(iso,name,continent);
       ran++;
+      pipelineStatus.countriesLastRun = ran;
     } catch(e) {
       console.error(`Pipeline error for ${name}:`, e.message);
     }
-    // 20s between each country — prevents API hammering
     await new Promise(r=>setTimeout(r,20000));
   }
-  console.log(`✅ [${triggerName}] Pipeline complete — ${ran} ran, ${skipped} skipped`);
+  pipelineStatus.running = false;
+  console.log(`✅ [${triggerName}] Pipeline complete — ${ran} ran`);
 }
 
 // ── Scheduled runs: 6AM, 2PM, 10PM (8-hour intervals) ────────────
@@ -1474,7 +1492,79 @@ async function runStartupPipeline() {
 // ══════════════════════════════════════════════════════════════════
 // API ENDPOINTS
 // ══════════════════════════════════════════════════════════════════
-app.get("/", (req,res) => res.json({status:"GlobeVoyage API is live 🌍",countries:COUNTRIES.length}));
+app.get("/", (req,res) => {
+  const uptimeSecs = Math.round((Date.now() - new Date(serverBoot).getTime()) / 1000);
+  res.json({
+    status:      "GlobeVoyage API is live 🌍",
+    countries:   COUNTRIES.length,
+    uptime_secs: uptimeSecs,
+    ping_count:  pingCount,
+    last_ping:   lastPingAt,
+    booted_at:   serverBoot,
+  });
+});
+
+// ── /api/status — full live status for the dashboard ─────────────
+app.get("/api/status", (req,res) => {
+  const now        = Date.now();
+  const uptimeSecs = Math.round((now - new Date(serverBoot).getTime()) / 1000);
+  const uptimeMins = Math.round(uptimeSecs / 60);
+  const uptimeHrs  = (uptimeSecs / 3600).toFixed(1);
+
+  // Calculate next scheduled run times (UTC)
+  const runHours = [6, 14, 22];
+  const nowDate  = new Date();
+  const nextRuns = runHours.map(h => {
+    const next = new Date();
+    next.setUTCHours(h, 0, 0, 0);
+    if(next <= nowDate) next.setUTCDate(next.getUTCDate() + 1);
+    const diffMs   = next - nowDate;
+    const diffHrs  = Math.floor(diffMs / 3600000);
+    const diffMins = Math.floor((diffMs % 3600000) / 60000);
+    return {
+      time_utc:    `${String(h).padStart(2,"0")}:00 UTC`,
+      runs_in:     diffHrs > 0 ? `${diffHrs}h ${diffMins}m` : `${diffMins}m`,
+      timestamp:   next.toISOString(),
+    };
+  });
+
+  // Ping health: if last ping was > 15s ago, something is wrong
+  const pingAgeMs  = lastPingAt ? now - new Date(lastPingAt).getTime() : null;
+  const pingHealthy = pingAgeMs !== null && pingAgeMs < 15000;
+
+  res.json({
+    server: {
+      booted_at:     serverBoot,
+      uptime_secs:   uptimeSecs,
+      uptime_display: uptimeSecs < 120 ? `${uptimeSecs}s`
+                    : uptimeSecs < 7200 ? `${uptimeMins}m`
+                    : `${uptimeHrs}h`,
+    },
+    keepalive: {
+      healthy:        pingHealthy,
+      ping_count:     pingCount,
+      last_ping_at:   lastPingAt,
+      ping_age_ms:    pingAgeMs,
+      ping_interval:  "5s",
+      status:         pingHealthy ? "✅ Pinging every 5s — server awake"
+                    : pingCount === 0 ? "⏳ First ping pending..."
+                    : "⚠️ Ping gap detected",
+    },
+    pipeline: {
+      running:          pipelineStatus.running,
+      last_run_at:      pipelineStatus.lastRunAt,
+      last_run_trigger: pipelineStatus.lastRunName,
+      countries_processed_last_run: pipelineStatus.countriesLastRun,
+      schedule:         "6:00 AM, 2:00 PM, 10:00 PM (UTC)",
+      next_runs:        nextRuns,
+      status:           pipelineStatus.running
+                          ? `🔄 Running now — ${pipelineStatus.countriesLastRun}/${COUNTRIES.length} countries done`
+                          : pipelineStatus.lastRunAt
+                            ? `✅ Last ran at ${new Date(pipelineStatus.lastRunAt).toUTCString()}`
+                            : "⏳ Not yet run this session (next: "+nextRuns[0].time_utc+")",
+    },
+  });
+});
 
 app.get("/api/intel/:iso", async (req,res) => {
   const {data,error} = await supabase.from("country_intel").select("*").eq("iso",req.params.iso.toUpperCase()).single();
