@@ -1518,65 +1518,74 @@ app.get("/api/health", async (req,res) => {
     }
   };
 
+  // ── Live tests: ONLY free/unlimited sources ────────────────────
+  // NEVER live-test paid RapidAPI endpoints — they have strict monthly
+  // rate limits and the health check runs every 30s which burns quota instantly.
+  // Paid sources just get a key-configured check.
   await Promise.allSettled([
-    liveTest("wikipedia",    ()=>axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
-    liveTest("wikivoyage",   ()=>axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
-    liveTest("foursquare",   ()=>axios.get("https://api.opentripmap.com/0.1/en/places/radius",{params:{radius:10000,lon:2.35,lat:48.85,format:"json",limit:1,apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12"},timeout:6000})),
+    // Free — safe to ping every 30s
+    liveTest("wikipedia",     ()=>axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
+    liveTest("wikivoyage",    ()=>axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
+    liveTest("foursquare",    ()=>axios.get("https://api.opentripmap.com/0.1/en/places/radius",{params:{radius:10000,lon:2.35,lat:48.85,format:"json",limit:1,apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12"},timeout:6000})),
+    liveTest("google_news",   ()=>axios.get("https://news.google.com/rss/search?q=travel&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("gdacs",         ()=>axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("eventbrite",    ()=>axios.get("https://news.google.com/rss/search?q=events+festival&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("social_proxy",  ()=>axios.get("https://www.bing.com/news/search?q=travel+tourism&format=RSS",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("rest_countries",()=>axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000})),
+    liveTest("currency",      ()=>axios.get("https://open.er-api.com/v6/latest/USD",{timeout:6000})),
+    liveTest("waqi",          ()=>axios.get("https://api.waqi.info/feed/geo:48.85;2.35/?token=demo",{timeout:6000})),
+
+    // Has key — test once (reasonable rate limit)
     ENV.OPENWEATHER_API_KEY
-      ? liveTest("openweathermap", ()=>axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000}))
+      ? liveTest("openweathermap",()=>axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000}))
       : Promise.resolve(sourceHealth.openweathermap={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
-    liveTest("google_news",  ()=>axios.get("https://news.google.com/rss/search?q=travel&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("gdacs",        ()=>axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     ENV.TICKETMASTER_API_KEY
-      ? liveTest("ticketmaster", ()=>axios.get("https://app.ticketmaster.com/discovery/v2/events.json",{params:{apikey:ENV.TICKETMASTER_API_KEY,size:1},timeout:6000}))
+      ? liveTest("ticketmaster",  ()=>axios.get("https://app.ticketmaster.com/discovery/v2/events.json",{params:{apikey:ENV.TICKETMASTER_API_KEY,size:1},timeout:6000}))
       : Promise.resolve(sourceHealth.ticketmaster={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
-    liveTest("eventbrite",   ()=>axios.get("https://news.google.com/rss/search?q=events+festival&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     ENV.PREDICTHQ_API_KEY
-      ? liveTest("predicthq", ()=>axios.get("https://api.predicthq.com/v1/events/",{params:{limit:1},headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},timeout:6000}))
+      ? liveTest("predicthq",     ()=>axios.get("https://api.predicthq.com/v1/events/",{params:{limit:1},headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},timeout:6000}))
       : Promise.resolve(sourceHealth.predicthq={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
     ENV.GEOAPIFY_API_KEY
-      ? liveTest("geoapify", ()=>axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:"Paris",type:"city",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000}))
+      ? liveTest("geoapify",      ()=>axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:"Paris",type:"city",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000}))
       : Promise.resolve(sourceHealth.geoapify={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
-    liveTest("social_proxy", ()=>axios.get("https://www.bing.com/news/search?q=travel+tourism&format=RSS",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     ENV.UNSPLASH_ACCESS_KEY
-      ? liveTest("unsplash", ()=>axios.get("https://api.unsplash.com/search/photos",{params:{query:"travel",per_page:1},headers:{Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}`},timeout:6000}))
+      ? liveTest("unsplash",      ()=>axios.get("https://api.unsplash.com/search/photos",{params:{query:"travel",per_page:1},headers:{Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}`},timeout:6000}))
       : Promise.resolve(sourceHealth.unsplash={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
-    liveTest("openaq",       ()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},timeout:6000})),
-    ENV.AVIATIONSTACK_API_KEY
-      ? liveTest("aviationstack", ()=>axios.get("http://api.aviationstack.com/v1/airports",{params:{access_key:ENV.AVIATIONSTACK_API_KEY,limit:1},timeout:8000}))
-      : Promise.resolve(sourceHealth.aviationstack={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("numbeo", ()=>axios.get("https://numbeo-cost-of-living.p.rapidapi.com/api/cost-of-living",{params:{country:"France"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"numbeo-cost-of-living.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.numbeo={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    liveTest("rest_countries",()=>axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000})),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("airbnb", ()=>axios.get("https://airbnb13.p.rapidapi.com/search-location",{params:{location:"Paris",checkin:getFutureDate(14),checkout:getFutureDate(17),adults:2,children:0,infants:0,pets:0,page:1,currency:"USD"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"airbnb13.p.rapidapi.com"},timeout:10000}))
-      : Promise.resolve(sourceHealth.airbnb={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    // Additional RapidAPI sources
-    ENV.RAPIDAPI_KEY
-      ? liveTest("booking",      ()=>axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchDestination",{params:{query:"Paris"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"booking-com15.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.booking={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("tripadvisor",  ()=>axios.get("https://tripadvisor16.p.rapidapi.com/api/v1/attraction/searchAttractions",{params:{geoId:"1",searchQuery:"Paris",language:"en"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"tripadvisor16.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.tripadvisor={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("skyscanner",   ()=>axios.get("https://sky-scrapper.p.rapidapi.com/api/v1/flights/searchAirport",{params:{query:"Paris",locale:"en-US"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"sky-scrapper.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.skyscanner={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    liveTest("currency",     ()=>axios.get("https://open.er-api.com/v6/latest/USD",{timeout:6000})),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("google_places",()=>axios.get("https://maps-data.p.rapidapi.com/searchmaps.php",{params:{query:"tourist attractions Paris",limit:1,country:"us",lang:"en",lat:48.85,lng:2.35,offset:0,zoom:5},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"maps-data.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.google_places={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("travel_advisor",()=>axios.get("https://travel-advisor.p.rapidapi.com/restaurants/list-by-latlng",{params:{latitude:48.85,longitude:2.35,limit:1,currency:"USD",distance:1,open_now:"false",lunit:"km",lang:"en_US"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"travel-advisor.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.travel_advisor={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("hotels_com",   ()=>axios.get("https://hotels4.p.rapidapi.com/locations/v3/search",{params:{q:"Paris",locale:"en_US",langid:1033,siteid:300000001},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"hotels4.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.hotels_com={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    ENV.RAPIDAPI_KEY
-      ? liveTest("youtube",      ()=>axios.get("https://youtube-search-and-download.p.rapidapi.com/search",{params:{query:"Paris travel guide",type:"v",sort:"r",nextToken:""},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"youtube-search-and-download.p.rapidapi.com"},timeout:8000}))
-      : Promise.resolve(sourceHealth.youtube={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
-    liveTest("waqi",         ()=>axios.get("https://api.waqi.info/feed/geo:48.85;2.35/?token=demo",{timeout:6000})),
+    // OpenAQ — free but needs correct auth header format
+    ENV.OPENAQ_API_KEY
+      ? liveTest("openaq",        ()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},headers:{"X-API-Key":ENV.OPENAQ_API_KEY},timeout:6000}))
+      : liveTest("openaq",        ()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},timeout:6000})),
   ]);
+
+  // ── Paid/rate-limited sources: key-presence check only ──────────
+  // These are NOT live-tested to preserve monthly quotas.
+  // Status shows "Key configured" or "No API key".
+  const paidSources = {
+    newsapi:        { key: ENV.GNEWS_API_KEY,        label:"GNews API",              detail: ENV.GNEWS_API_KEY ? (() => { gnewsResetIfNeeded(); return `Key configured — ${GNEWS_DAILY_CAP-gnewsCallsToday}/${GNEWS_DAILY_CAP} calls remaining today`; })() : "No API key" },
+    aviationstack:  { key: ENV.AVIATIONSTACK_API_KEY, label:"Aviationstack Flights", detail: ENV.AVIATIONSTACK_API_KEY ? "Key configured (100 req/month — not live-tested)" : "No API key" },
+    numbeo:         { key: ENV.RAPIDAPI_KEY,          label:"Numbeo Cost of Living", detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    airbnb:         { key: ENV.RAPIDAPI_KEY,          label:"Airbnb (RapidAPI)",     detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    booking:        { key: ENV.RAPIDAPI_KEY,          label:"Booking.com",           detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    tripadvisor:    { key: ENV.RAPIDAPI_KEY,          label:"TripAdvisor",           detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    skyscanner:     { key: ENV.RAPIDAPI_KEY,          label:"Skyscanner Flights",    detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    google_places:  { key: ENV.RAPIDAPI_KEY,          label:"Google Places",         detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    travel_advisor: { key: ENV.RAPIDAPI_KEY,          label:"Travel Advisor",        detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    hotels_com:     { key: ENV.RAPIDAPI_KEY,          label:"Hotels.com",            detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    youtube:        { key: ENV.RAPIDAPI_KEY,          label:"YouTube Travel Videos", detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+  };
+  Object.entries(paidSources).forEach(([k, v]) => {
+    // Preserve last successful pipeline run data if exists, otherwise set key-check status
+    const existing = sourceHealth[k];
+    sourceHealth[k] = {
+      ok:             !!v.key,
+      last_check:     new Date().toISOString(),
+      response_ms:    existing?.response_ms||0,
+      error:          v.key ? null : "No API key configured",
+      success_count:  existing?.success_count||0,
+      fail_count:     existing?.fail_count||0,
+      _detail_override: v.detail,
+    };
+  });
 
   const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
     "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy",
