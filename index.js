@@ -783,36 +783,57 @@ async function fetchFlights(countryName, iso) {
 }
 
 // ── 4. NUMBEO COST OF LIVING — via RapidAPI ───────────────────────
+// Uses the correct Numbeo API endpoint. Cached 24h per country to
+// avoid 429s on free tier (10 req/month hard limit).
 const numbeoCache = {};
+let numbeoCallsThisMonth = 0;
+let numbeoResetAt = Date.now() + 30*24*60*60*1000;
+const NUMBEO_MONTHLY_CAP = 8; // leave 2 in reserve from free tier's 10
+
+function numbeoResetIfNeeded() {
+  if(Date.now() > numbeoResetAt) { numbeoCallsThisMonth=0; numbeoResetAt=Date.now()+30*24*60*60*1000; }
+}
+
 async function fetchCostOfLiving(countryName) {
   if(!ENV.RAPIDAPI_KEY) return null;
   const cached = numbeoCache[countryName];
   if(cached && Date.now() < cached.expires) return cached.data;
 
+  numbeoResetIfNeeded();
+  if(numbeoCallsThisMonth >= NUMBEO_MONTHLY_CAP) {
+    console.log(`[Numbeo] Monthly cap reached — skipping ${countryName}`);
+    return cached ? cached.data : null;
+  }
+
   return timed("numbeo", async () => {
-    const r = await axios.get("https://numbeo-cost-of-living.p.rapidapi.com/api/cost-of-living", {
-      params:{ country: countryName },
+    // Correct Numbeo RapidAPI endpoint
+    const r = await axios.get("https://cost-of-living-and-prices.p.rapidapi.com/prices", {
+      params:{ country_name: countryName, city_name: "" },
       headers:{
         "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
-        "X-RapidAPI-Host": "numbeo-cost-of-living.p.rapidapi.com",
+        "X-RapidAPI-Host": "cost-of-living-and-prices.p.rapidapi.com",
       },
       timeout: 10000,
     });
-    const d = r.data;
+    numbeoCallsThisMonth++;
+    const items = r.data?.prices||[];
+    const get = (name) => items.find(i=>i.item_name?.toLowerCase().includes(name.toLowerCase()))?.avg||null;
     const data = {
-      city:               d.city||countryName,
-      cost_index:         d.cost_of_living_index,
-      rent_index:         d.rent_index,
-      restaurant_index:   d.restaurant_price_index,
-      groceries_index:    d.groceries_index,
-      purchasing_power:   d.local_purchasing_power_index,
-      meal_cheap:         d.meal_inexpensive_restaurant,
-      meal_mid:           d.meal_for_2_mid_range_restaurant,
-      cappuccino:         d.cappuccino,
-      beer_local:         d.domestic_beer_restaurant,
-      one_bed_city_rent:  d.apartment_1_bedroom_city_centre,
-      monthly_net_salary: d.average_monthly_net_salary,
-      currency:           d.currency||"USD",
+      city:               r.data?.city_name||countryName,
+      country:            r.data?.country_name||countryName,
+      meal_cheap:         get("inexpensive restaurant"),
+      meal_mid:           get("mid-range restaurant"),
+      coffee:             get("cappuccino"),
+      beer_local:         get("domestic beer"),
+      water_bottle:       get("water (0.33"),
+      one_bed_city_rent:  get("1 bedroom apartment in city"),
+      one_bed_outside_rent: get("1 bedroom apartment outside"),
+      monthly_transport:  get("monthly pass"),
+      taxi_per_km:        get("taxi 1km"),
+      internet_monthly:   get("internet"),
+      avg_salary:         get("average monthly net salary"),
+      currency:           "USD",
+      raw_count:          items.length,
     };
     numbeoCache[countryName] = { data, expires: Date.now()+24*60*60*1000 };
     return data;
@@ -924,6 +945,327 @@ function getFutureDate(daysAhead) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// ADDITIONAL RAPIDAPI TRAVEL SOURCES
+// ══════════════════════════════════════════════════════════════════
+
+// ── 7. BOOKING.COM — hotel prices & availability ─────────────────
+const bookingCache = {};
+async function fetchBooking(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = bookingCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  const geo = geoCoordCache[iso];
+  if(!geo) return null;
+  return timed("booking", async () => {
+    // Search hotels in capital city area
+    const r = await axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchDestination", {
+      params:{ query: countryName },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "booking-com15.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const dest = r.data?.data?.[0];
+    if(!dest) return null;
+
+    const checkin  = getFutureDate(14);
+    const checkout = getFutureDate(17);
+    const h = await axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchHotels", {
+      params:{
+        dest_id:       dest.dest_id,
+        search_type:   dest.search_type||"CITY",
+        arrival_date:  checkin,
+        departure_date:checkout,
+        adults:        2,
+        room_qty:      1,
+        page_number:   1,
+        languagecode:  "en-us",
+        currency_code: "USD",
+      },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "booking-com15.p.rapidapi.com",
+      },
+      timeout: 12000,
+    });
+    const hotels = (h.data?.data?.hotels||[]).slice(0,5).map(hotel => ({
+      name:         hotel.property?.name,
+      rating:       hotel.property?.reviewScore,
+      review_count: hotel.property?.reviewCount,
+      price_per_night: hotel.property?.priceBreakdown?.grossPrice?.value,
+      currency:     hotel.property?.priceBreakdown?.grossPrice?.currency||"USD",
+      stars:        hotel.property?.propertyClass,
+      photo:        hotel.property?.photoUrls?.[0]||null,
+      checkin:      hotel.property?.checkin?.fromTime,
+    }));
+    const prices = hotels.map(h=>h.price_per_night).filter(Boolean);
+    const data = {
+      hotels,
+      avg_price_per_night: prices.length ? Math.round(prices.reduce((a,b)=>a+b,0)/prices.length) : null,
+      destination: dest.city_name||countryName,
+      currency: "USD",
+    };
+    bookingCache[iso] = { data, expires: Date.now()+6*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 8. TRIPADVISOR — attractions & reviews ───────────────────────
+const tripadvisorCache = {};
+async function fetchTripadvisor(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = tripadvisorCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  return timed("tripadvisor", async () => {
+    const r = await axios.get("https://tripadvisor16.p.rapidapi.com/api/v1/attraction/searchAttractions", {
+      params:{ geoId: "1", searchQuery: countryName, language:"en" },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "tripadvisor16.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const attractions = (r.data?.data?.data||[]).slice(0,8).map(a => ({
+      name:         a.title,
+      rating:       a.averageRating,
+      review_count: a.userReviewCount,
+      category:     a.primaryInfo?.text,
+      photo:        a.cardPhotos?.[0]?.sizes?.urlTemplate?.replace("{width}","400").replace("{height}","300")||null,
+      ranking:      a.ranking?.text,
+    }));
+    const data = { attractions };
+    tripadvisorCache[iso] = { data, expires: Date.now()+12*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 9. SKYSCANNER — flight prices ────────────────────────────────
+const skyscannerCache = {};
+async function fetchFlightPrices(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = skyscannerCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  return timed("skyscanner", async () => {
+    // Search for the country's main airport entity
+    const r = await axios.get("https://sky-scrapper.p.rapidapi.com/api/v1/flights/searchAirport", {
+      params:{ query: countryName, locale:"en-US" },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "sky-scrapper.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const airports = (r.data?.data||[]).filter(a=>a.navigation?.entityType==="AIRPORT").slice(0,3);
+    const data = {
+      airports: airports.map(a=>({
+        name:      a.presentation?.title,
+        subtitle:  a.presentation?.subtitle,
+        entity_id: a.entityId,
+        iata:      a.navigation?.localizedName,
+      })),
+      search_hint: `Flights to ${countryName}`,
+    };
+    skyscannerCache[iso] = { data, expires: Date.now()+24*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 10. CURRENCY EXCHANGE — live rates ───────────────────────────
+const currencyCache = {};
+async function fetchCurrencyRates(iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  // Get currency code from REST Countries data if available
+  const meta = restCountriesCache[iso];
+  const currencyCode = meta?.currencies?.[0] ? Object.keys(
+    // we stored as array of {name,symbol} so derive from country_meta
+    {}
+  )[0] : null;
+  // Use a simple free exchange API instead — no key needed
+  if(currencyCache["USD"] && Date.now() < currencyCache["USD"].expires) return currencyCache["USD"].data;
+  return timed("currency", async () => {
+    const r = await axios.get("https://open.er-api.com/v6/latest/USD", { timeout:6000 });
+    const data = { base:"USD", rates: r.data?.rates||{}, updated: r.data?.time_last_update_utc };
+    currencyCache["USD"] = { data, expires: Date.now()+60*60*1000 }; // 1h cache
+    return data;
+  });
+}
+
+// ── 11. GOOGLE MAPS PLACES — via RapidAPI ────────────────────────
+const placesCache = {};
+async function fetchGooglePlaces(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = placesCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  const geo = geoCoordCache[iso];
+  if(!geo) return null;
+  return timed("google_places", async () => {
+    const r = await axios.get("https://maps-data.p.rapidapi.com/searchmaps.php", {
+      params:{
+        query:    `tourist attractions in ${countryName}`,
+        limit:    8,
+        country:  "us",
+        lang:     "en",
+        lat:      geo.lat,
+        lng:      geo.lon,
+        offset:   0,
+        zoom:     5,
+      },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "maps-data.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const places = (r.data?.data||[]).slice(0,8).map(p=>({
+      name:        p.name,
+      type:        p.type,
+      rating:      p.rating,
+      reviews:     p.reviews,
+      address:     p.full_address,
+      photo:       p.photo_url||null,
+      lat:         p.latitude,
+      lon:         p.longitude,
+      open_now:    p.open_now,
+    }));
+    const data = { places };
+    placesCache[iso] = { data, expires: Date.now()+12*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 12. TRAVEL ADVISOR — travel tips & visa info ─────────────────
+const travelAdvisorCache = {};
+async function fetchTravelAdvisor(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = travelAdvisorCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  return timed("travel_advisor", async () => {
+    const r = await axios.get("https://travel-advisor.p.rapidapi.com/restaurants/list-by-latlng", {
+      params:{
+        latitude:    geoCoordCache[iso]?.lat || 48.85,
+        longitude:   geoCoordCache[iso]?.lon || 2.35,
+        limit:       6,
+        currency:    "USD",
+        distance:    2,
+        open_now:    "false",
+        lunit:       "km",
+        lang:        "en_US",
+      },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "travel-advisor.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const restaurants = (r.data?.data||[]).filter(r=>r.name).slice(0,6).map(r=>({
+      name:      r.name,
+      rating:    r.rating,
+      reviews:   r.num_reviews,
+      cuisine:   r.cuisine?.[0]?.name,
+      price:     r.price_level,
+      address:   r.address,
+      photo:     r.photo?.images?.medium?.url||null,
+    }));
+    const data = { restaurants };
+    travelAdvisorCache[iso] = { data, expires: Date.now()+12*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 13. PRICELINE — hotel deals ──────────────────────────────────
+// Using Hotels API as a reliable fallback hotel source
+const hotelsCache = {};
+async function fetchHotelDeals(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = hotelsCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  return timed("hotels_com", async () => {
+    const r = await axios.get("https://hotels4.p.rapidapi.com/locations/v3/search", {
+      params:{ q: countryName, locale:"en_US", langid:1033, siteid:300000001 },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "hotels4.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const suggestions = (r.data?.sr||[]).filter(s=>s.type==="CITY"||s.type==="REGION").slice(0,1);
+    const data = {
+      destination: suggestions[0]?.regionNames?.fullName||countryName,
+      gaiaId:      suggestions[0]?.gaiaId||null,
+    };
+    hotelsCache[iso] = { data, expires: Date.now()+24*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 14. YOUTUBE TRAVEL VIDEOS ────────────────────────────────────
+const youtubeCache = {};
+async function fetchYoutubeVideos(countryName, iso) {
+  if(!ENV.RAPIDAPI_KEY) return null;
+  const cached = youtubeCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  return timed("youtube", async () => {
+    const r = await axios.get("https://youtube-search-and-download.p.rapidapi.com/search", {
+      params:{
+        query:  `${countryName} travel guide 2025`,
+        type:   "v",
+        sort:   "r",
+        nextToken:"",
+      },
+      headers:{
+        "X-RapidAPI-Key":  ENV.RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "youtube-search-and-download.p.rapidapi.com",
+      },
+      timeout: 10000,
+    });
+    const videos = (r.data?.contents||[]).filter(v=>v.video).slice(0,5).map(v=>({
+      id:        v.video?.videoId,
+      title:     v.video?.title,
+      channel:   v.video?.channelName,
+      views:     v.video?.viewCountText,
+      published: v.video?.publishedTimeText,
+      thumbnail: v.video?.thumbnails?.[0]?.url||null,
+      url:       `https://youtube.com/watch?v=${v.video?.videoId}`,
+      length:    v.video?.lengthText,
+    }));
+    const data = { videos };
+    youtubeCache[iso] = { data, expires: Date.now()+12*60*60*1000 };
+    return data;
+  });
+}
+
+// ── 15. WORLD AIR QUALITY INDEX ──────────────────────────────────
+// Supplemental AQI source — free public API, no key needed
+const waqiCache = {};
+async function fetchWAQI(countryName, iso) {
+  const cached = waqiCache[iso];
+  if(cached && Date.now() < cached.expires) return cached.data;
+  const geo = geoCoordCache[iso];
+  if(!geo) return null;
+  return timed("waqi", async () => {
+    const r = await axios.get(
+      `https://api.waqi.info/feed/geo:${geo.lat};${geo.lon}/?token=demo`,
+      { timeout: 6000 }
+    );
+    const d = r.data?.data;
+    if(!d || d === "Unknown station") return null;
+    const data = {
+      aqi:       d.aqi,
+      aqi_label: aqiLabel(d.aqi),
+      city:      d.city?.name||countryName,
+      pm25:      d.iaqi?.pm25?.v||null,
+      pm10:      d.iaqi?.pm10?.v||null,
+      o3:        d.iaqi?.o3?.v||null,
+      no2:       d.iaqi?.no2?.v||null,
+      updated:   d.time?.s||null,
+    };
+    waqiCache[iso] = { data, expires: Date.now()+60*60*1000 };
+    return data;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
 // MISTRAL AI SYNTHESIS
 // ══════════════════════════════════════════════════════════════════
 async function runMistral(countryName, continent, rawData) {
@@ -944,6 +1286,9 @@ SOCIAL TRENDING: ${(rawData.social||[]).map(s=>s.caption).join(" | ").slice(0,25
 AIR QUALITY: ${rawData.airQuality ? "AQI "+rawData.airQuality.aqi+" ("+rawData.airQuality.aqi_label+"), PM2.5: "+rawData.airQuality.pm25 : "N/A"}
 COST OF LIVING: ${rawData.costOfLiving ? "Index "+rawData.costOfLiving.cost_index+", Cheap meal $"+rawData.costOfLiving.meal_cheap+", 1-bed rent $"+rawData.costOfLiving.one_bed_city_rent+"/mo" : "N/A"}
 COUNTRY META: ${rawData.countryMeta ? "Capital: "+rawData.countryMeta.capital+", Languages: "+(rawData.countryMeta.languages||[]).join(", ")+", Currency: "+(rawData.countryMeta.currencies||[]).map(c=>c.symbol+" "+c.name).join(", ") : "N/A"}
+BOOKING AVG PRICE: ${rawData.booking?.avg_price_per_night ? "$"+rawData.booking.avg_price_per_night+"/night" : "N/A"}
+TOP ATTRACTIONS: ${(rawData.tripadvisor?.attractions||[]).slice(0,4).map(a=>a.name+" ("+a.rating+"/5)").join(", ")||"N/A"}
+RESTAURANTS: ${(rawData.travelAdvisor?.restaurants||[]).slice(0,3).map(r=>r.name+" ("+r.cuisine+")").join(", ")||"N/A"}
 
 Output ONLY valid JSON, no markdown fences, no preamble:
 {
@@ -980,7 +1325,8 @@ async function runPipeline(iso, countryName, continent) {
   const geo = await safe(()=>fetchGeoapify(countryName, iso), {});
 
   const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,social,
-         photos,airQuality,flights,costOfLiving,countryMeta,airbnb] = await Promise.all([
+         photos,airQuality,flights,costOfLiving,countryMeta,airbnb,
+         booking,tripadvisor,flightPrices,currencyRates,googlePlaces,travelAdvisor,hotelDeals,youtubeVideos,waqi] = await Promise.all([
     safe(()=>fetchWikipedia(countryName),         {summary:""}),
     safe(()=>fetchWikivoyage(countryName),        {sections:{},highlights:[]}),
     safe(()=>fetchFoursquare(countryName, iso),   []),
@@ -999,6 +1345,16 @@ async function runPipeline(iso, countryName, continent) {
     safe(()=>fetchCostOfLiving(countryName),      null),
     safe(()=>fetchRestCountries(iso),             null),
     safe(()=>fetchAirbnb(countryName, iso),       null),
+    // Additional RapidAPI sources
+    safe(()=>fetchBooking(countryName, iso),      null),
+    safe(()=>fetchTripadvisor(countryName, iso),  null),
+    safe(()=>fetchFlightPrices(countryName, iso), null),
+    safe(()=>fetchCurrencyRates(iso),             null),
+    safe(()=>fetchGooglePlaces(countryName, iso), null),
+    safe(()=>fetchTravelAdvisor(countryName, iso),null),
+    safe(()=>fetchHotelDeals(countryName, iso),   null),
+    safe(()=>fetchYoutubeVideos(countryName, iso),null),
+    safe(()=>fetchWAQI(countryName, iso),         null),
   ]);
 
   const allNews   = [...(news||[]),...(gNews||[])].slice(0,10);
@@ -1008,7 +1364,7 @@ async function runPipeline(iso, countryName, continent) {
     ...allNews.filter(n=>n.risk_level==="high").map(n=>({date:n.published_at?.split("T")[0],type:"news",description:n.title,severity:"high"}))
   ].slice(0,6);
 
-  const ai = await safe(()=>runMistral(countryName,continent,{wiki,wv,places,weather,news:allNews,gdacs,events:allEvents,social,airQuality,costOfLiving,countryMeta}),null);
+  const ai = await safe(()=>runMistral(countryName,continent,{wiki,wv,places,weather,news:allNews,gdacs,events:allEvents,social,airQuality:airQuality||waqi,costOfLiving,countryMeta,booking,tripadvisor,travelAdvisor}),null);
 
   const {error} = await supabase.from("country_intel").upsert({
     iso, country_name:countryName, continent, last_updated:new Date().toISOString(),
@@ -1022,11 +1378,20 @@ async function runPipeline(iso, countryName, continent) {
     ai_best_months:ai?.best_months||[], ai_avoid_if:ai?.avoid_if||null, ai_hidden_gem:ai?.hidden_gem||null,
     // New data sources
     photos:          photos||[],
-    air_quality:     airQuality||null,
+    air_quality:     airQuality||waqi||null,
     flights:         flights||null,
     cost_of_living:  costOfLiving||null,
     country_meta:    countryMeta||null,
     airbnb:          airbnb||null,
+    // Additional RapidAPI sources
+    booking:         booking||null,
+    tripadvisor:     tripadvisor||null,
+    flight_prices:   flightPrices||null,
+    currency_rates:  currencyRates||null,
+    google_places:   googlePlaces||null,
+    restaurants:     travelAdvisor||null,
+    hotel_deals:     hotelDeals||null,
+    youtube_videos:  youtubeVideos||null,
   },{onConflict:"iso"});
 
   const duration = Date.now()-start;
@@ -1115,178 +1480,140 @@ app.get("/api/pipeline/status", async (req,res) => {
 app.get("/api/health", async (req,res) => {
   const checks = {};
 
-  // Helper: run a live test and return result object
-  async function liveTest(label, fn) {
-    const t = Date.now();
-    try {
-      await fn();
-      const ms = Date.now()-t;
-      return { ok:true, label, detail:`Last OK (${ms}ms)`, response_ms:ms };
-    } catch(e) {
-      return { ok:false, label, detail: e.response?.status ? `HTTP ${e.response.status}: ${e.message}` : e.message, response_ms: Date.now()-t };
-    }
-  }
+  // ── Supabase ──────────────────────────────────────────────────
+  try {
+    const {error,count} = await supabase.from("country_intel").select("*",{count:"exact",head:true});
+    checks.supabase = {ok:!error,label:"Supabase DB",detail:error?error.message:`Connected — ${count} countries stored`};
+  } catch(e) { checks.supabase={ok:false,label:"Supabase DB",detail:e.message}; }
 
-  // Run all live tests in parallel
-  const [
-    supabaseRes, mistralRes, wikiRes, wikivoyageRes, weatherRes,
-    googleNewsRes, gdacsRes, tmRes, phqRes, geoapifyRes, socialRes,
-    unsplashRes, openaqRes, aviationRes, numbeoRes, restCountriesRes,
-    foursquareRes
-  ] = await Promise.all([
-    // Supabase
-    (async()=>{
-      try {
-        const t=Date.now();
-        const {error,count} = await supabase.from("country_intel").select("*",{count:"exact",head:true});
-        const ms=Date.now()-t;
-        return {ok:!error,label:"Supabase DB",detail:error?error.message:`Connected — ${count} countries stored`,response_ms:ms};
-      } catch(e){return{ok:false,label:"Supabase DB",detail:e.message};}
-    })(),
-    // Mistral
-    liveTest("Mistral AI", async()=>{
-      if(!ENV.MISTRAL_API_KEY) throw new Error("No API key");
-      await axios.get("https://api.mistral.ai/v1/models",{headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`},timeout:6000});
-    }),
-    // Wikipedia
-    liveTest("Wikipedia", async()=>{
-      await axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000});
-    }),
-    // Wikivoyage
-    liveTest("Wikivoyage", async()=>{
-      await axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000});
-    }),
-    // OpenWeatherMap
-    liveTest("OpenWeatherMap", async()=>{
-      if(!ENV.OPENWEATHER_API_KEY) throw new Error("No API key");
-      await axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000});
-    }),
-    // Google News RSS
-    liveTest("Google News RSS", async()=>{
-      await axios.get("https://news.google.com/rss/search?q=travel&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
-    }),
-    // GDACS
-    liveTest("GDACS Disasters", async()=>{
-      await axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
-    }),
-    // Ticketmaster
-    liveTest("Ticketmaster", async()=>{
-      if(!ENV.TICKETMASTER_API_KEY) throw new Error("No API key");
-      await axios.get("https://app.ticketmaster.com/discovery/v2/events.json",{params:{apikey:ENV.TICKETMASTER_API_KEY,size:1},timeout:6000});
-    }),
-    // PredictHQ
-    liveTest("PredictHQ", async()=>{
-      if(!ENV.PREDICTHQ_API_KEY) throw new Error("No API key");
-      await axios.get("https://api.predicthq.com/v1/events/",{headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},params:{limit:1},timeout:6000});
-    }),
-    // Geoapify
-    liveTest("Geoapify", async()=>{
-      if(!ENV.GEOAPIFY_API_KEY) throw new Error("No API key");
-      await axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:"France",type:"country",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000});
-    }),
-    // Social Trends (Bing RSS)
-    liveTest("Social Trends (RSS)", async()=>{
-      await axios.get("https://www.bing.com/news/search?q=travel+tourism&format=RSS",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
-    }),
-    // Unsplash
-    liveTest("Unsplash Photos", async()=>{
-      if(!ENV.UNSPLASH_ACCESS_KEY) throw new Error("No API key");
-      await axios.get("https://api.unsplash.com/search/photos",{params:{query:"travel",per_page:1},headers:{Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}`},timeout:6000});
-    }),
-    // OpenAQ
-    liveTest("OpenAQ Air Quality", async()=>{
-      const headers = ENV.OPENAQ_API_KEY ? {"X-API-Key":ENV.OPENAQ_API_KEY} : {};
-      await axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},headers,timeout:8000});
-    }),
-    // Aviationstack
-    liveTest("Aviationstack Flights", async()=>{
-      if(!ENV.AVIATIONSTACK_API_KEY) throw new Error("No API key");
-      await axios.get("http://api.aviationstack.com/v1/airports",{params:{access_key:ENV.AVIATIONSTACK_API_KEY,limit:1},timeout:8000});
-    }),
-    // Numbeo via RapidAPI
-    liveTest("Numbeo Cost of Living", async()=>{
-      if(!ENV.RAPIDAPI_KEY) throw new Error("No RapidAPI key");
-      await axios.get("https://numbeo-cost-of-living.p.rapidapi.com/api/cost-of-living",{
-        params:{country:"France"},
-        headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"numbeo-cost-of-living.p.rapidapi.com"},
-        timeout:8000
-      });
-    }),
-    // REST Countries (free, no key)
-    liveTest("REST Countries", async()=>{
-      await axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000});
-    }),
-    // OpenTripMap (foursquare slot)
-    liveTest("Places (OpenTripMap)", async()=>{
-      await axios.get("https://api.opentripmap.com/0.1/en/places/radius",{
-        params:{radius:10000,lon:2.35,lat:48.85,format:"json",limit:1,apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12"},
-        timeout:8000
-      });
-    }),
-  ]);
+  checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
 
-  // Map results to checks
-  checks.supabase       = supabaseRes;
-  checks.mistral        = mistralRes;
-  checks.wikipedia      = wikiRes;
-  checks.wikivoyage     = wikivoyageRes;
-  checks.openweathermap = weatherRes;
-  checks.google_news    = googleNewsRes;
-  checks.gdacs          = gdacsRes;
-  checks.ticketmaster   = tmRes;
-  checks.predicthq      = phqRes;
-  checks.geoapify       = geoapifyRes;
-  checks.social_proxy   = socialRes;
-  checks.unsplash       = unsplashRes;
-  checks.openaq         = openaqRes;
-  checks.aviationstack  = aviationRes;
-  checks.numbeo         = numbeoRes;
-  checks.rest_countries = restCountriesRes;
-  checks.foursquare     = foursquareRes;
-
-  // GNews: never call live — just report budget
+  // ── GNews: never call live API ─────────────────────────────
   gnewsResetIfNeeded();
   const gnewsRemaining = GNEWS_DAILY_CAP - gnewsCallsToday;
-  checks.newsapi = {
+  sourceHealth.newsapi = {
+    ...sourceHealth.newsapi,
     ok: !!ENV.GNEWS_API_KEY,
-    label: "GNews API",
-    detail: ENV.GNEWS_API_KEY
+    last_check: new Date().toISOString(),
+    _detail_override: ENV.GNEWS_API_KEY
       ? `Key configured — ${gnewsRemaining}/${GNEWS_DAILY_CAP} calls remaining today (resets in ${hoursUntilReset()}h)`
-      : "No API key — set GNEWS_API_KEY in Render env vars",
+      : "No API key",
   };
 
-  // Airbnb — RapidAPI key check only (don't burn quota on health check)
-  checks.airbnb = {
-    ok: !!ENV.RAPIDAPI_KEY,
-    label: "Airbnb (RapidAPI)",
-    detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key",
+  // ── Active live tests for all other sources ───────────────────
+  const liveTest = async (key, fn) => {
+    const start = Date.now();
+    try {
+      await fn();
+      const ms = Date.now()-start;
+      sourceHealth[key] = { ok:true, last_check:new Date().toISOString(), response_ms:ms,
+        success_count:(sourceHealth[key]?.success_count||0)+1,
+        fail_count:sourceHealth[key]?.fail_count||0 };
+    } catch(e) {
+      const ms = Date.now()-start;
+      sourceHealth[key] = { ok:false, last_check:new Date().toISOString(), response_ms:ms,
+        error: e.response?.status ? `HTTP ${e.response.status}: ${e.message}` : e.message,
+        success_count:sourceHealth[key]?.success_count||0,
+        fail_count:(sourceHealth[key]?.fail_count||0)+1 };
+    }
   };
 
-  // Eventbrite (Meetup RSS — just check Meetup is reachable)
-  try {
-    const t=Date.now();
-    await axios.get("https://www.meetup.com",{timeout:5000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
-    checks.eventbrite={ok:true,label:"Eventbrite (RSS)",detail:`Last OK (${Date.now()-t}ms)`};
-  } catch(e){
-    checks.eventbrite={ok:false,label:"Eventbrite (RSS)",detail:e.message};
-  }
+  await Promise.allSettled([
+    liveTest("wikipedia",    ()=>axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
+    liveTest("wikivoyage",   ()=>axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
+    liveTest("foursquare",   ()=>axios.get("https://api.opentripmap.com/0.1/en/places/radius",{params:{radius:10000,lon:2.35,lat:48.85,format:"json",limit:1,apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12"},timeout:6000})),
+    ENV.OPENWEATHER_API_KEY
+      ? liveTest("openweathermap", ()=>axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000}))
+      : Promise.resolve(sourceHealth.openweathermap={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
+    liveTest("google_news",  ()=>axios.get("https://news.google.com/rss/search?q=travel&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("gdacs",        ()=>axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    ENV.TICKETMASTER_API_KEY
+      ? liveTest("ticketmaster", ()=>axios.get("https://app.ticketmaster.com/discovery/v2/events.json",{params:{apikey:ENV.TICKETMASTER_API_KEY,size:1},timeout:6000}))
+      : Promise.resolve(sourceHealth.ticketmaster={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
+    liveTest("eventbrite",   ()=>axios.get("https://news.google.com/rss/search?q=events+festival&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    ENV.PREDICTHQ_API_KEY
+      ? liveTest("predicthq", ()=>axios.get("https://api.predicthq.com/v1/events/",{params:{limit:1},headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},timeout:6000}))
+      : Promise.resolve(sourceHealth.predicthq={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
+    ENV.GEOAPIFY_API_KEY
+      ? liveTest("geoapify", ()=>axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:"Paris",type:"city",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000}))
+      : Promise.resolve(sourceHealth.geoapify={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
+    liveTest("social_proxy", ()=>axios.get("https://www.bing.com/news/search?q=travel+tourism&format=RSS",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    ENV.UNSPLASH_ACCESS_KEY
+      ? liveTest("unsplash", ()=>axios.get("https://api.unsplash.com/search/photos",{params:{query:"travel",per_page:1},headers:{Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}`},timeout:6000}))
+      : Promise.resolve(sourceHealth.unsplash={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
+    liveTest("openaq",       ()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},timeout:6000})),
+    ENV.AVIATIONSTACK_API_KEY
+      ? liveTest("aviationstack", ()=>axios.get("http://api.aviationstack.com/v1/airports",{params:{access_key:ENV.AVIATIONSTACK_API_KEY,limit:1},timeout:8000}))
+      : Promise.resolve(sourceHealth.aviationstack={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("numbeo", ()=>axios.get("https://numbeo-cost-of-living.p.rapidapi.com/api/cost-of-living",{params:{country:"France"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"numbeo-cost-of-living.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.numbeo={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    liveTest("rest_countries",()=>axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000})),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("airbnb", ()=>axios.get("https://airbnb13.p.rapidapi.com/search-location",{params:{location:"Paris",checkin:getFutureDate(14),checkout:getFutureDate(17),adults:2,children:0,infants:0,pets:0,page:1,currency:"USD"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"airbnb13.p.rapidapi.com"},timeout:10000}))
+      : Promise.resolve(sourceHealth.airbnb={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    // Additional RapidAPI sources
+    ENV.RAPIDAPI_KEY
+      ? liveTest("booking",      ()=>axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchDestination",{params:{query:"Paris"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"booking-com15.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.booking={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("tripadvisor",  ()=>axios.get("https://tripadvisor16.p.rapidapi.com/api/v1/attraction/searchAttractions",{params:{geoId:"1",searchQuery:"Paris",language:"en"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"tripadvisor16.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.tripadvisor={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("skyscanner",   ()=>axios.get("https://sky-scrapper.p.rapidapi.com/api/v1/flights/searchAirport",{params:{query:"Paris",locale:"en-US"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"sky-scrapper.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.skyscanner={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    liveTest("currency",     ()=>axios.get("https://open.er-api.com/v6/latest/USD",{timeout:6000})),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("google_places",()=>axios.get("https://maps-data.p.rapidapi.com/searchmaps.php",{params:{query:"tourist attractions Paris",limit:1,country:"us",lang:"en",lat:48.85,lng:2.35,offset:0,zoom:5},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"maps-data.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.google_places={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("travel_advisor",()=>axios.get("https://travel-advisor.p.rapidapi.com/restaurants/list-by-latlng",{params:{latitude:48.85,longitude:2.35,limit:1,currency:"USD",distance:1,open_now:"false",lunit:"km",lang:"en_US"},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"travel-advisor.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.travel_advisor={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("hotels_com",   ()=>axios.get("https://hotels4.p.rapidapi.com/locations/v3/search",{params:{q:"Paris",locale:"en_US",langid:1033,siteid:300000001},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"hotels4.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.hotels_com={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    ENV.RAPIDAPI_KEY
+      ? liveTest("youtube",      ()=>axios.get("https://youtube-search-and-download.p.rapidapi.com/search",{params:{query:"Paris travel guide",type:"v",sort:"r",nextToken:""},headers:{"X-RapidAPI-Key":ENV.RAPIDAPI_KEY,"X-RapidAPI-Host":"youtube-search-and-download.p.rapidapi.com"},timeout:8000}))
+      : Promise.resolve(sourceHealth.youtube={ok:false,last_check:new Date().toISOString(),error:"No RapidAPI key",response_ms:0,success_count:0,fail_count:0}),
+    liveTest("waqi",         ()=>axios.get("https://api.waqi.info/feed/geo:48.85;2.35/?token=demo",{timeout:6000})),
+  ]);
 
-  // Env keys panel
+  const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
+    "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy",
+    "unsplash","openaq","aviationstack","numbeo","rest_countries","airbnb",
+    "booking","tripadvisor","skyscanner","currency","google_places","travel_advisor","hotels_com","youtube","waqi"];
+  const labelMap = {
+    wikipedia:"Wikipedia", wikivoyage:"Wikivoyage", foursquare:"Places (OpenTripMap)",
+    openweathermap:"OpenWeatherMap", newsapi:"GNews API", google_news:"Google News RSS",
+    gdacs:"GDACS Disasters", ticketmaster:"Ticketmaster", eventbrite:"Eventbrite (RSS)",
+    predicthq:"PredictHQ", geoapify:"Geoapify", social_proxy:"Social Trends (RSS)",
+    unsplash:"Unsplash Photos", openaq:"OpenAQ Air Quality", aviationstack:"Aviationstack Flights",
+    numbeo:"Numbeo Cost of Living", rest_countries:"REST Countries", airbnb:"Airbnb (RapidAPI)",
+    booking:"Booking.com", tripadvisor:"TripAdvisor", skyscanner:"Skyscanner Flights",
+    currency:"Currency Exchange", google_places:"Google Places", travel_advisor:"Travel Advisor",
+    hotels_com:"Hotels.com", youtube:"YouTube Travel Videos", waqi:"World Air Quality Index",
+  };
+  sources.forEach(k=>{
+    const h=sourceHealth[k]||{};
+    const detail = h._detail_override || (h.ok!=null?(h.ok?`Last OK (${h.response_ms}ms)`:h.error):"Not yet tested");
+    checks[k]={ok:h.ok??null,label:labelMap[k]||k,detail,last_check:h.last_check||null,
+      success_count:h.success_count||0,fail_count:h.fail_count||0,response_ms:h.response_ms||null};
+  });
+
   const envKeys=[
-    {label:"Mistral AI",    key:"MISTRAL_API_KEY"},
-    {label:"OpenWeatherMap",key:"OPENWEATHER_API_KEY"},
-    {label:"Ticketmaster",  key:"TICKETMASTER_API_KEY"},
-    {label:"PredictHQ",     key:"PREDICTHQ_API_KEY"},
-    {label:"GNews API",     key:"GNEWS_API_KEY"},
-    {label:"Geoapify",      key:"GEOAPIFY_API_KEY"},
-    {label:"Unsplash",      key:"UNSPLASH_ACCESS_KEY"},
-    {label:"OpenAQ",        key:"OPENAQ_API_KEY"},
-    {label:"Aviationstack", key:"AVIATIONSTACK_API_KEY"},
-    {label:"RapidAPI",      key:"RAPIDAPI_KEY"},
+    {label:"Mistral AI",        key:"MISTRAL_API_KEY"},
+    {label:"OpenWeatherMap",    key:"OPENWEATHER_API_KEY"},
+    {label:"Ticketmaster",      key:"TICKETMASTER_API_KEY"},
+    {label:"PredictHQ",         key:"PREDICTHQ_API_KEY"},
+    {label:"GNews API",         key:"GNEWS_API_KEY"},
+    {label:"Geoapify",          key:"GEOAPIFY_API_KEY"},
+    {label:"Unsplash",          key:"UNSPLASH_ACCESS_KEY"},
+    {label:"OpenAQ",            key:"OPENAQ_API_KEY"},
+    {label:"Aviationstack",     key:"AVIATIONSTACK_API_KEY"},
+    {label:"RapidAPI",          key:"RAPIDAPI_KEY"},
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
-  // Pipeline stats
   const {data:pipeData} = await supabase.from("country_intel").select("iso,last_updated");
   const fc = Date.now()-6*60*60*1000;
   const freshCount = (pipeData||[]).filter(r=>new Date(r.last_updated).getTime()>fc).length;
@@ -1294,7 +1621,6 @@ app.get("/api/health", async (req,res) => {
 
   res.json({status:Object.values(checks).filter(c=>c.ok===false).length===0?"healthy":"degraded",timestamp:new Date().toISOString(),checks});
 });
-
 app.get("/api/countries", (req,res) => {
   const byCont={};
   COUNTRIES.forEach(c=>{if(!byCont[c.continent])byCont[c.continent]=[];byCont[c.continent].push(c);});
@@ -1604,321 +1930,4 @@ var FLAGS=${JSON.stringify(FLAGS)};
   var earthMesh=new THREE.Mesh(new THREE.SphereGeometry(1,72,72),new THREE.ShaderMaterial({
     uniforms:uEarth,
     vertexShader:'varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vUv=uv;vNormal=normalize(normalMatrix*normal);vWorldPos=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
-    fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,sun);float dayA=smoothstep(-0.18,0.45,cosA);vec3 day=texture2D(dayTexture,vUv).rgb;float lum=dot(day,vec3(0.299,0.587,0.114));day=mix(vec3(lum),day,1.35);day=pow(day,vec3(0.88));vec3 night=texture2D(nightTexture,vUv).rgb;night=pow(night,vec3(0.75))*2.2;vec3 spec=texture2D(specTexture,vUv).rgb;vec3 color=mix(night,day,dayA);vec3 vd=normalize(cameraPosition-vWorldPos);vec3 hv=normalize(sun+vd);float sp=pow(max(dot(n,hv),0.0),90.0);float sp2=pow(max(dot(n,hv),0.0),18.0)*0.06;color+=vec3(0.7,0.82,1.0)*(sp*0.9+sp2)*spec.r*dayA;float term=smoothstep(0.0,0.18,cosA)*smoothstep(0.38,0.18,cosA);color+=vec3(0.9,0.45,0.15)*term*0.28;float rim=pow(1.0-max(dot(n,vd),0.0),3.8);color=mix(color,mix(vec3(0.04,0.08,0.28),vec3(0.28,0.62,1.0),smoothstep(-0.3,0.6,cosA)),rim*0.72);gl_FragColor=vec4(color,1.0);}'
-  }));
-  earthGroup.add(earthMesh);
-
-  scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.09,48,48),new THREE.ShaderMaterial({
-    uniforms:{sd:{value:new THREE.Vector3(5,2.5,4).normalize()}},
-    vertexShader:'varying vec3 vN,vP;void main(){vN=normal;vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
-    fragmentShader:'uniform vec3 sd;varying vec3 vN,vP;void main(){vec3 vd=normalize(cameraPosition-(modelMatrix*vec4(vP,1.0)).xyz);float rim=pow(1.0-abs(dot(normalize(vN),vd)),2.4);float d=dot(normalize((normalMatrix*vec4(vN,0.0)).xyz),normalize(sd));vec3 col=mix(vec3(0.03,0.06,0.28),vec3(0.22,0.56,1.0),smoothstep(-0.15,0.6,d));gl_FragColor=vec4(col,rim*0.62);}',
-    transparent:true,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending
-  })));
-
-  var BASE='https://globevoyage-admin.onrender.com/texture/';
-  var texLoader=new THREE.TextureLoader();texLoader.crossOrigin='anonymous';
-  var texDone=0;
-  function onTex(){texDone++;progress(25+texDone*18);}
-  texLoader.load(BASE+'earth-day',  function(t){t.anisotropy=renderer.capabilities.getMaxAnisotropy();uEarth.dayTexture.value=t;onTex();},undefined,function(){onTex();});
-  texLoader.load(BASE+'earth-night',function(t){uEarth.nightTexture.value=t;onTex();},undefined,function(){onTex();});
-  texLoader.load(BASE+'earth-water',function(t){uEarth.specTexture.value=t;onTex();},undefined,function(){onTex();});
-  var cloudMesh;
-  texLoader.load(BASE+'earth-clouds',function(t){
-    cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.013,48,48),
-      new THREE.MeshPhongMaterial({map:t,transparent:true,opacity:0.75,depthWrite:false,blending:THREE.AdditiveBlending}));
-    earthGroup.add(cloudMesh);
-  });
-
-  var FILL_R=1.003, BORDER_R=1.0042;
-  var countryMap={}, allFeatures=[], highlightTargets={};
-
-  function ll2v(lon,lat,r){
-    var phi=(90-lat)*Math.PI/180,theta=(lon+180)*Math.PI/180;
-    return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));
-  }
-  function triPoly(rings){
-    var coords=[];rings[0].forEach(function(p){coords.push(p[0],p[1]);});
-    var holes=[],off=rings[0].length;
-    for(var i=1;i<rings.length;i++){holes.push(off);rings[i].forEach(function(p){coords.push(p[0],p[1]);});off+=rings[i].length;}
-    var idx=earcut(coords,holes.length?holes:null,2);
-    if(!idx||!idx.length)return null;
-    var pos=[];
-    for(var t=0;t<idx.length;t++){var k=idx[t];var v=ll2v(coords[k*2],coords[k*2+1],FILL_R);pos.push(v.x,v.y,v.z);}
-    var geo=new THREE.BufferGeometry();
-    geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
-    return geo;
-  }
-  function buildBorder(rings){
-    var pos=[];
-    rings.forEach(function(ring){
-      for(var i=0;i<ring.length-1;i++){
-        var a=ll2v(ring[i][0],ring[i][1],BORDER_R),b=ll2v(ring[i+1][0],ring[i+1][1],BORDER_R);
-        pos.push(a.x,a.y,a.z,b.x,b.y,b.z);
-      }
-    });
-    if(!pos.length)return null;
-    var geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));return geo;
-  }
-  function pipRing(lon,lat,ring){
-    var inside=false;
-    for(var i=0,j=ring.length-1;i<ring.length;j=i++){
-      var xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];
-      if(((yi>lat)!==(yj>lat))&&(lon<(xj-xi)*(lat-yi)/(yj-yi)+xi))inside=!inside;
-    }
-    return inside;
-  }
-  function pipFeature(lon,lat,f){
-    var g=f.geometry;if(!g)return false;
-    function tp(rings){if(!pipRing(lon,lat,rings[0]))return false;for(var h=1;h<rings.length;h++)if(pipRing(lon,lat,rings[h]))return false;return true;}
-    if(g.type==='Polygon')return tp(g.coordinates);
-    if(g.type==='MultiPolygon'){for(var p=0;p<g.coordinates.length;p++)if(tp(g.coordinates[p]))return true;}
-    return false;
-  }
-  function v3toll(v){
-    var lat=Math.asin(v.y/v.length())*180/Math.PI;
-    var lon=Math.atan2(v.z,-v.x)*180/Math.PI-180;
-    if(lon<-180)lon+=360;
-    return{lat:lat,lon:lon};
-  }
-  function getRings(f){
-    var g=f.geometry;if(!g)return[];var r=[];
-    if(g.type==='Polygon')r=g.coordinates;
-    else if(g.type==='MultiPolygon')g.coordinates.forEach(function(p){r=r.concat(p);});
-    return r;
-  }
-  function buildCountry(feature){
-    var iso=feature.properties.iso;
-    var rings=getRings(feature);if(!rings.length)return;
-    var fillMat=new THREE.MeshBasicMaterial({color:0x4fa3ff,transparent:true,opacity:0.0,side:THREE.DoubleSide,depthWrite:false});
-    var borderMat=new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.25,linewidth:1});
-    var group=new THREE.Group();
-    try{
-      if(feature.geometry.type==='Polygon'){
-        var fg=triPoly(feature.geometry.coordinates);
-        if(fg){var m=new THREE.Mesh(fg,fillMat);m.userData.iso=iso;group.add(m);}
-      }else if(feature.geometry.type==='MultiPolygon'){
-        feature.geometry.coordinates.forEach(function(poly){
-          var fg=triPoly(poly);
-          if(fg){var m=new THREE.Mesh(fg,fillMat);m.userData.iso=iso;group.add(m);}
-        });
-      }
-    }catch(e){}
-    var bg=buildBorder(rings);
-    if(bg)group.add(new THREE.LineSegments(bg,borderMat));
-    earthGroup.add(group);
-    countryMap[iso]={fillMat:fillMat,borderMat:borderMat,name:feature.properties.name,iso:iso,props:feature.properties};
-  }
-
-  var card     = document.getElementById('card');
-  var backdrop = document.getElementById('backdrop');
-
-  function fmtPop(n){if(!n)return'—';if(n>1e9)return(n/1e9).toFixed(1)+'B';if(n>1e6)return(n/1e6).toFixed(1)+'M';if(n>1e3)return Math.round(n/1e3)+'K';return''+n;}
-
-  function openCard(iso,props){
-    document.getElementById('card-flag').textContent = FLAGS[iso]||'🌍';
-    document.getElementById('card-name').textContent = props.name;
-    document.getElementById('card-sub').textContent  = (props.subregion||props.continent||'').toUpperCase();
-    document.getElementById('card-desc').textContent = DESCRIPTIONS[iso]||'A fascinating destination with a rich cultural heritage and unique landscapes.';
-    document.getElementById('s-pop').textContent  = fmtPop(props.pop);
-    document.getElementById('s-cont').textContent = props.continent||'—';
-    document.getElementById('s-reg').textContent  = (props.subregion||'—').split(' ').slice(0,2).join(' ');
-    card.classList.add('open');
-    backdrop.classList.add('on');
-    cardOpen=true;
-    autoSpin=false;
-    targetZ=CAM_COUNTRY;
-  }
-  function closeCard(){
-    card.classList.remove('open');
-    backdrop.classList.remove('on');
-    cardOpen=false;
-    targetZ=CAM_DEFAULT;
-    if(shouldSpin())autoSpin=true;
-  }
-  document.getElementById('card-close').addEventListener('click',function(e){
-    e.stopPropagation();dismissSelection();
-  });
-  document.getElementById('card-btn').addEventListener('click',function(e){
-    e.stopPropagation();
-    if(window.ReactNativeWebView){
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type:'DESTINATIONS',
-        country:selectedISO,
-        name:document.getElementById('card-name').textContent
-      }));
-    }
-  });
-  backdrop.addEventListener('click',function(){ dismissSelection(); });
-
-  function dismissSelection(){
-    if(selectedISO&&countryMap[selectedISO]){
-      highlightTargets[selectedISO]=0.0;
-      countryMap[selectedISO].borderMat.color.setHex(0xffffff);
-      countryMap[selectedISO].borderMat.opacity=0.25;
-    }
-    selectedISO=null;
-    closeCard();
-  }
-  function setSelected(iso){
-    if(selectedISO&&countryMap[selectedISO]){
-      highlightTargets[selectedISO]=0.0;
-      countryMap[selectedISO].borderMat.color.setHex(0xffffff);
-      countryMap[selectedISO].borderMat.opacity=0.25;
-    }
-    if(iso===selectedISO){dismissSelection();return;}
-    selectedISO=iso;
-    if(countryMap[iso]){
-      highlightTargets[iso]=0.48;
-      countryMap[iso].borderMat.color.setHex(0x88ccff);
-      countryMap[iso].borderMat.opacity=1.0;
-      openCard(iso,countryMap[iso].props);
-    }
-    autoSpin=false;
-  }
-
-  var raycaster=new THREE.Raycaster();
-  function handleTap(sx,sy){
-    var cardEl=document.getElementById('card');
-    var cardRect=cardEl.getBoundingClientRect();
-    if(cardOpen && sy > cardRect.top) return;
-    var ndc=new THREE.Vector2((sx/W)*2-1,-(sy/H)*2+1);
-    raycaster.setFromCamera(ndc,camera);
-    var sphereHits=raycaster.intersectObject(earthMesh);
-    if(!sphereHits.length){ if(selectedISO)dismissSelection(); return; }
-    var fills=[];
-    earthGroup.traverse(function(o){if(o.isMesh&&o.userData.iso)fills.push(o);});
-    var hits=raycaster.intersectObjects(fills,false);
-    if(hits.length>0){setSelected(hits[0].object.userData.iso);return;}
-    var localPt=earthGroup.worldToLocal(sphereHits[0].point.clone());
-    var ll=v3toll(localPt);
-    for(var i=0;i<allFeatures.length;i++){
-      if(pipFeature(ll.lon,ll.lat,allFeatures[i])){setSelected(allFeatures[i].properties.iso);return;}
-    }
-    if(selectedISO)dismissSelection();
-  }
-
-  fetch('https://globevoyage-admin.onrender.com/geodata')
-    .then(function(r){return r.json();})
-    .then(function(geojson){
-      progress(82);
-      allFeatures=geojson.features;
-      var i=0;
-      function batch(){
-        var end=Math.min(i+15,allFeatures.length);
-        for(;i<end;i++)buildCountry(allFeatures[i]);
-        progress(82+Math.round((i/allFeatures.length)*17));
-        if(i<allFeatures.length)setTimeout(batch,0);
-        else progress(100);
-      }
-      batch();
-    })
-    .catch(function(){progress(100);});
-
-  function tDist(a,b){var dx=a.clientX-b.clientX,dy=a.clientY-b.clientY;return Math.sqrt(dx*dx+dy*dy);}
-
-  canvas.addEventListener('touchstart',function(e){
-    e.preventDefault();
-    if(e.touches.length===1){
-      var t=e.touches[0];
-      lx=t.clientX;ly=t.clientY;
-      tapX=t.clientX;tapY=t.clientY;tapT=Date.now();
-      isDrag=true;isPinch=false;momX=0;momY=0;isHeld=false;
-      holdTimer=setTimeout(function(){isHeld=true;autoSpin=false;},600);
-    }else if(e.touches.length===2){
-      clearTimeout(holdTimer);isDrag=false;isPinch=true;
-      lDist=tDist(e.touches[0],e.touches[1]);
-    }
-  },{passive:false});
-
-  canvas.addEventListener('touchmove',function(e){
-    e.preventDefault();
-    if(isDrag&&e.touches.length===1){
-      clearTimeout(holdTimer);
-      var t=e.touches[0],dx=t.clientX-lx,dy=t.clientY-ly;
-      var s=0.004*(camZ/CAM_DEFAULT);
-      earthGroup.rotation.y+=dx*s;
-      earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+dy*s));
-      momX=dx*s;momY=dy*s;
-      lx=t.clientX;ly=t.clientY;
-      autoSpin=false;
-    }else if(isPinch&&e.touches.length===2){
-      var d=tDist(e.touches[0],e.touches[1]);
-      var delta=(lDist-d)*0.016;
-      if(targetZ+delta<CAM_MIN) delta*=0.2;
-      if(targetZ+delta>CAM_MAX) delta*=0.2;
-      targetZ=Math.max(CAM_MIN,Math.min(CAM_MAX,targetZ+delta));
-      lDist=d;
-    }
-  },{passive:false});
-
-  canvas.addEventListener('touchend',function(e){
-    e.preventDefault();
-    clearTimeout(holdTimer);
-    var now=Date.now();
-    if(e.changedTouches.length===1){
-      var cx=e.changedTouches[0].clientX,cy=e.changedTouches[0].clientY;
-      var dx=Math.abs(cx-tapX),dy2=Math.abs(cy-tapY),dt=now-tapT;
-      if(now-lastTap<260&&dx<18&&dy2<18){
-        targetZ=camZ<CAM_DEFAULT-0.3?CAM_DEFAULT:CAM_MIN+0.3;
-      }
-      lastTap=now;
-      if(dx<10&&dy2<10&&dt<280)handleTap(tapX,tapY);
-      if(Math.abs(momX)>0.001||Math.abs(momY)>0.001){
-        setTimeout(function(){if(!isDrag&&!isHeld&&shouldSpin())autoSpin=true;},1800);
-      }else if(shouldSpin()){autoSpin=true;}
-    }
-    isDrag=false;isPinch=false;
-  },{passive:false});
-
-  var hlTime=0;
-  function animate(){
-    requestAnimationFrame(animate);
-    if(autoSpin)earthGroup.rotation.y+=spinSpeed;
-    if(!isDrag&&(Math.abs(momX)>0||Math.abs(momY)>0)){
-      earthGroup.rotation.y+=momX;
-      earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+momY));
-      momX*=fric;momY*=fric;
-      if(Math.abs(momX)<0.00008&&Math.abs(momY)<0.00008){momX=0;momY=0;}
-    }
-    var diff=targetZ-camZ;
-    zoomVel=(zoomVel+diff*0.035)*0.75;
-    camZ+=zoomVel;
-    camera.position.z=camZ;
-    if(camZ<CAM_MIN+0.25&&!selectedISO)autoSpin=false;
-    else if(!selectedISO&&!isHeld&&!isDrag&&shouldSpin())autoSpin=true;
-    if(cloudMesh)cloudMesh.rotation.y+=spinSpeed*1.12;
-    hlTime+=0.05;
-    Object.keys(highlightTargets).forEach(function(iso){
-      var c=countryMap[iso];if(!c)return;
-      var cur=c.fillMat.opacity,tgt=highlightTargets[iso];
-      var next=cur+(tgt-cur)*0.11;
-      c.fillMat.opacity=next;
-      if(iso===selectedISO)c.borderMat.opacity=0.65+0.35*Math.sin(hlTime);
-      if(Math.abs(next-tgt)<0.001){c.fillMat.opacity=tgt;if(tgt===0.0)delete highlightTargets[iso];}
-    });
-    renderer.render(scene,camera);
-  }
-  animate();
-
-  setTimeout(function(){var h=document.getElementById('hint');if(h)h.style.opacity='0';},5000);
-})();
-</script>
-</body>
-</html>`);
-});
-
-// ══════════════════════════════════════════════════════════════════
-// START
-// ══════════════════════════════════════════════════════════════════
-const PORT = process.env.PORT||3000;
-app.listen(PORT, async()=>{
-  console.log(`GlobeVoyage API on port ${PORT} — ${COUNTRIES.length} countries`);
-  await ensureScripts();
-  console.log("Pre-warming texture cache...");
-  for(const [name, url] of Object.entries(TEXTURES)) {
-    axios.get(url,{responseType:"arraybuffer",timeout:20000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
-      .then(r=>{textureCache[name]=Buffer.from(r.data);console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`);})
-      .catch(e=>console.error(`✗ Texture pre-warm failed: ${name}`,e.message));
-  }
-  setTimeout(runStartupPipeline,15000);
-});
+    fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,su
