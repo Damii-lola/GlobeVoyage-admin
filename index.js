@@ -1930,4 +1930,321 @@ var FLAGS=${JSON.stringify(FLAGS)};
   var earthMesh=new THREE.Mesh(new THREE.SphereGeometry(1,72,72),new THREE.ShaderMaterial({
     uniforms:uEarth,
     vertexShader:'varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vUv=uv;vNormal=normalize(normalMatrix*normal);vWorldPos=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
-    fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,su
+    fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,sun);float dayA=smoothstep(-0.18,0.45,cosA);vec3 day=texture2D(dayTexture,vUv).rgb;float lum=dot(day,vec3(0.299,0.587,0.114));day=mix(vec3(lum),day,1.35);day=pow(day,vec3(0.88));vec3 night=texture2D(nightTexture,vUv).rgb;night=pow(night,vec3(0.75))*2.2;vec3 spec=texture2D(specTexture,vUv).rgb;vec3 color=mix(night,day,dayA);vec3 vd=normalize(cameraPosition-vWorldPos);vec3 hv=normalize(sun+vd);float sp=pow(max(dot(n,hv),0.0),90.0);float sp2=pow(max(dot(n,hv),0.0),18.0)*0.06;color+=vec3(0.7,0.82,1.0)*(sp*0.9+sp2)*spec.r*dayA;float term=smoothstep(0.0,0.18,cosA)*smoothstep(0.38,0.18,cosA);color+=vec3(0.9,0.45,0.15)*term*0.28;float rim=pow(1.0-max(dot(n,vd),0.0),3.8);color=mix(color,mix(vec3(0.04,0.08,0.28),vec3(0.28,0.62,1.0),smoothstep(-0.3,0.6,cosA)),rim*0.72);gl_FragColor=vec4(color,1.0);}'
+  }));
+  earthGroup.add(earthMesh);
+
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.09,48,48),new THREE.ShaderMaterial({
+    uniforms:{sd:{value:new THREE.Vector3(5,2.5,4).normalize()}},
+    vertexShader:'varying vec3 vN,vP;void main(){vN=normal;vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+    fragmentShader:'uniform vec3 sd;varying vec3 vN,vP;void main(){vec3 vd=normalize(cameraPosition-(modelMatrix*vec4(vP,1.0)).xyz);float rim=pow(1.0-abs(dot(normalize(vN),vd)),2.4);float d=dot(normalize((normalMatrix*vec4(vN,0.0)).xyz),normalize(sd));vec3 col=mix(vec3(0.03,0.06,0.28),vec3(0.22,0.56,1.0),smoothstep(-0.15,0.6,d));gl_FragColor=vec4(col,rim*0.62);}',
+    transparent:true,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending
+  })));
+
+  var BASE='https://globevoyage-admin.onrender.com/texture/';
+  var texLoader=new THREE.TextureLoader();texLoader.crossOrigin='anonymous';
+  var texDone=0;
+  function onTex(){texDone++;progress(25+texDone*18);}
+  texLoader.load(BASE+'earth-day',  function(t){t.anisotropy=renderer.capabilities.getMaxAnisotropy();uEarth.dayTexture.value=t;onTex();},undefined,function(){onTex();});
+  texLoader.load(BASE+'earth-night',function(t){uEarth.nightTexture.value=t;onTex();},undefined,function(){onTex();});
+  texLoader.load(BASE+'earth-water',function(t){uEarth.specTexture.value=t;onTex();},undefined,function(){onTex();});
+  var cloudMesh;
+  texLoader.load(BASE+'earth-clouds',function(t){
+    cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.013,48,48),
+      new THREE.MeshPhongMaterial({map:t,transparent:true,opacity:0.75,depthWrite:false,blending:THREE.AdditiveBlending}));
+    earthGroup.add(cloudMesh);
+  });
+
+  var FILL_R=1.003, BORDER_R=1.0042;
+  var countryMap={}, allFeatures=[], highlightTargets={};
+
+  function ll2v(lon,lat,r){
+    var phi=(90-lat)*Math.PI/180,theta=(lon+180)*Math.PI/180;
+    return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));
+  }
+  function triPoly(rings){
+    var coords=[];rings[0].forEach(function(p){coords.push(p[0],p[1]);});
+    var holes=[],off=rings[0].length;
+    for(var i=1;i<rings.length;i++){holes.push(off);rings[i].forEach(function(p){coords.push(p[0],p[1]);});off+=rings[i].length;}
+    var idx=earcut(coords,holes.length?holes:null,2);
+    if(!idx||!idx.length)return null;
+    var pos=[];
+    for(var t=0;t<idx.length;t++){var k=idx[t];var v=ll2v(coords[k*2],coords[k*2+1],FILL_R);pos.push(v.x,v.y,v.z);}
+    var geo=new THREE.BufferGeometry();
+    geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+    return geo;
+  }
+  function buildBorder(rings){
+    var pos=[];
+    rings.forEach(function(ring){
+      for(var i=0;i<ring.length-1;i++){
+        var a=ll2v(ring[i][0],ring[i][1],BORDER_R),b=ll2v(ring[i+1][0],ring[i+1][1],BORDER_R);
+        pos.push(a.x,a.y,a.z,b.x,b.y,b.z);
+      }
+    });
+    if(!pos.length)return null;
+    var geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));return geo;
+  }
+  function pipRing(lon,lat,ring){
+    var inside=false;
+    for(var i=0,j=ring.length-1;i<ring.length;j=i++){
+      var xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];
+      if(((yi>lat)!==(yj>lat))&&(lon<(xj-xi)*(lat-yi)/(yj-yi)+xi))inside=!inside;
+    }
+    return inside;
+  }
+  function pipFeature(lon,lat,f){
+    var g=f.geometry;if(!g)return false;
+    function tp(rings){if(!pipRing(lon,lat,rings[0]))return false;for(var h=1;h<rings.length;h++)if(pipRing(lon,lat,rings[h]))return false;return true;}
+    if(g.type==='Polygon')return tp(g.coordinates);
+    if(g.type==='MultiPolygon'){for(var p=0;p<g.coordinates.length;p++)if(tp(g.coordinates[p]))return true;}
+    return false;
+  }
+  function v3toll(v){
+    var lat=Math.asin(v.y/v.length())*180/Math.PI;
+    var lon=Math.atan2(v.z,-v.x)*180/Math.PI-180;
+    if(lon<-180)lon+=360;
+    return{lat:lat,lon:lon};
+  }
+  function getRings(f){
+    var g=f.geometry;if(!g)return[];var r=[];
+    if(g.type==='Polygon')r=g.coordinates;
+    else if(g.type==='MultiPolygon')g.coordinates.forEach(function(p){r=r.concat(p);});
+    return r;
+  }
+  function buildCountry(feature){
+    var iso=feature.properties.iso;
+    var rings=getRings(feature);if(!rings.length)return;
+    var fillMat=new THREE.MeshBasicMaterial({color:0x4fa3ff,transparent:true,opacity:0.0,side:THREE.DoubleSide,depthWrite:false});
+    var borderMat=new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.25,linewidth:1});
+    var group=new THREE.Group();
+    try{
+      if(feature.geometry.type==='Polygon'){
+        var fg=triPoly(feature.geometry.coordinates);
+        if(fg){var m=new THREE.Mesh(fg,fillMat);m.userData.iso=iso;group.add(m);}
+      }else if(feature.geometry.type==='MultiPolygon'){
+        feature.geometry.coordinates.forEach(function(poly){
+          var fg=triPoly(poly);
+          if(fg){var m=new THREE.Mesh(fg,fillMat);m.userData.iso=iso;group.add(m);}
+        });
+      }
+    }catch(e){}
+    var bg=buildBorder(rings);
+    if(bg)group.add(new THREE.LineSegments(bg,borderMat));
+    earthGroup.add(group);
+    countryMap[iso]={fillMat:fillMat,borderMat:borderMat,name:feature.properties.name,iso:iso,props:feature.properties};
+  }
+
+  var card     = document.getElementById('card');
+  var backdrop = document.getElementById('backdrop');
+
+  function fmtPop(n){if(!n)return'—';if(n>1e9)return(n/1e9).toFixed(1)+'B';if(n>1e6)return(n/1e6).toFixed(1)+'M';if(n>1e3)return Math.round(n/1e3)+'K';return''+n;}
+
+  function openCard(iso,props){
+    document.getElementById('card-flag').textContent = FLAGS[iso]||'🌍';
+    document.getElementById('card-name').textContent = props.name;
+    document.getElementById('card-sub').textContent  = (props.subregion||props.continent||'').toUpperCase();
+    document.getElementById('card-desc').textContent = DESCRIPTIONS[iso]||'A fascinating destination with a rich cultural heritage and unique landscapes.';
+    document.getElementById('s-pop').textContent  = fmtPop(props.pop);
+    document.getElementById('s-cont').textContent = props.continent||'—';
+    document.getElementById('s-reg').textContent  = (props.subregion||'—').split(' ').slice(0,2).join(' ');
+    card.classList.add('open');
+    backdrop.classList.add('on');
+    cardOpen=true;
+    autoSpin=false;
+    targetZ=CAM_COUNTRY;
+  }
+  function closeCard(){
+    card.classList.remove('open');
+    backdrop.classList.remove('on');
+    cardOpen=false;
+    targetZ=CAM_DEFAULT;
+    if(shouldSpin())autoSpin=true;
+  }
+  document.getElementById('card-close').addEventListener('click',function(e){
+    e.stopPropagation();dismissSelection();
+  });
+  document.getElementById('card-btn').addEventListener('click',function(e){
+    e.stopPropagation();
+    if(window.ReactNativeWebView){
+      window.ReactNativeWebView.postMessage(JSON.stringify({
+        type:'DESTINATIONS',
+        country:selectedISO,
+        name:document.getElementById('card-name').textContent
+      }));
+    }
+  });
+  backdrop.addEventListener('click',function(){ dismissSelection(); });
+
+  function dismissSelection(){
+    if(selectedISO&&countryMap[selectedISO]){
+      highlightTargets[selectedISO]=0.0;
+      countryMap[selectedISO].borderMat.color.setHex(0xffffff);
+      countryMap[selectedISO].borderMat.opacity=0.25;
+    }
+    selectedISO=null;
+    closeCard();
+  }
+  function setSelected(iso){
+    if(selectedISO&&countryMap[selectedISO]){
+      highlightTargets[selectedISO]=0.0;
+      countryMap[selectedISO].borderMat.color.setHex(0xffffff);
+      countryMap[selectedISO].borderMat.opacity=0.25;
+    }
+    if(iso===selectedISO){dismissSelection();return;}
+    selectedISO=iso;
+    if(countryMap[iso]){
+      highlightTargets[iso]=0.48;
+      countryMap[iso].borderMat.color.setHex(0x88ccff);
+      countryMap[iso].borderMat.opacity=1.0;
+      openCard(iso,countryMap[iso].props);
+    }
+    autoSpin=false;
+  }
+
+  var raycaster=new THREE.Raycaster();
+  function handleTap(sx,sy){
+    var cardEl=document.getElementById('card');
+    var cardRect=cardEl.getBoundingClientRect();
+    if(cardOpen && sy > cardRect.top) return;
+    var ndc=new THREE.Vector2((sx/W)*2-1,-(sy/H)*2+1);
+    raycaster.setFromCamera(ndc,camera);
+    var sphereHits=raycaster.intersectObject(earthMesh);
+    if(!sphereHits.length){ if(selectedISO)dismissSelection(); return; }
+    var fills=[];
+    earthGroup.traverse(function(o){if(o.isMesh&&o.userData.iso)fills.push(o);});
+    var hits=raycaster.intersectObjects(fills,false);
+    if(hits.length>0){setSelected(hits[0].object.userData.iso);return;}
+    var localPt=earthGroup.worldToLocal(sphereHits[0].point.clone());
+    var ll=v3toll(localPt);
+    for(var i=0;i<allFeatures.length;i++){
+      if(pipFeature(ll.lon,ll.lat,allFeatures[i])){setSelected(allFeatures[i].properties.iso);return;}
+    }
+    if(selectedISO)dismissSelection();
+  }
+
+  fetch('https://globevoyage-admin.onrender.com/geodata')
+    .then(function(r){return r.json();})
+    .then(function(geojson){
+      progress(82);
+      allFeatures=geojson.features;
+      var i=0;
+      function batch(){
+        var end=Math.min(i+15,allFeatures.length);
+        for(;i<end;i++)buildCountry(allFeatures[i]);
+        progress(82+Math.round((i/allFeatures.length)*17));
+        if(i<allFeatures.length)setTimeout(batch,0);
+        else progress(100);
+      }
+      batch();
+    })
+    .catch(function(){progress(100);});
+
+  function tDist(a,b){var dx=a.clientX-b.clientX,dy=a.clientY-b.clientY;return Math.sqrt(dx*dx+dy*dy);}
+
+  canvas.addEventListener('touchstart',function(e){
+    e.preventDefault();
+    if(e.touches.length===1){
+      var t=e.touches[0];
+      lx=t.clientX;ly=t.clientY;
+      tapX=t.clientX;tapY=t.clientY;tapT=Date.now();
+      isDrag=true;isPinch=false;momX=0;momY=0;isHeld=false;
+      holdTimer=setTimeout(function(){isHeld=true;autoSpin=false;},600);
+    }else if(e.touches.length===2){
+      clearTimeout(holdTimer);isDrag=false;isPinch=true;
+      lDist=tDist(e.touches[0],e.touches[1]);
+    }
+  },{passive:false});
+
+  canvas.addEventListener('touchmove',function(e){
+    e.preventDefault();
+    if(isDrag&&e.touches.length===1){
+      clearTimeout(holdTimer);
+      var t=e.touches[0],dx=t.clientX-lx,dy=t.clientY-ly;
+      var s=0.004*(camZ/CAM_DEFAULT);
+      earthGroup.rotation.y+=dx*s;
+      earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+dy*s));
+      momX=dx*s;momY=dy*s;
+      lx=t.clientX;ly=t.clientY;
+      autoSpin=false;
+    }else if(isPinch&&e.touches.length===2){
+      var d=tDist(e.touches[0],e.touches[1]);
+      var delta=(lDist-d)*0.016;
+      if(targetZ+delta<CAM_MIN) delta*=0.2;
+      if(targetZ+delta>CAM_MAX) delta*=0.2;
+      targetZ=Math.max(CAM_MIN,Math.min(CAM_MAX,targetZ+delta));
+      lDist=d;
+    }
+  },{passive:false});
+
+  canvas.addEventListener('touchend',function(e){
+    e.preventDefault();
+    clearTimeout(holdTimer);
+    var now=Date.now();
+    if(e.changedTouches.length===1){
+      var cx=e.changedTouches[0].clientX,cy=e.changedTouches[0].clientY;
+      var dx=Math.abs(cx-tapX),dy2=Math.abs(cy-tapY),dt=now-tapT;
+      if(now-lastTap<260&&dx<18&&dy2<18){
+        targetZ=camZ<CAM_DEFAULT-0.3?CAM_DEFAULT:CAM_MIN+0.3;
+      }
+      lastTap=now;
+      if(dx<10&&dy2<10&&dt<280)handleTap(tapX,tapY);
+      if(Math.abs(momX)>0.001||Math.abs(momY)>0.001){
+        setTimeout(function(){if(!isDrag&&!isHeld&&shouldSpin())autoSpin=true;},1800);
+      }else if(shouldSpin()){autoSpin=true;}
+    }
+    isDrag=false;isPinch=false;
+  },{passive:false});
+
+  var hlTime=0;
+  function animate(){
+    requestAnimationFrame(animate);
+    if(autoSpin)earthGroup.rotation.y+=spinSpeed;
+    if(!isDrag&&(Math.abs(momX)>0||Math.abs(momY)>0)){
+      earthGroup.rotation.y+=momX;
+      earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+momY));
+      momX*=fric;momY*=fric;
+      if(Math.abs(momX)<0.00008&&Math.abs(momY)<0.00008){momX=0;momY=0;}
+    }
+    var diff=targetZ-camZ;
+    zoomVel=(zoomVel+diff*0.035)*0.75;
+    camZ+=zoomVel;
+    camera.position.z=camZ;
+    if(camZ<CAM_MIN+0.25&&!selectedISO)autoSpin=false;
+    else if(!selectedISO&&!isHeld&&!isDrag&&shouldSpin())autoSpin=true;
+    if(cloudMesh)cloudMesh.rotation.y+=spinSpeed*1.12;
+    hlTime+=0.05;
+    Object.keys(highlightTargets).forEach(function(iso){
+      var c=countryMap[iso];if(!c)return;
+      var cur=c.fillMat.opacity,tgt=highlightTargets[iso];
+      var next=cur+(tgt-cur)*0.11;
+      c.fillMat.opacity=next;
+      if(iso===selectedISO)c.borderMat.opacity=0.65+0.35*Math.sin(hlTime);
+      if(Math.abs(next-tgt)<0.001){c.fillMat.opacity=tgt;if(tgt===0.0)delete highlightTargets[iso];}
+    });
+    renderer.render(scene,camera);
+  }
+  animate();
+
+  setTimeout(function(){var h=document.getElementById('hint');if(h)h.style.opacity='0';},5000);
+})();
+</script>
+</body>
+</html>`);
+});
+
+// ══════════════════════════════════════════════════════════════════
+// START
+// ══════════════════════════════════════════════════════════════════
+const PORT = process.env.PORT||3000;
+app.listen(PORT, async()=>{
+  console.log(`GlobeVoyage API on port ${PORT} — ${COUNTRIES.length} countries`);
+  await ensureScripts();
+  console.log("Pre-warming texture cache...");
+  for(const [name, url] of Object.entries(TEXTURES)) {
+    axios.get(url,{responseType:"arraybuffer",timeout:20000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
+      .then(r=>{textureCache[name]=Buffer.from(r.data);console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`);})
+      .catch(e=>console.error(`✗ Texture pre-warm failed: ${name}`,e.message));
+  }
+  setTimeout(runStartupPipeline,15000);
+});
