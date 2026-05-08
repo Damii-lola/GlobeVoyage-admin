@@ -30,6 +30,7 @@ const ENV = {
   OPENAQ_API_KEY:       process.env.OPENAQ_API_KEY,
   AVIATIONSTACK_API_KEY:process.env.AVIATIONSTACK_API_KEY,
   RAPIDAPI_KEY:         process.env.RAPIDAPI_KEY,   // covers Numbeo + Airbnb via RapidAPI
+  GEONAMES_USERNAME:    process.env.GEONAMES_USERNAME, // free at geonames.org
 };
 
 // Bundled scripts — try node_modules first, fall back to CDN fetch at startup
@@ -959,6 +960,206 @@ function getFutureDate(daysAhead) {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// GEO HIERARCHY — Countries → States → Areas (GeoNames API)
+// Free: 50,000 requests/day. Register at geonames.org.
+// ══════════════════════════════════════════════════════════════════
+
+const ISO3_TO_ISO2 = {
+  DZA:"DZ",AGO:"AO",BEN:"BJ",BWA:"BW",BFA:"BF",BDI:"BI",CPV:"CV",CMR:"CM",
+  CAF:"CF",TCD:"TD",COM:"KM",COD:"CD",COG:"CG",CIV:"CI",DJI:"DJ",EGY:"EG",
+  GNQ:"GQ",ERI:"ER",SWZ:"SZ",ETH:"ET",GAB:"GA",GMB:"GM",GHA:"GH",GIN:"GN",
+  GNB:"GW",KEN:"KE",LSO:"LS",LBR:"LR",LBY:"LY",MDG:"MG",MWI:"MW",MLI:"ML",
+  MRT:"MR",MUS:"MU",MAR:"MA",MOZ:"MZ",NAM:"NA",NER:"NE",NGA:"NG",RWA:"RW",
+  STP:"ST",SEN:"SN",SLE:"SL",SOM:"SO",ZAF:"ZA",SSD:"SS",SDN:"SD",TZA:"TZ",
+  TGO:"TG",TUN:"TN",UGA:"UG",ZMB:"ZM",ZWE:"ZW",
+  AFG:"AF",ARM:"AM",AZE:"AZ",BHR:"BH",BGD:"BD",BTN:"BT",BRN:"BN",KHM:"KH",
+  CHN:"CN",CYP:"CY",GEO:"GE",IND:"IN",IDN:"ID",IRN:"IR",IRQ:"IQ",ISR:"IL",
+  JPN:"JP",JOR:"JO",KAZ:"KZ",KWT:"KW",KGZ:"KG",LAO:"LA",LBN:"LB",MYS:"MY",
+  MDV:"MV",MNG:"MN",MMR:"MM",NPL:"NP",PRK:"KP",OMN:"OM",PAK:"PK",PSE:"PS",
+  PHL:"PH",QAT:"QA",SAU:"SA",SGP:"SG",KOR:"KR",LKA:"LK",SYR:"SY",TWN:"TW",
+  TJK:"TJ",THA:"TH",TLS:"TL",TUR:"TR",TKM:"TM",ARE:"AE",UZB:"UZ",VNM:"VN",
+  YEM:"YE",
+  ALB:"AL",AND:"AD",AUT:"AT",BLR:"BY",BEL:"BE",BIH:"BA",BGR:"BG",HRV:"HR",
+  CZE:"CZ",DNK:"DK",EST:"EE",FIN:"FI",FRA:"FR",DEU:"DE",GRC:"GR",HUN:"HU",
+  ISL:"IS",IRL:"IE",ITA:"IT",XKX:"XK",LVA:"LV",LIE:"LI",LTU:"LT",LUX:"LU",
+  MLT:"MT",MDA:"MD",MCO:"MC",MNE:"ME",NLD:"NL",MKD:"MK",NOR:"NO",POL:"PL",
+  PRT:"PT",ROU:"RO",RUS:"RU",SMR:"SM",SRB:"RS",SVK:"SK",SVN:"SI",ESP:"ES",
+  SWE:"SE",CHE:"CH",UKR:"UA",GBR:"GB",
+  ATG:"AG",BHS:"BS",BRB:"BB",BLZ:"BZ",CAN:"CA",CRI:"CR",CUB:"CU",DMA:"DM",
+  DOM:"DO",SLV:"SV",GRD:"GD",GTM:"GT",HTI:"HT",HND:"HN",JAM:"JM",MEX:"MX",
+  NIC:"NI",PAN:"PA",KNA:"KN",LCA:"LC",VCT:"VC",TTO:"TT",USA:"US",
+  ARG:"AR",BOL:"BO",BRA:"BR",CHL:"CL",COL:"CO",ECU:"EC",GUY:"GY",PRY:"PY",
+  PER:"PE",SUR:"SR",URY:"UY",VEN:"VE",
+  AUS:"AU",FJI:"FJ",KIR:"KI",MHL:"MH",FSM:"FM",NRU:"NR",NZL:"NZ",PLW:"PW",
+  PNG:"PG",WSM:"WS",SLB:"SB",TON:"TO",TUV:"TV",VUT:"VU",
+};
+
+// Fetch country's GeoNames ID (needed to then fetch its states)
+async function getCountryGeonameId(iso2) {
+  if(!ENV.GEONAMES_USERNAME) return null;
+  try {
+    const r = await axios.get("http://api.geonames.org/searchJSON", {
+      params:{
+        country:      iso2,
+        featureCode:  "PCLI",
+        maxRows:      1,
+        username:     ENV.GEONAMES_USERNAME,
+      },
+      timeout: 8000,
+    });
+    return r.data?.geonames?.[0]?.geonameId || null;
+  } catch(e) { return null; }
+}
+
+// Fetch states/provinces/territories for a country
+async function fetchAndSaveStates(iso) {
+  if(!ENV.GEONAMES_USERNAME) return 0;
+  const iso2 = ISO3_TO_ISO2[iso];
+  if(!iso2) return 0;
+
+  // Get the country's geoname ID first
+  const countryGeonameId = await getCountryGeonameId(iso2);
+  if(!countryGeonameId) return 0;
+
+  try {
+    const r = await axios.get("http://api.geonames.org/childrenJSON", {
+      params:{ geonameId: countryGeonameId, username: ENV.GEONAMES_USERNAME },
+      timeout: 10000,
+    });
+    const children = r.data?.geonames || [];
+    // Filter to admin level 1 only (states/provinces)
+    const states = children.filter(c =>
+      ["ADM1","ADM1H","PROV","TERR","PRSH"].includes(c.fcode)
+    );
+    if(!states.length) return 0;
+
+    // Upsert all states for this country
+    const rows = states.map(s => ({
+      country_iso: iso,
+      geoname_id:  s.geonameId,
+      name:        s.name,
+      ascii_name:  s.toponymName||s.name,
+      state_code:  s.adminCode1||null,
+      type:        geonameTypeLabel(s.fcode),
+      population:  s.population||0,
+      latitude:    parseFloat(s.lat)||null,
+      longitude:   parseFloat(s.lng)||null,
+      timezone:    s.timezone?.timeZoneId||null,
+      updated_at:  new Date().toISOString(),
+    }));
+
+    const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
+    if(error) { console.error(`States upsert error ${iso}:`, error.message); return 0; }
+    console.log(`✓ States: ${iso} — ${rows.length} saved`);
+    return rows.length;
+  } catch(e) {
+    console.error(`fetchAndSaveStates error ${iso}:`, e.message);
+    return 0;
+  }
+}
+
+// Fetch areas/districts within a state
+async function fetchAndSaveAreas(stateId, stateGeonameId, countryIso) {
+  if(!ENV.GEONAMES_USERNAME) return 0;
+  try {
+    const r = await axios.get("http://api.geonames.org/childrenJSON", {
+      params:{ geonameId: stateGeonameId, username: ENV.GEONAMES_USERNAME },
+      timeout: 10000,
+    });
+    const children = r.data?.geonames || [];
+    const areas = children.filter(c =>
+      ["ADM2","ADM2H","ADM3","DIST","MUND","PPLA","PPLA2","PPLA3"].includes(c.fcode)
+    );
+    if(!areas.length) return 0;
+
+    const rows = areas.map(a => ({
+      state_id:    stateId,
+      country_iso: countryIso,
+      geoname_id:  a.geonameId,
+      name:        a.name,
+      ascii_name:  a.toponymName||a.name,
+      type:        geonameTypeLabel(a.fcode),
+      population:  a.population||0,
+      latitude:    parseFloat(a.lat)||null,
+      longitude:   parseFloat(a.lng)||null,
+      timezone:    a.timezone?.timeZoneId||null,
+      updated_at:  new Date().toISOString(),
+    }));
+
+    const { error } = await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
+    if(error) { console.error(`Areas upsert error:`, error.message); return 0; }
+    return rows.length;
+  } catch(e) {
+    console.error(`fetchAndSaveAreas error:`, e.message);
+    return 0;
+  }
+}
+
+function geonameTypeLabel(fcode) {
+  const map = {
+    ADM1:"state", ADM1H:"state", PROV:"province", TERR:"territory",
+    PRSH:"parish", ADM2:"district", ADM2H:"district", ADM3:"area",
+    DIST:"district", MUND:"municipality", PPLA:"city", PPLA2:"city",
+    PPLA3:"town", PCLI:"country",
+  };
+  return map[fcode] || "region";
+}
+
+// Full geo pipeline — runs for all 195 countries
+// Populates states table, then for each state populates areas
+// This is a one-time heavy operation (~3,000+ API calls)
+// After first run, data is static — only re-run if needed
+let geoPipelineRunning = false;
+
+async function runGeoPipeline() {
+  if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
+  if(!ENV.GEONAMES_USERNAME) { console.log("[GeoPipeline] No GEONAMES_USERNAME set"); return; }
+
+  geoPipelineRunning = true;
+  console.log(`🌍 [GeoPipeline] Starting for ${COUNTRIES.length} countries...`);
+  let totalStates = 0, totalAreas = 0;
+
+  for(const country of COUNTRIES) {
+    try {
+      // Skip if country already has states loaded
+      const { count } = await supabase.from("states")
+        .select("*", { count:"exact", head:true })
+        .eq("country_iso", country.iso);
+      if(count > 0) {
+        console.log(`⏭  [GeoPipeline] ${country.name} — ${count} states already loaded`);
+        continue;
+      }
+
+      const statesAdded = await fetchAndSaveStates(country.iso);
+      totalStates += statesAdded;
+
+      if(statesAdded > 0) {
+        // Now fetch areas for each state
+        const { data: savedStates } = await supabase.from("states")
+          .select("id, geoname_id, name")
+          .eq("country_iso", country.iso);
+
+        for(const state of savedStates||[]) {
+          const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
+          totalAreas += areasAdded;
+          // Small delay between area fetches to respect rate limit
+          await new Promise(r=>setTimeout(r,250));
+        }
+      }
+
+      console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states, ${totalAreas} total areas`);
+      // Delay between countries
+      await new Promise(r=>setTimeout(r,500));
+    } catch(e) {
+      console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
+    }
+  }
+
+  geoPipelineRunning = false;
+  console.log(`🎉 [GeoPipeline] Complete — ${totalStates} states, ${totalAreas} areas loaded`);
+}
+
+// ══════════════════════════════════════════════════════════════════
 // ADDITIONAL RAPIDAPI TRAVEL SOURCES
 // ══════════════════════════════════════════════════════════════════
 
@@ -1563,6 +1764,10 @@ app.get("/api/status", (req,res) => {
                             ? `✅ Last ran at ${new Date(pipelineStatus.lastRunAt).toUTCString()}`
                             : "⏳ Not yet run this session (next: "+nextRuns[0].time_utc+")",
     },
+    geo_pipeline: {
+      running: geoPipelineRunning,
+      status:  geoPipelineRunning ? "🔄 Geo pipeline running..." : "✅ Idle",
+    },
   });
 });
 
@@ -1831,6 +2036,149 @@ app.get("/api/destinations/:id",async(req,res)=>{const{data,error}=await supabas
 app.post("/api/destinations",async(req,res)=>{const{name,country,description,image_url,price,iso,lat,lng}=req.body;const{data,error}=await supabase.from("destinations").insert([{name,country,description,image_url,price,iso,lat,lng}]).select();if(error)return res.status(500).json({error:error.message});res.status(201).json(data[0]);});
 app.put("/api/destinations/:id",async(req,res)=>{const{name,country,description,image_url,price}=req.body;const{data,error}=await supabase.from("destinations").update({name,country,description,image_url,price}).eq("id",req.params.id).select();if(error)return res.status(500).json({error:error.message});res.json(data[0]);});
 app.delete("/api/destinations/:id",async(req,res)=>{const{error}=await supabase.from("destinations").delete().eq("id",req.params.id);if(error)return res.status(500).json({error:error.message});res.json({message:"Deleted"});});
+
+// ══════════════════════════════════════════════════════════════════
+// GEO HIERARCHY API ENDPOINTS
+// ══════════════════════════════════════════════════════════════════
+
+// GET /api/geo/countries/:iso/states — all states for a country
+app.get("/api/geo/countries/:iso/states", async (req, res) => {
+  const iso = req.params.iso.toUpperCase();
+  try {
+    const { data, error } = await supabase
+      .from("states")
+      .select("id,name,ascii_name,state_code,type,capital,population,area_km2,latitude,longitude,timezone")
+      .eq("country_iso", iso)
+      .order("name");
+    if(error) return res.status(500).json({ error: error.message });
+    // If no states in DB yet, trigger a fetch in the background
+    if(!data || data.length === 0) {
+      fetchAndSaveStates(iso).catch(console.error);
+      return res.json({ states:[], loading:true, message:"States loading — check back in 30 seconds" });
+    }
+    res.json({ states: data, total: data.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/geo/states/:id/areas — all areas within a state
+app.get("/api/geo/states/:id/areas", async (req, res) => {
+  const stateId = parseInt(req.params.id);
+  if(isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
+  try {
+    const { data: state } = await supabase
+      .from("states").select("id,geoname_id,name,country_iso").eq("id", stateId).single();
+    if(!state) return res.status(404).json({ error:"State not found" });
+
+    const { data, error } = await supabase
+      .from("areas")
+      .select("id,name,ascii_name,area_code,type,population,latitude,longitude,timezone")
+      .eq("state_id", stateId)
+      .order("population", { ascending:false });
+    if(error) return res.status(500).json({ error: error.message });
+
+    // If no areas yet, fetch in background
+    if(!data || data.length === 0) {
+      fetchAndSaveAreas(state.id, state.geoname_id, state.country_iso).catch(console.error);
+      return res.json({ areas:[], loading:true, message:"Areas loading — check back in 30 seconds" });
+    }
+    res.json({ areas: data, total: data.length, state_name: state.name });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/geo/areas/:id — single area detail
+app.get("/api/geo/areas/:id", async (req, res) => {
+  const id = parseInt(req.params.id);
+  if(isNaN(id)) return res.status(400).json({ error:"Invalid area ID" });
+  try {
+    const { data, error } = await supabase
+      .from("areas").select("*").eq("id", id).single();
+    if(error || !data) return res.status(404).json({ error:"Area not found" });
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/geo/search?q=lagos&type=area|state — search across hierarchy
+app.get("/api/geo/search", async (req, res) => {
+  const q    = (req.query.q||"").trim();
+  const type = req.query.type||"all";
+  const iso  = req.query.iso?.toUpperCase()||null;
+  if(q.length < 2) return res.status(400).json({ error:"Query must be at least 2 characters" });
+  try {
+    const results = {};
+    if(type === "all" || type === "state") {
+      let sq = supabase.from("states").select("id,name,state_code,type,country_iso,population")
+        .ilike("name", `%${q}%`).limit(10);
+      if(iso) sq = sq.eq("country_iso", iso);
+      const { data } = await sq;
+      results.states = data||[];
+    }
+    if(type === "all" || type === "area") {
+      let aq = supabase.from("areas").select("id,name,type,country_iso,state_id,population")
+        .ilike("name", `%${q}%`).limit(10);
+      if(iso) aq = aq.eq("country_iso", iso);
+      const { data } = await aq;
+      results.areas = data||[];
+    }
+    res.json(results);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/geo/stats — how many states/areas loaded per country
+app.get("/api/geo/stats", async (req, res) => {
+  try {
+    const [{ count:totalStates }, { count:totalAreas }] = await Promise.all([
+      supabase.from("states").select("*", { count:"exact", head:true }),
+      supabase.from("areas").select("*",  { count:"exact", head:true }),
+    ]);
+    // Per-country state counts
+    const { data:perCountry } = await supabase
+      .from("states")
+      .select("country_iso")
+      .order("country_iso");
+    const countryCounts = {};
+    (perCountry||[]).forEach(r => {
+      countryCounts[r.country_iso] = (countryCounts[r.country_iso]||0) + 1;
+    });
+    const loaded   = Object.keys(countryCounts).length;
+    const pending  = 195 - loaded;
+    res.json({
+      total_states:  totalStates||0,
+      total_areas:   totalAreas||0,
+      countries_loaded: loaded,
+      countries_pending: pending,
+      coverage_pct:  Math.round(loaded/195*100),
+      per_country:   countryCounts,
+      geo_pipeline_running: geoPipelineRunning,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/geo/pipeline/start — trigger full geo pipeline
+app.post("/api/geo/pipeline/start", async (req, res) => {
+  if(geoPipelineRunning) return res.json({ message:"Geo pipeline already running" });
+  res.json({ message:"Geo pipeline started — populating states and areas for all 195 countries" });
+  runGeoPipeline().catch(console.error);
+});
+
+// POST /api/geo/pipeline/country/:iso — trigger geo pipeline for one country
+app.post("/api/geo/pipeline/country/:iso", async (req, res) => {
+  const iso = req.params.iso.toUpperCase();
+  const country = COUNTRIES.find(c=>c.iso===iso);
+  if(!country) return res.status(404).json({ error:"Unknown ISO" });
+  res.json({ message:`Geo pipeline started for ${country.name}` });
+  (async () => {
+    const statesAdded = await fetchAndSaveStates(iso);
+    if(statesAdded > 0) {
+      const { data:savedStates } = await supabase.from("states")
+        .select("id,geoname_id").eq("country_iso", iso);
+      for(const state of savedStates||[]) {
+        await fetchAndSaveAreas(state.id, state.geoname_id, iso);
+        await new Promise(r=>setTimeout(r,250));
+      }
+    }
+    console.log(`✅ [GeoPipeline] ${country.name} complete`);
+  })().catch(console.error);
+});
 
 // ══════════════════════════════════════════════════════════════════
 // GLOBE — EXACT WORKING CODE FROM LAST KNOWN WORKING LOG
