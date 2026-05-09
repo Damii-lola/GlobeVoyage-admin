@@ -998,17 +998,26 @@ const ISO3_TO_ISO2 = {
 async function getCountryGeonameId(iso2) {
   if(!ENV.GEONAMES_USERNAME) return null;
   try {
-    const r = await axios.get("http://api.geonames.org/searchJSON", {
+    const r = await axios.get("https://secure.geonames.net/searchJSON", {
       params:{
-        country:      iso2,
-        featureCode:  "PCLI",
-        maxRows:      1,
-        username:     ENV.GEONAMES_USERNAME,
+        country:     iso2,
+        featureCode: "PCLI",
+        maxRows:     1,
+        username:    ENV.GEONAMES_USERNAME,
       },
-      timeout: 8000,
+      timeout: 10000,
     });
-    return r.data?.geonames?.[0]?.geonameId || null;
-  } catch(e) { return null; }
+    // GeoNames returns status object on auth errors
+    if(r.data?.status) {
+      console.error(`[GeoNames] Auth error for ${iso2}:`, r.data.status.message, `(code ${r.data.status.value})`);
+      return null;
+    }
+    const id = r.data?.geonames?.[0]?.geonameId || null;
+    return id;
+  } catch(e) {
+    console.error(`[GeoNames] getCountryGeonameId error (${iso2}):`, e.message);
+    return null;
+  }
 }
 
 // Fetch states/provinces/territories for a country
@@ -1022,19 +1031,30 @@ async function fetchAndSaveStates(iso) {
   if(!countryGeonameId) return 0;
 
   try {
-    const r = await axios.get("http://api.geonames.org/childrenJSON", {
+    const r = await axios.get("https://secure.geonames.net/childrenJSON", {
       params:{ geonameId: countryGeonameId, username: ENV.GEONAMES_USERNAME },
-      timeout: 10000,
+      timeout: 12000,
     });
+    // Check for GeoNames auth error
+    if(r.data?.status) {
+      console.error(`[GeoNames] childrenJSON error for ${iso}:`, r.data.status.message, `(code ${r.data.status.value})`);
+      geoStatus.last_error = r.data.status.message;
+      return 0;
+    }
     const children = r.data?.geonames || [];
-    // Filter to admin level 1 only (states/provinces)
+    // Accept all admin divisions — some countries use non-ADM1 codes
     const states = children.filter(c =>
-      ["ADM1","ADM1H","PROV","TERR","PRSH"].includes(c.fcode)
+      ["ADM1","ADM1H","ADM2","PROV","TERR","PRSH","ADMD","RGNE","RGN"].includes(c.fcode)
+      || c.fclName?.toLowerCase().includes("admin")
     );
-    if(!states.length) return 0;
+    // If nothing matched strict filter, take all children as states
+    const finalStates = states.length > 0 ? states : children.slice(0, 50);
+    if(!finalStates.length) {
+      console.log(`[GeoPipeline] ${iso} — no children found (country may have no subdivisions)`);
+      return 0;
+    }
 
-    // Upsert all states for this country
-    const rows = states.map(s => ({
+    const rows = finalStates.map(s => ({
       country_iso: iso,
       geoname_id:  s.geonameId,
       name:        s.name,
@@ -1049,11 +1069,12 @@ async function fetchAndSaveStates(iso) {
     }));
 
     const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
-    if(error) { console.error(`States upsert error ${iso}:`, error.message); return 0; }
-    console.log(`✓ States: ${iso} — ${rows.length} saved`);
+    if(error) { console.error(`[GeoPipeline] States upsert error ${iso}:`, error.message); return 0; }
+    console.log(`[GeoPipeline] ✓ ${iso} — ${rows.length} states saved`);
     return rows.length;
   } catch(e) {
-    console.error(`fetchAndSaveStates error ${iso}:`, e.message);
+    console.error(`[GeoPipeline] fetchAndSaveStates error ${iso}:`, e.message);
+    geoStatus.last_error = e.message;
     return 0;
   }
 }
@@ -1062,7 +1083,7 @@ async function fetchAndSaveStates(iso) {
 async function fetchAndSaveAreas(stateId, stateGeonameId, countryIso) {
   if(!ENV.GEONAMES_USERNAME) return 0;
   try {
-    const r = await axios.get("http://api.geonames.org/childrenJSON", {
+    const r = await axios.get("https://secure.geonames.net/childrenJSON", {
       params:{ geonameId: stateGeonameId, username: ENV.GEONAMES_USERNAME },
       timeout: 10000,
     });
@@ -1110,53 +1131,88 @@ function geonameTypeLabel(fcode) {
 // This is a one-time heavy operation (~3,000+ API calls)
 // After first run, data is static — only re-run if needed
 let geoPipelineRunning = false;
+const geoStatus = {
+  total_states:   0,
+  total_areas:    0,
+  countries_done: 0,
+  current_country: null,
+  last_error:     null,
+  started_at:     null,
+  completed_at:   null,
+};
 
-async function runGeoPipeline() {
+async function runGeoPipeline(forceAll=false) {
   if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
-  if(!ENV.GEONAMES_USERNAME) { console.log("[GeoPipeline] No GEONAMES_USERNAME set"); return; }
+  if(!ENV.GEONAMES_USERNAME) {
+    geoStatus.last_error = "GEONAMES_USERNAME not set in Render environment variables";
+    console.error("[GeoPipeline]", geoStatus.last_error);
+    return;
+  }
 
-  geoPipelineRunning = true;
+  // Quick auth test before starting full run
+  console.log("[GeoPipeline] Testing GeoNames auth...");
+  const testId = await getCountryGeonameId("NG"); // Nigeria test
+  if(!testId) {
+    geoStatus.last_error = "GeoNames auth failed. Check: 1) GEONAMES_USERNAME is correct, 2) Webservice enabled at geonames.org/manageaccount";
+    console.error("[GeoPipeline]", geoStatus.last_error);
+    return;
+  }
+  console.log(`[GeoPipeline] ✓ Auth OK — Nigeria geonameId: ${testId}`);
+
+  geoPipelineRunning   = true;
+  geoStatus.started_at = new Date().toISOString();
+  geoStatus.last_error = null;
+  geoStatus.total_states = 0;
+  geoStatus.total_areas  = 0;
+  geoStatus.countries_done = 0;
+
   console.log(`🌍 [GeoPipeline] Starting for ${COUNTRIES.length} countries...`);
-  let totalStates = 0, totalAreas = 0;
 
   for(const country of COUNTRIES) {
     try {
-      // Skip if country already has states loaded
-      const { count } = await supabase.from("states")
-        .select("*", { count:"exact", head:true })
-        .eq("country_iso", country.iso);
-      if(count > 0) {
-        console.log(`⏭  [GeoPipeline] ${country.name} — ${count} states already loaded`);
-        continue;
+      geoStatus.current_country = country.name;
+
+      // Skip if already loaded (unless forceAll)
+      if(!forceAll) {
+        const { count } = await supabase.from("states")
+          .select("*", { count:"exact", head:true })
+          .eq("country_iso", country.iso);
+        if(count !== null && count > 0) {
+          console.log(`⏭  [GeoPipeline] ${country.name} — ${count} states already loaded, skipping`);
+          geoStatus.countries_done++;
+          continue;
+        }
       }
 
       const statesAdded = await fetchAndSaveStates(country.iso);
-      totalStates += statesAdded;
+      geoStatus.total_states += statesAdded;
 
       if(statesAdded > 0) {
-        // Now fetch areas for each state
         const { data: savedStates } = await supabase.from("states")
           .select("id, geoname_id, name")
           .eq("country_iso", country.iso);
 
         for(const state of savedStates||[]) {
           const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
-          totalAreas += areasAdded;
-          // Small delay between area fetches to respect rate limit
-          await new Promise(r=>setTimeout(r,250));
+          geoStatus.total_areas += areasAdded;
+          await new Promise(r=>setTimeout(r,300));
         }
       }
 
-      console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states, ${totalAreas} total areas`);
-      // Delay between countries
+      geoStatus.countries_done++;
+      console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | total: ${geoStatus.countries_done}/${COUNTRIES.length} countries`);
       await new Promise(r=>setTimeout(r,500));
+
     } catch(e) {
+      geoStatus.last_error = `${country.name}: ${e.message}`;
       console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
     }
   }
 
-  geoPipelineRunning = false;
-  console.log(`🎉 [GeoPipeline] Complete — ${totalStates} states, ${totalAreas} areas loaded`);
+  geoPipelineRunning      = false;
+  geoStatus.current_country = null;
+  geoStatus.completed_at  = new Date().toISOString();
+  console.log(`🎉 [GeoPipeline] Complete — ${geoStatus.total_states} states, ${geoStatus.total_areas} areas across ${geoStatus.countries_done} countries`);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1765,8 +1821,20 @@ app.get("/api/status", (req,res) => {
                             : "⏳ Not yet run this session (next: "+nextRuns[0].time_utc+")",
     },
     geo_pipeline: {
-      running: geoPipelineRunning,
-      status:  geoPipelineRunning ? "🔄 Geo pipeline running..." : "✅ Idle",
+      running:         geoPipelineRunning,
+      progress_pct:    Math.round(geoStatus.countries_done / COUNTRIES.length * 100),
+      countries_done:  geoStatus.countries_done,
+      current_country: geoStatus.current_country,
+      total_states:    geoStatus.total_states,
+      total_areas:     geoStatus.total_areas,
+      last_error:      geoStatus.last_error,
+      status: geoPipelineRunning
+        ? `🔄 Running — ${geoStatus.countries_done}/${COUNTRIES.length} countries (${geoStatus.current_country||"..."})`
+        : geoStatus.completed_at
+          ? `✅ Complete — ${geoStatus.total_states} states, ${geoStatus.total_areas} areas`
+          : geoStatus.last_error
+            ? `❌ Error: ${geoStatus.last_error}`
+            : "⏳ Not yet run",
     },
   });
 });
@@ -1959,6 +2027,7 @@ app.get("/api/health", async (req,res) => {
     {label:"OpenAQ",            key:"OPENAQ_API_KEY"},
     {label:"Aviationstack",     key:"AVIATIONSTACK_API_KEY"},
     {label:"RapidAPI",          key:"RAPIDAPI_KEY"},
+    {label:"GeoNames",          key:"GEONAMES_USERNAME"},
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
@@ -2148,16 +2217,90 @@ app.get("/api/geo/stats", async (req, res) => {
       countries_pending: pending,
       coverage_pct:  Math.round(loaded/195*100),
       per_country:   countryCounts,
-      geo_pipeline_running: geoPipelineRunning,
-    });
+      geo_pipeline_running:   geoPipelineRunning,
+    geo_pipeline_status:    {
+      countries_done:  geoStatus.countries_done,
+      progress_pct:    Math.round(geoStatus.countries_done / COUNTRIES.length * 100),
+      current_country: geoStatus.current_country,
+      last_error:      geoStatus.last_error,
+      total_states:    geoStatus.total_states,
+      total_areas:     geoStatus.total_areas,
+    },
+    geonames_configured: !!ENV.GEONAMES_USERNAME,
+  });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/geo/pipeline/status — live progress
+app.get("/api/geo/pipeline/status", (req, res) => {
+  res.json({
+    running:         geoPipelineRunning,
+    countries_done:  geoStatus.countries_done,
+    countries_total: COUNTRIES.length,
+    progress_pct:    Math.round(geoStatus.countries_done / COUNTRIES.length * 100),
+    total_states:    geoStatus.total_states,
+    total_areas:     geoStatus.total_areas,
+    current_country: geoStatus.current_country,
+    last_error:      geoStatus.last_error,
+    started_at:      geoStatus.started_at,
+    completed_at:    geoStatus.completed_at,
+    geonames_configured: !!ENV.GEONAMES_USERNAME,
+  });
+});
+
+// GET /api/geo/test — verify GeoNames credentials work
+app.get("/api/geo/test", async (req, res) => {
+  if(!ENV.GEONAMES_USERNAME) {
+    return res.json({ ok:false, error:"GEONAMES_USERNAME not set in Render env vars" });
+  }
+  try {
+    const r = await axios.get("https://secure.geonames.net/searchJSON", {
+      params:{ country:"NG", featureCode:"PCLI", maxRows:1, username: ENV.GEONAMES_USERNAME },
+      timeout: 10000,
+    });
+    if(r.data?.status) {
+      const code = r.data.status.value;
+      return res.json({
+        ok:    false,
+        error: r.data.status.message,
+        code,
+        fix:   code === 10 ? "Invalid username — check GEONAMES_USERNAME in Render env vars"
+             : code === 19 ? "Webservice not enabled — go to geonames.org/manageaccount and click Enable Free Webservice"
+             : code === 18 ? "Daily limit exceeded — try again tomorrow"
+             : "GeoNames error code " + code,
+      });
+    }
+    const geonameId = r.data?.geonames?.[0]?.geonameId;
+    res.json({
+      ok: true,
+      username:     ENV.GEONAMES_USERNAME,
+      test_country: "Nigeria",
+      geoname_id:   geonameId,
+      message:      "GeoNames auth working — ready to run geo pipeline",
+    });
+  } catch(e) {
+    res.json({ ok:false, error: e.message });
+  }
 });
 
 // POST /api/geo/pipeline/start — trigger full geo pipeline
 app.post("/api/geo/pipeline/start", async (req, res) => {
-  if(geoPipelineRunning) return res.json({ message:"Geo pipeline already running" });
-  res.json({ message:"Geo pipeline started — populating states and areas for all 195 countries" });
-  runGeoPipeline().catch(console.error);
+  if(geoPipelineRunning) {
+    return res.json({
+      message:         "Already running",
+      progress_pct:    Math.round(geoStatus.countries_done / COUNTRIES.length * 100),
+      current_country: geoStatus.current_country,
+    });
+  }
+  if(!ENV.GEONAMES_USERNAME) {
+    return res.status(400).json({
+      error: "GEONAMES_USERNAME not set in Render environment variables",
+      fix:   "Add GEONAMES_USERNAME to Render → Environment → Environment Variables, then redeploy",
+    });
+  }
+  const forceAll = req.query.force === "true";
+  res.json({ message:"Geo pipeline started", force_all: forceAll });
+  runGeoPipeline(forceAll).catch(console.error);
 });
 
 // POST /api/geo/pipeline/country/:iso — trigger geo pipeline for one country
