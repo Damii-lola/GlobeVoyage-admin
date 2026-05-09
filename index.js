@@ -1749,6 +1749,38 @@ async function runStartupPipeline() {
 // ══════════════════════════════════════════════════════════════════
 // API ENDPOINTS
 // ══════════════════════════════════════════════════════════════════
+// ── Admin auth middleware ─────────────────────────────────────────
+function requireAdminAuth(req, res, next) {
+  const authHeader = req.headers["authorization"]||"";
+  const b64 = authHeader.startsWith("Basic ") ? authHeader.slice(6) : "";
+  const [user, pass] = Buffer.from(b64, "base64").toString().split(":");
+  const validUser = process.env.ADMIN_USERNAME||"admin";
+  const validPass = process.env.ADMIN_PASSWORD||"changeme";
+  if(user === validUser && pass === validPass) return next();
+  res.setHeader("WWW-Authenticate", 'Basic realm="GlobeVoyage Mission Control"');
+  res.status(401).send("Unauthorized");
+}
+
+// ── /admin_control — mission control dashboard (password protected) ──
+const fs2 = require("fs");
+const path2 = require("path");
+app.get("/admin_control", requireAdminAuth, (req, res) => {
+  const filePath = path2.join(__dirname, "admin_control.html");
+  if(fs2.existsSync(filePath)) {
+    res.setHeader("Content-Type","text/html");
+    res.setHeader("Cache-Control","no-store"); // never cache — always re-auth
+    res.sendFile(filePath);
+  } else {
+    res.status(404).send("admin_control.html not found — make sure it is in the project root");
+  }
+});
+
+// Block any directory listing or access to source files
+app.get("/admin_control.html", (req,res) => res.status(404).end());
+app.get("/index.js", (req,res) => res.status(404).end());
+app.get("/package.json", (req,res) => res.status(404).end());
+
+// ── Root — public landing page ────────────────────────────────────
 app.get("/", (req,res) => {
   const uptimeSecs = Math.round((Date.now() - new Date(serverBoot).getTime()) / 1000);
   res.json({
@@ -2195,10 +2227,22 @@ app.get("/api/geo/search", async (req, res) => {
 // GET /api/geo/stats — how many states/areas loaded per country
 app.get("/api/geo/stats", async (req, res) => {
   try {
-    const [{ count:totalStates }, { count:totalAreas }] = await Promise.all([
+    const [statesRes, areasRes] = await Promise.all([
       supabase.from("states").select("*", { count:"exact", head:true }),
       supabase.from("areas").select("*",  { count:"exact", head:true }),
     ]);
+    // Tables might not exist yet — return zeros gracefully
+    if(statesRes.error) {
+      return res.json({
+        total_states:0, total_areas:0, countries_loaded:0, countries_pending:195,
+        coverage_pct:0, per_country:{}, geo_pipeline_running:geoPipelineRunning,
+        geonames_configured:!!ENV.GEONAMES_USERNAME,
+        setup_needed:true,
+        message:"Run geo_migration.sql in Supabase first to create states and areas tables",
+      });
+    }
+    const totalStates = statesRes.count||0;
+    const totalAreas  = areasRes.count||0;
     // Per-country state counts
     const { data:perCountry } = await supabase
       .from("states")
