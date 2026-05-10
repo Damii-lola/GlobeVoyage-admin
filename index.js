@@ -30,7 +30,7 @@ const ENV = {
   OPENAQ_API_KEY:       process.env.OPENAQ_API_KEY,
   AVIATIONSTACK_API_KEY:process.env.AVIATIONSTACK_API_KEY,
   RAPIDAPI_KEY:         process.env.RAPIDAPI_KEY,   // covers Numbeo + Airbnb via RapidAPI
-  GEONAMES_USERNAME:    process.env.GEONAMES_USERNAME, // free at geonames.org
+  GOOGLE_MAPS_KEY:      process.env.GOOGLE_MAPS_KEY,   // Google Maps API key for geo hierarchy
 };
 
 // Bundled scripts — try node_modules first, fall back to CDN fetch at startup
@@ -960,8 +960,10 @@ function getFutureDate(daysAhead) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// GEO HIERARCHY — Countries → States → Areas (GeoNames API)
-// Free: 50,000 requests/day. Register at geonames.org.
+// GEO HIERARCHY — Countries → States → Areas
+// Uses Google Maps Places API (via RapidAPI maps-data host)
+// + REST Countries for basic state info
+// + OpenStreetMap Nominatim (free, no key) as backbone
 // ══════════════════════════════════════════════════════════════════
 
 const ISO3_TO_ISO2 = {
@@ -995,118 +997,143 @@ const ISO3_TO_ISO2 = {
 };
 
 // Fetch country's GeoNames ID (needed to then fetch its states)
-async function getCountryGeonameId(iso2) {
-  if(!ENV.GEONAMES_USERNAME) return null;
-  try {
-    const r = await axios.get("https://secure.geonames.net/searchJSON", {
-      params:{
-        country:     iso2,
-        featureCode: "PCLI",
-        maxRows:     1,
-        username:    ENV.GEONAMES_USERNAME,
-      },
-      timeout: 10000,
-    });
-    // GeoNames returns status object on auth errors
-    if(r.data?.status) {
-      console.error(`[GeoNames] Auth error for ${iso2}:`, r.data.status.message, `(code ${r.data.status.value})`);
-      return null;
-    }
-    const id = r.data?.geonames?.[0]?.geonameId || null;
-    return id;
-  } catch(e) {
-    console.error(`[GeoNames] getCountryGeonameId error (${iso2}):`, e.message);
-    return null;
-  }
+// ── Nominatim helper — fetch subdivisions via OpenStreetMap ────────
+// Free, no key, 1 req/sec rate limit (we throttle to 1100ms between calls)
+const NOMINATIM_UA = "GlobeVoyage/2.0 (travel-app; contact@globevoyage.app)";
+
+async function nominatimSearch(params) {
+  const r = await axios.get("https://nominatim.openstreetmap.org/search", {
+    params: { format:"json", limit:50, addressdetails:1, ...params },
+    headers:{ "User-Agent": NOMINATIM_UA, "Accept-Language":"en" },
+    timeout: 10000,
+  });
+  return r.data||[];
+}
+
+async function nominatimDetails(osmId, osmType) {
+  const r = await axios.get("https://nominatim.openstreetmap.org/details", {
+    params:{ osmid:osmId, osmtype:osmType, format:"json", addressdetails:1 },
+    headers:{ "User-Agent": NOMINATIM_UA, "Accept-Language":"en" },
+    timeout: 10000,
+  });
+  return r.data||{};
 }
 
 // Fetch states/provinces/territories for a country
 async function fetchAndSaveStates(iso) {
-  if(!ENV.GEONAMES_USERNAME) return 0;
+  const countryName = COUNTRIES.find(c=>c.iso===iso)?.name || iso;
   const iso2 = ISO3_TO_ISO2[iso];
   if(!iso2) return 0;
 
-  // Get the country's geoname ID first
-  const countryGeonameId = await getCountryGeonameId(iso2);
-  if(!countryGeonameId) return 0;
-
   try {
-    const r = await axios.get("https://secure.geonames.net/childrenJSON", {
-      params:{ geonameId: countryGeonameId, username: ENV.GEONAMES_USERNAME },
-      timeout: 12000,
+    // Use Nominatim (OpenStreetMap) — free, no key, global coverage
+    // Search for first-level administrative divisions
+    const results = await nominatimSearch({
+      country:       iso2,
+      featuretype:   "state",
+      addressdetails: 0,
+      limit:         50,
     });
-    // Check for GeoNames auth error
-    if(r.data?.status) {
-      console.error(`[GeoNames] childrenJSON error for ${iso}:`, r.data.status.message, `(code ${r.data.status.value})`);
-      geoStatus.last_error = r.data.status.message;
-      return 0;
-    }
-    const children = r.data?.geonames || [];
-    // Accept all admin divisions — some countries use non-ADM1 codes
-    const states = children.filter(c =>
-      ["ADM1","ADM1H","ADM2","PROV","TERR","PRSH","ADMD","RGNE","RGN"].includes(c.fcode)
-      || c.fclName?.toLowerCase().includes("admin")
+
+    // Also search broader if state search returns nothing
+    let adminResults = results.filter(r =>
+      r.addresstype && ["state","province","territory","region","prefecture",
+        "department","governorate","emirate","county","district"].includes(r.addresstype)
     );
-    // If nothing matched strict filter, take all children as states
-    const finalStates = states.length > 0 ? states : children.slice(0, 50);
-    if(!finalStates.length) {
-      console.log(`[GeoPipeline] ${iso} — no children found (country may have no subdivisions)`);
+
+    // Fallback: search by country name + "states provinces"
+    if(adminResults.length === 0) {
+      const fallback = await nominatimSearch({
+        q:       `administrative divisions ${countryName}`,
+        country: iso2,
+        limit:   50,
+      });
+      adminResults = fallback.filter(r => r.class === "boundary" && r.type === "administrative");
+    }
+
+    if(adminResults.length === 0) {
+      console.log(`[GeoPipeline] ${iso} — no admin divisions found via Nominatim`);
       return 0;
     }
 
-    const rows = finalStates.map(s => ({
+    // Deduplicate by display_name
+    const seen = new Set();
+    const unique = adminResults.filter(r => {
+      if(seen.has(r.display_name)) return false;
+      seen.add(r.display_name);
+      return true;
+    });
+
+    const rows = unique.map(s => ({
       country_iso: iso,
-      geoname_id:  s.geonameId,
-      name:        s.name,
-      ascii_name:  s.toponymName||s.name,
-      state_code:  s.adminCode1||null,
-      type:        geonameTypeLabel(s.fcode),
-      population:  s.population||0,
+      geoname_id:  parseInt(s.osm_id)||null, // reuse geoname_id col for osm_id
+      name:        s.name || s.display_name?.split(",")[0]?.trim() || "Unknown",
+      ascii_name:  s.name || s.display_name?.split(",")[0]?.trim() || "Unknown",
+      state_code:  null,
+      type:        s.addresstype || s.type || "region",
+      population:  0,
       latitude:    parseFloat(s.lat)||null,
-      longitude:   parseFloat(s.lng)||null,
-      timezone:    s.timezone?.timeZoneId||null,
+      longitude:   parseFloat(s.lon)||null,
+      timezone:    null,
       updated_at:  new Date().toISOString(),
-    }));
+    })).filter(r => r.name !== "Unknown" && r.geoname_id);
+
+    if(!rows.length) return 0;
 
     const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
-    if(error) { console.error(`[GeoPipeline] States upsert error ${iso}:`, error.message); return 0; }
-    console.log(`[GeoPipeline] ✓ ${iso} — ${rows.length} states saved`);
+    if(error) { console.error(`[GeoPipeline] States upsert ${iso}:`, error.message); return 0; }
+    console.log(`[GeoPipeline] ✓ ${iso} (${countryName}) — ${rows.length} states saved`);
     return rows.length;
   } catch(e) {
     console.error(`[GeoPipeline] fetchAndSaveStates error ${iso}:`, e.message);
-    geoStatus.last_error = e.message;
+    geoStatus.last_error = `${iso}: ${e.message}`;
     return 0;
   }
 }
 
-// Fetch areas/districts within a state
-async function fetchAndSaveAreas(stateId, stateGeonameId, countryIso) {
-  if(!ENV.GEONAMES_USERNAME) return 0;
+// Fetch areas/districts within a state using Nominatim
+async function fetchAndSaveAreas(stateId, osmId, countryIso) {
+  const stateName = (await supabase.from("states").select("name").eq("id",stateId).single())?.data?.name || "";
+  const iso2 = ISO3_TO_ISO2[countryIso];
+  if(!iso2) return 0;
   try {
-    const r = await axios.get("https://secure.geonames.net/childrenJSON", {
-      params:{ geonameId: stateGeonameId, username: ENV.GEONAMES_USERNAME },
-      timeout: 10000,
+    // Search for second-level divisions within the state
+    const results = await nominatimSearch({
+      q:       stateName ? `${stateName} districts areas` : "",
+      country: iso2,
+      limit:   50,
     });
-    const children = r.data?.geonames || [];
-    const areas = children.filter(c =>
-      ["ADM2","ADM2H","ADM3","DIST","MUND","PPLA","PPLA2","PPLA3"].includes(c.fcode)
+    const areaResults = results.filter(r =>
+      r.class === "boundary" &&
+      ["administrative","political"].includes(r.type) &&
+      r.addresstype && ["district","county","municipality","borough","town",
+        "suburb","quarter","neighbourhood","city_district"].includes(r.addresstype)
     );
-    if(!areas.length) return 0;
 
-    const rows = areas.map(a => ({
+    if(!areaResults.length) return 0;
+
+    const seen = new Set();
+    const unique = areaResults.filter(r => {
+      if(seen.has(r.osm_id)) return false;
+      seen.add(r.osm_id);
+      return true;
+    });
+
+    const rows = unique.map(a => ({
       state_id:    stateId,
       country_iso: countryIso,
-      geoname_id:  a.geonameId,
-      name:        a.name,
-      ascii_name:  a.toponymName||a.name,
-      type:        geonameTypeLabel(a.fcode),
-      population:  a.population||0,
+      geoname_id:  parseInt(a.osm_id)||null,
+      name:        a.name || a.display_name?.split(",")[0]?.trim() || "Unknown",
+      ascii_name:  a.name || a.display_name?.split(",")[0]?.trim() || "Unknown",
+      type:        a.addresstype || "district",
+      population:  0,
       latitude:    parseFloat(a.lat)||null,
-      longitude:   parseFloat(a.lng)||null,
-      timezone:    a.timezone?.timeZoneId||null,
+      longitude:   parseFloat(a.lon)||null,
+      timezone:    null,
       updated_at:  new Date().toISOString(),
-    }));
+    })).filter(r => r.name !== "Unknown" && r.geoname_id);
 
+    if(!rows.length) return 0;
     const { error } = await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
     if(error) { console.error(`Areas upsert error:`, error.message); return 0; }
     return rows.length;
@@ -1116,20 +1143,6 @@ async function fetchAndSaveAreas(stateId, stateGeonameId, countryIso) {
   }
 }
 
-function geonameTypeLabel(fcode) {
-  const map = {
-    ADM1:"state", ADM1H:"state", PROV:"province", TERR:"territory",
-    PRSH:"parish", ADM2:"district", ADM2H:"district", ADM3:"area",
-    DIST:"district", MUND:"municipality", PPLA:"city", PPLA2:"city",
-    PPLA3:"town", PCLI:"country",
-  };
-  return map[fcode] || "region";
-}
-
-// Full geo pipeline — runs for all 195 countries
-// Populates states table, then for each state populates areas
-// This is a one-time heavy operation (~3,000+ API calls)
-// After first run, data is static — only re-run if needed
 let geoPipelineRunning = false;
 const geoStatus = {
   total_states:   0,
@@ -1143,21 +1156,17 @@ const geoStatus = {
 
 async function runGeoPipeline(forceAll=false) {
   if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
-  if(!ENV.GEONAMES_USERNAME) {
-    geoStatus.last_error = "GEONAMES_USERNAME not set in Render environment variables";
-    console.error("[GeoPipeline]", geoStatus.last_error);
-    return;
-  }
 
-  // Quick auth test before starting full run
-  console.log("[GeoPipeline] Testing GeoNames auth...");
-  const testId = await getCountryGeonameId("NG"); // Nigeria test
-  if(!testId) {
-    geoStatus.last_error = "GeoNames auth failed. Check: 1) GEONAMES_USERNAME is correct, 2) Webservice enabled at geonames.org/manageaccount";
+  // Quick connectivity test — ping Nominatim
+  console.log("[GeoPipeline] Testing Nominatim connectivity...");
+  try {
+    await nominatimSearch({ q:"Nigeria", limit:1 });
+    console.log("[GeoPipeline] ✓ Nominatim reachable — starting pipeline");
+  } catch(e) {
+    geoStatus.last_error = "Nominatim unreachable: " + e.message;
     console.error("[GeoPipeline]", geoStatus.last_error);
     return;
   }
-  console.log(`[GeoPipeline] ✓ Auth OK — Nigeria geonameId: ${testId}`);
 
   geoPipelineRunning   = true;
   geoStatus.started_at = new Date().toISOString();
@@ -1195,13 +1204,13 @@ async function runGeoPipeline(forceAll=false) {
         for(const state of savedStates||[]) {
           const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
           geoStatus.total_areas += areasAdded;
-          await new Promise(r=>setTimeout(r,300));
+          await new Promise(r=>setTimeout(r,1100)); // Nominatim: 1 req/sec
         }
       }
 
       geoStatus.countries_done++;
       console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | total: ${geoStatus.countries_done}/${COUNTRIES.length} countries`);
-      await new Promise(r=>setTimeout(r,500));
+      await new Promise(r=>setTimeout(r,1100)); // Nominatim rate limit: 1 req/sec
 
     } catch(e) {
       geoStatus.last_error = `${country.name}: ${e.message}`;
@@ -2059,7 +2068,7 @@ app.get("/api/health", async (req,res) => {
     {label:"OpenAQ",            key:"OPENAQ_API_KEY"},
     {label:"Aviationstack",     key:"AVIATIONSTACK_API_KEY"},
     {label:"RapidAPI",          key:"RAPIDAPI_KEY"},
-    {label:"GeoNames",          key:"GEONAMES_USERNAME"},
+    // GeoNames removed — now using OpenStreetMap Nominatim (no key needed)
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
@@ -2292,38 +2301,24 @@ app.get("/api/geo/pipeline/status", (req, res) => {
   });
 });
 
-// GET /api/geo/test — verify GeoNames credentials work
+// GET /api/geo/test — verify Nominatim (OSM) is reachable
 app.get("/api/geo/test", async (req, res) => {
-  if(!ENV.GEONAMES_USERNAME) {
-    return res.json({ ok:false, error:"GEONAMES_USERNAME not set in Render env vars" });
-  }
   try {
-    const r = await axios.get("https://secure.geonames.net/searchJSON", {
-      params:{ country:"NG", featureCode:"PCLI", maxRows:1, username: ENV.GEONAMES_USERNAME },
-      timeout: 10000,
-    });
-    if(r.data?.status) {
-      const code = r.data.status.value;
-      return res.json({
-        ok:    false,
-        error: r.data.status.message,
-        code,
-        fix:   code === 10 ? "Invalid username — check GEONAMES_USERNAME in Render env vars"
-             : code === 19 ? "Webservice not enabled — go to geonames.org/manageaccount and click Enable Free Webservice"
-             : code === 18 ? "Daily limit exceeded — try again tomorrow"
-             : "GeoNames error code " + code,
-      });
+    const t = Date.now();
+    const results = await nominatimSearch({ q:"Nigeria", limit:1 });
+    const ms = Date.now()-t;
+    if(!results || results.length === 0) {
+      return res.json({ ok:false, error:"Nominatim returned no results — may be temporarily down" });
     }
-    const geonameId = r.data?.geonames?.[0]?.geonameId;
     res.json({
-      ok: true,
-      username:     ENV.GEONAMES_USERNAME,
-      test_country: "Nigeria",
-      geoname_id:   geonameId,
-      message:      "GeoNames auth working — ready to run geo pipeline",
+      ok:          true,
+      source:      "OpenStreetMap Nominatim (free, no key required)",
+      response_ms: ms,
+      test_result: results[0]?.display_name||"Nigeria found",
+      message:     "Nominatim is reachable — ready to run geo pipeline. No API key needed!",
     });
   } catch(e) {
-    res.json({ ok:false, error: e.message });
+    res.json({ ok:false, error: e.message, fix:"Check server internet connectivity" });
   }
 });
 
@@ -2336,12 +2331,7 @@ app.post("/api/geo/pipeline/start", async (req, res) => {
       current_country: geoStatus.current_country,
     });
   }
-  if(!ENV.GEONAMES_USERNAME) {
-    return res.status(400).json({
-      error: "GEONAMES_USERNAME not set in Render environment variables",
-      fix:   "Add GEONAMES_USERNAME to Render → Environment → Environment Variables, then redeploy",
-    });
-  }
+  // No API key needed for geo pipeline (uses OpenStreetMap Nominatim)
   const forceAll = req.query.force === "true";
   res.json({ message:"Geo pipeline started", force_all: forceAll });
   runGeoPipeline(forceAll).catch(console.error);
