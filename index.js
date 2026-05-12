@@ -78,7 +78,7 @@ setInterval(() => {
   mod.get(SELF+"/", r=>r.resume()).on("error",()=>{});
   pingCount++;
   lastPingAt = new Date().toISOString();
-}, 5000); // 5 seconds
+}, 5000);
 
 const WIKI_UA = "GlobeVoyage/2.0 (travel-intelligence-app; nodejs-axios)";
 
@@ -369,7 +369,6 @@ async function fetchWikivoyage(countryName) {
   });
 }
 
-// OpenTripMap — free, no auth required for basic tier
 async function fetchFoursquare(countryName, iso) {
   return timed("foursquare", async () => {
     const coords = geoCoordCache[iso] || geoCoordCache["FRA"];
@@ -420,12 +419,6 @@ function riskScore(text){
   return "low";
 }
 
-// ══════════════════════════════════════════════════════════════════
-// GNEWS — rate-limit guard (free tier = 10 req/day hard cap)
-// - Health check NEVER calls the live API (was burning quota every 30s)
-// - Per-country cache: 6h TTL
-// - Hard cap: 8 calls/day, leaving 2 in reserve
-// ══════════════════════════════════════════════════════════════════
 const gnewsCache = {};
 let gnewsCallsToday = 0;
 let gnewsResetAt    = Date.now() + 24*60*60*1000;
@@ -462,10 +455,8 @@ const ALPHA2 = {
 
 async function fetchNews(countryName, iso) {
   if(!ENV.GNEWS_API_KEY) return [];
-  // Return cached data if still fresh
   const cached = gnewsCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
-  // Check daily budget
   if(!gnewsBudgetAvailable()) {
     console.log(`[GNews] Daily cap reached (${gnewsCallsToday}/${GNEWS_DAILY_CAP}) — skipping ${iso}`);
     return cached ? cached.data : [];
@@ -607,7 +598,6 @@ async function fetchGeoapify(countryName, iso) {
   });
 }
 
-// Social trends — Google News RSS + Bing News RSS (reliable, no broken Google Trends)
 async function fetchSocialTrends(countryName) {
   return timed("social_proxy", async () => {
     const results = [];
@@ -655,7 +645,6 @@ async function fetchSocialTrends(countryName) {
 // NEW DATA SOURCES
 // ══════════════════════════════════════════════════════════════════
 
-// ── 1. UNSPLASH — high quality country/destination photos ─────────
 async function fetchUnsplash(countryName) {
   if(!ENV.UNSPLASH_ACCESS_KEY) return [];
   return timed("unsplash", async () => {
@@ -684,12 +673,9 @@ async function fetchUnsplash(countryName) {
   });
 }
 
-// ── 2. OPENAQ — real-time air quality ────────────────────────────
-// Free, no key required (key gives higher rate limits)
 async function fetchAirQuality(countryName, iso) {
   return timed("openaq", async () => {
-    // Use ISO2 code — OpenAQ uses alpha-2
-    const ALPHA2 = {
+    const ALPHA2_AQ = {
       DZA:"DZ",EGY:"EG",GHA:"GH",KEN:"KE",MAR:"MA",NGA:"NG",ZAF:"ZA",TUN:"TN",
       ETH:"ET",TZA:"TZ",UGA:"UG",CMR:"CM",SEN:"SN",CIV:"CI",AGO:"AO",SDN:"SD",
       CHN:"CN",IND:"IN",IDN:"ID",JPN:"JP",KOR:"KR",MYS:"MY",PAK:"PK",PHL:"PH",
@@ -703,34 +689,27 @@ async function fetchAirQuality(countryName, iso) {
       ARG:"AR",BRA:"BR",CHL:"CL",COL:"CO",PER:"PE",VEN:"VE",ECU:"EC",BOL:"BO",
       AUS:"AU",NZL:"NZ",
     };
-    const cc = ALPHA2[iso];
+    const cc = ALPHA2_AQ[iso];
     if(!cc) return null;
-
     const headers = ENV.OPENAQ_API_KEY ? { "X-API-Key": ENV.OPENAQ_API_KEY } : {};
     const r = await axios.get("https://api.openaq.org/v3/locations", {
       params:{ countries_id: cc, limit: 5, order_by: "lastUpdated", sort_order: "desc" },
       headers,
       timeout: 8000,
     });
-
     const locations = r.data?.results||[];
     if(!locations.length) return null;
-
-    // Get latest measurements from first location
     const locId = locations[0].id;
     const m = await axios.get(`https://api.openaq.org/v3/locations/${locId}/latest`, {
       headers,
       timeout: 8000,
     });
-
     const measurements = m.data?.results||[];
     const byParam = {};
     measurements.forEach(x => { byParam[x.parameter] = x.value; });
-
     const pm25 = byParam["pm25"] ?? byParam["pm2.5"] ?? null;
     const pm10 = byParam["pm10"] ?? null;
     const aqi  = pm25 !== null ? calcAQI(pm25) : null;
-
     return {
       location:  locations[0].name||countryName,
       pm25:      pm25 !== null ? Math.round(pm25*10)/10 : null,
@@ -743,7 +722,6 @@ async function fetchAirQuality(countryName, iso) {
 }
 
 function calcAQI(pm25) {
-  // US EPA AQI breakpoints for PM2.5
   const bp = [
     [0,12,0,50],[12.1,35.4,51,100],[35.5,55.4,101,150],
     [55.5,150.4,151,200],[150.5,250.4,201,300],[250.5,500.4,301,500],
@@ -765,16 +743,12 @@ function aqiLabel(aqi) {
   return "Hazardous";
 }
 
-// ── 3. AVIATIONSTACK — live flights & major airports ─────────────
-// Free tier: 100 req/month. We cache aggressively (24h per country).
 const aviationCache = {};
 async function fetchFlights(countryName, iso) {
   if(!ENV.AVIATIONSTACK_API_KEY) return null;
   const cached = aviationCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
-
   return timed("aviationstack", async () => {
-    // Get airports in country first
     const r = await axios.get("http://api.aviationstack.com/v1/airports", {
       params:{
         access_key: ENV.AVIATIONSTACK_API_KEY,
@@ -790,20 +764,16 @@ async function fetchFlights(countryName, iso) {
       latitude:  a.latitude,
       longitude: a.longitude,
     })).filter(a => a.iata);
-
     const data = { airports, major_hub: airports[0]||null };
     aviationCache[iso] = { data, expires: Date.now()+24*60*60*1000 };
     return data;
   });
 }
 
-// ── 4. NUMBEO COST OF LIVING — via RapidAPI ───────────────────────
-// Uses the correct Numbeo API endpoint. Cached 24h per country to
-// avoid 429s on free tier (10 req/month hard limit).
 const numbeoCache = {};
 let numbeoCallsThisMonth = 0;
 let numbeoResetAt = Date.now() + 30*24*60*60*1000;
-const NUMBEO_MONTHLY_CAP = 8; // leave 2 in reserve from free tier's 10
+const NUMBEO_MONTHLY_CAP = 8;
 
 function numbeoResetIfNeeded() {
   if(Date.now() > numbeoResetAt) { numbeoCallsThisMonth=0; numbeoResetAt=Date.now()+30*24*60*60*1000; }
@@ -813,15 +783,12 @@ async function fetchCostOfLiving(countryName) {
   if(!ENV.RAPIDAPI_KEY) return null;
   const cached = numbeoCache[countryName];
   if(cached && Date.now() < cached.expires) return cached.data;
-
   numbeoResetIfNeeded();
   if(numbeoCallsThisMonth >= NUMBEO_MONTHLY_CAP) {
     console.log(`[Numbeo] Monthly cap reached — skipping ${countryName}`);
     return cached ? cached.data : null;
   }
-
   return timed("numbeo", async () => {
-    // Correct Numbeo RapidAPI endpoint
     const r = await axios.get("https://cost-of-living-and-prices.p.rapidapi.com/prices", {
       params:{ country_name: countryName, city_name: "" },
       headers:{
@@ -855,12 +822,10 @@ async function fetchCostOfLiving(countryName) {
   });
 }
 
-// ── 5. REST COUNTRIES — rich country metadata (free, no key) ─────
 const restCountriesCache = {};
 async function fetchRestCountries(iso) {
   if(restCountriesCache[iso]) return restCountriesCache[iso];
   return timed("rest_countries", async () => {
-    // REST Countries uses alpha-3 ISO codes
     const r = await axios.get(`https://restcountries.com/v3.1/alpha/${iso}`, {
       timeout: 8000,
     });
@@ -895,16 +860,13 @@ async function fetchRestCountries(iso) {
   });
 }
 
-// ── 6. AIRBNB — via RapidAPI ──────────────────────────────────────
 const airbnbCache = {};
 async function fetchAirbnb(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
   const cached = airbnbCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
-
   const geo = geoCoordCache[iso];
   if(!geo) return null;
-
   return timed("airbnb", async () => {
     const r = await axios.get("https://airbnb13.p.rapidapi.com/search-location", {
       params:{
@@ -924,7 +886,6 @@ async function fetchAirbnb(countryName, iso) {
       },
       timeout: 12000,
     });
-
     const results = r.data?.results||[];
     const listings = results.slice(0,6).map(l => ({
       id:          l.id,
@@ -940,7 +901,6 @@ async function fetchAirbnb(countryName, iso) {
       url:         l.url||null,
       city:        l.city||countryName,
     }));
-
     const prices = listings.map(l=>l.price).filter(Boolean);
     const data = {
       listings,
@@ -960,10 +920,7 @@ function getFutureDate(daysAhead) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// GEO HIERARCHY — Countries → States → Areas
-// Uses Google Maps Places API (via RapidAPI maps-data host)
-// + REST Countries for basic state info
-// + OpenStreetMap Nominatim (free, no key) as backbone
+// GEO HIERARCHY
 // ══════════════════════════════════════════════════════════════════
 
 const ISO3_TO_ISO2 = {
@@ -996,9 +953,6 @@ const ISO3_TO_ISO2 = {
   PNG:"PG",WSM:"WS",SLB:"SB",TON:"TO",TUV:"TV",VUT:"VU",
 };
 
-// Fetch country's GeoNames ID (needed to then fetch its states)
-// ── Nominatim helper — fetch subdivisions via OpenStreetMap ────────
-// Free, no key, 1 req/sec rate limit (we throttle to 1100ms between calls)
 const NOMINATIM_UA = "GlobeVoyage/2.0 (travel-app; contact@globevoyage.app)";
 
 async function nominatimSearch(params) {
@@ -1019,29 +973,21 @@ async function nominatimDetails(osmId, osmType) {
   return r.data||{};
 }
 
-// Fetch states/provinces/territories for a country
 async function fetchAndSaveStates(iso) {
   const countryName = COUNTRIES.find(c=>c.iso===iso)?.name || iso;
   const iso2 = ISO3_TO_ISO2[iso];
   if(!iso2) return 0;
-
   try {
-    // Use Nominatim (OpenStreetMap) — free, no key, global coverage
-    // Search for first-level administrative divisions
     const results = await nominatimSearch({
       country:       iso2,
       featuretype:   "state",
       addressdetails: 0,
       limit:         50,
     });
-
-    // Also search broader if state search returns nothing
     let adminResults = results.filter(r =>
       r.addresstype && ["state","province","territory","region","prefecture",
         "department","governorate","emirate","county","district"].includes(r.addresstype)
     );
-
-    // Fallback: search by country name + "states provinces"
     if(adminResults.length === 0) {
       const fallback = await nominatimSearch({
         q:       `administrative divisions ${countryName}`,
@@ -1050,23 +996,19 @@ async function fetchAndSaveStates(iso) {
       });
       adminResults = fallback.filter(r => r.class === "boundary" && r.type === "administrative");
     }
-
     if(adminResults.length === 0) {
       console.log(`[GeoPipeline] ${iso} — no admin divisions found via Nominatim`);
       return 0;
     }
-
-    // Deduplicate by display_name
     const seen = new Set();
     const unique = adminResults.filter(r => {
       if(seen.has(r.display_name)) return false;
       seen.add(r.display_name);
       return true;
     });
-
     const rows = unique.map(s => ({
       country_iso: iso,
-      geoname_id:  parseInt(s.osm_id)||null, // reuse geoname_id col for osm_id
+      geoname_id:  parseInt(s.osm_id)||null,
       name:        s.name || s.display_name?.split(",")[0]?.trim() || "Unknown",
       ascii_name:  s.name || s.display_name?.split(",")[0]?.trim() || "Unknown",
       state_code:  null,
@@ -1077,9 +1019,7 @@ async function fetchAndSaveStates(iso) {
       timezone:    null,
       updated_at:  new Date().toISOString(),
     })).filter(r => r.name !== "Unknown" && r.geoname_id);
-
     if(!rows.length) return 0;
-
     const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
     if(error) { console.error(`[GeoPipeline] States upsert ${iso}:`, error.message); return 0; }
     console.log(`[GeoPipeline] ✓ ${iso} (${countryName}) — ${rows.length} states saved`);
@@ -1091,13 +1031,11 @@ async function fetchAndSaveStates(iso) {
   }
 }
 
-// Fetch areas/districts within a state using Nominatim
 async function fetchAndSaveAreas(stateId, osmId, countryIso) {
   const stateName = (await supabase.from("states").select("name").eq("id",stateId).single())?.data?.name || "";
   const iso2 = ISO3_TO_ISO2[countryIso];
   if(!iso2) return 0;
   try {
-    // Search for second-level divisions within the state
     const results = await nominatimSearch({
       q:       stateName ? `${stateName} districts areas` : "",
       country: iso2,
@@ -1109,16 +1047,13 @@ async function fetchAndSaveAreas(stateId, osmId, countryIso) {
       r.addresstype && ["district","county","municipality","borough","town",
         "suburb","quarter","neighbourhood","city_district"].includes(r.addresstype)
     );
-
     if(!areaResults.length) return 0;
-
     const seen = new Set();
     const unique = areaResults.filter(r => {
       if(seen.has(r.osm_id)) return false;
       seen.add(r.osm_id);
       return true;
     });
-
     const rows = unique.map(a => ({
       state_id:    stateId,
       country_iso: countryIso,
@@ -1132,7 +1067,6 @@ async function fetchAndSaveAreas(stateId, osmId, countryIso) {
       timezone:    null,
       updated_at:  new Date().toISOString(),
     })).filter(r => r.name !== "Unknown" && r.geoname_id);
-
     if(!rows.length) return 0;
     const { error } = await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
     if(error) { console.error(`Areas upsert error:`, error.message); return 0; }
@@ -1156,8 +1090,6 @@ const geoStatus = {
 
 async function runGeoPipeline(forceAll=false) {
   if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
-
-  // Quick connectivity test — ping Nominatim
   console.log("[GeoPipeline] Testing Nominatim connectivity...");
   try {
     await nominatimSearch({ q:"Nigeria", limit:1 });
@@ -1167,21 +1099,16 @@ async function runGeoPipeline(forceAll=false) {
     console.error("[GeoPipeline]", geoStatus.last_error);
     return;
   }
-
   geoPipelineRunning   = true;
   geoStatus.started_at = new Date().toISOString();
   geoStatus.last_error = null;
   geoStatus.total_states = 0;
   geoStatus.total_areas  = 0;
   geoStatus.countries_done = 0;
-
   console.log(`🌍 [GeoPipeline] Starting for ${COUNTRIES.length} countries...`);
-
   for(const country of COUNTRIES) {
     try {
       geoStatus.current_country = country.name;
-
-      // Skip if already loaded (unless forceAll)
       if(!forceAll) {
         const { count } = await supabase.from("states")
           .select("*", { count:"exact", head:true })
@@ -1192,32 +1119,26 @@ async function runGeoPipeline(forceAll=false) {
           continue;
         }
       }
-
       const statesAdded = await fetchAndSaveStates(country.iso);
       geoStatus.total_states += statesAdded;
-
       if(statesAdded > 0) {
         const { data: savedStates } = await supabase.from("states")
           .select("id, geoname_id, name")
           .eq("country_iso", country.iso);
-
         for(const state of savedStates||[]) {
           const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
           geoStatus.total_areas += areasAdded;
-          await new Promise(r=>setTimeout(r,1100)); // Nominatim: 1 req/sec
+          await new Promise(r=>setTimeout(r,1100));
         }
       }
-
       geoStatus.countries_done++;
       console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | total: ${geoStatus.countries_done}/${COUNTRIES.length} countries`);
-      await new Promise(r=>setTimeout(r,1100)); // Nominatim rate limit: 1 req/sec
-
+      await new Promise(r=>setTimeout(r,1100));
     } catch(e) {
       geoStatus.last_error = `${country.name}: ${e.message}`;
       console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
     }
   }
-
   geoPipelineRunning      = false;
   geoStatus.current_country = null;
   geoStatus.completed_at  = new Date().toISOString();
@@ -1228,7 +1149,6 @@ async function runGeoPipeline(forceAll=false) {
 // ADDITIONAL RAPIDAPI TRAVEL SOURCES
 // ══════════════════════════════════════════════════════════════════
 
-// ── 7. BOOKING.COM — hotel prices & availability ─────────────────
 const bookingCache = {};
 async function fetchBooking(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -1237,7 +1157,6 @@ async function fetchBooking(countryName, iso) {
   const geo = geoCoordCache[iso];
   if(!geo) return null;
   return timed("booking", async () => {
-    // Search hotels in capital city area
     const r = await axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchDestination", {
       params:{ query: countryName },
       headers:{
@@ -1248,7 +1167,6 @@ async function fetchBooking(countryName, iso) {
     });
     const dest = r.data?.data?.[0];
     if(!dest) return null;
-
     const checkin  = getFutureDate(14);
     const checkout = getFutureDate(17);
     const h = await axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchHotels", {
@@ -1291,7 +1209,6 @@ async function fetchBooking(countryName, iso) {
   });
 }
 
-// ── 8. TRIPADVISOR — attractions & reviews ───────────────────────
 const tripadvisorCache = {};
 async function fetchTripadvisor(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -1320,14 +1237,12 @@ async function fetchTripadvisor(countryName, iso) {
   });
 }
 
-// ── 9. SKYSCANNER — flight prices ────────────────────────────────
 const skyscannerCache = {};
 async function fetchFlightPrices(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
   const cached = skyscannerCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
   return timed("skyscanner", async () => {
-    // Search for the country's main airport entity
     const r = await axios.get("https://sky-scrapper.p.rapidapi.com/api/v1/flights/searchAirport", {
       params:{ query: countryName, locale:"en-US" },
       headers:{
@@ -1351,27 +1266,18 @@ async function fetchFlightPrices(countryName, iso) {
   });
 }
 
-// ── 10. CURRENCY EXCHANGE — live rates ───────────────────────────
 const currencyCache = {};
 async function fetchCurrencyRates(iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
-  // Get currency code from REST Countries data if available
-  const meta = restCountriesCache[iso];
-  const currencyCode = meta?.currencies?.[0] ? Object.keys(
-    // we stored as array of {name,symbol} so derive from country_meta
-    {}
-  )[0] : null;
-  // Use a simple free exchange API instead — no key needed
   if(currencyCache["USD"] && Date.now() < currencyCache["USD"].expires) return currencyCache["USD"].data;
   return timed("currency", async () => {
     const r = await axios.get("https://open.er-api.com/v6/latest/USD", { timeout:6000 });
     const data = { base:"USD", rates: r.data?.rates||{}, updated: r.data?.time_last_update_utc };
-    currencyCache["USD"] = { data, expires: Date.now()+60*60*1000 }; // 1h cache
+    currencyCache["USD"] = { data, expires: Date.now()+60*60*1000 };
     return data;
   });
 }
 
-// ── 11. GOOGLE MAPS PLACES — via RapidAPI ────────────────────────
 const placesCache = {};
 async function fetchGooglePlaces(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -1414,7 +1320,6 @@ async function fetchGooglePlaces(countryName, iso) {
   });
 }
 
-// ── 12. TRAVEL ADVISOR — travel tips & visa info ─────────────────
 const travelAdvisorCache = {};
 async function fetchTravelAdvisor(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -1453,8 +1358,6 @@ async function fetchTravelAdvisor(countryName, iso) {
   });
 }
 
-// ── 13. PRICELINE — hotel deals ──────────────────────────────────
-// Using Hotels API as a reliable fallback hotel source
 const hotelsCache = {};
 async function fetchHotelDeals(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -1479,7 +1382,6 @@ async function fetchHotelDeals(countryName, iso) {
   });
 }
 
-// ── 14. YOUTUBE TRAVEL VIDEOS ────────────────────────────────────
 const youtubeCache = {};
 async function fetchYoutubeVideos(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -1515,8 +1417,6 @@ async function fetchYoutubeVideos(countryName, iso) {
   });
 }
 
-// ── 15. WORLD AIR QUALITY INDEX ──────────────────────────────────
-// Supplemental AQI source — free public API, no key needed
 const waqiCache = {};
 async function fetchWAQI(countryName, iso) {
   const cached = waqiCache[iso];
@@ -1618,14 +1518,12 @@ async function runPipeline(iso, countryName, continent) {
     safe(()=>fetchEventbrite(countryName),        []),
     safe(()=>fetchPredictHQ(countryName),         []),
     safe(()=>fetchSocialTrends(countryName),      []),
-    // New sources
     safe(()=>fetchUnsplash(countryName),          []),
     safe(()=>fetchAirQuality(countryName, iso),   null),
     safe(()=>fetchFlights(countryName, iso),      null),
     safe(()=>fetchCostOfLiving(countryName),      null),
     safe(()=>fetchRestCountries(iso),             null),
     safe(()=>fetchAirbnb(countryName, iso),       null),
-    // Additional RapidAPI sources
     safe(()=>fetchBooking(countryName, iso),      null),
     safe(()=>fetchTripadvisor(countryName, iso),  null),
     safe(()=>fetchFlightPrices(countryName, iso), null),
@@ -1656,14 +1554,12 @@ async function runPipeline(iso, countryName, continent) {
     ai_recommendations:ai?.recommendations||[], ai_calendar:ai?.calendar||[],
     ai_trending_now:ai?.trending_now||[], ai_safety_summary:ai?.safety_summary||null,
     ai_best_months:ai?.best_months||[], ai_avoid_if:ai?.avoid_if||null, ai_hidden_gem:ai?.hidden_gem||null,
-    // New data sources
     photos:          photos||[],
     air_quality:     airQuality||waqi||null,
     flights:         flights||null,
     cost_of_living:  costOfLiving||null,
     country_meta:    countryMeta||null,
     airbnb:          airbnb||null,
-    // Additional RapidAPI sources
     booking:         booking||null,
     tripadvisor:     tripadvisor||null,
     flight_prices:   flightPrices||null,
@@ -1678,7 +1574,6 @@ async function runPipeline(iso, countryName, continent) {
   if(error) console.error(`❌ DB error ${countryName}:`, error.message);
   else      console.log(`✅ ${countryName} done in ${duration}ms`);
 
-  // Insert new run log then trim to keep only latest 3 per country
   await supabase.from("pipeline_runs").insert({
     iso, status:error?"error":"success",
     sources:Object.fromEntries(Object.entries(sourceHealth).map(([k,v])=>[k,v.ok?"ok":"fail"])),
@@ -1686,14 +1581,12 @@ async function runPipeline(iso, countryName, continent) {
     ran_at: new Date().toISOString(),
   });
 
-  // Delete all but the 3 most recent runs for this country
   try {
     const { data: runs } = await supabase
       .from("pipeline_runs")
       .select("id, ran_at")
       .eq("iso", iso)
       .order("ran_at", { ascending: false });
-
     if(runs && runs.length > 3) {
       const toDelete = runs.slice(3).map(r => r.id);
       await supabase.from("pipeline_runs").delete().in("id", toDelete);
@@ -1706,7 +1599,6 @@ async function runPipeline(iso, countryName, continent) {
   return {success:!error,duration};
 }
 
-// ── Pipeline runner — processes all 195 countries with throttle ──
 async function runFullPipeline(triggerName) {
   console.log(`🚀 [${triggerName}] Pipeline starting for ${COUNTRIES.length} countries...`);
   pipelineStatus.running     = true;
@@ -1729,13 +1621,10 @@ async function runFullPipeline(triggerName) {
   console.log(`✅ [${triggerName}] Pipeline complete — ${ran} ran`);
 }
 
-// ── Scheduled runs: 6AM, 2PM, 10PM (8-hour intervals) ────────────
-// Cron syntax: minute hour * * *
 cron.schedule("0 6  * * *", () => runFullPipeline("06:00"), { timezone:"UTC" });
 cron.schedule("0 14 * * *", () => runFullPipeline("14:00"), { timezone:"UTC" });
 cron.schedule("0 22 * * *", () => runFullPipeline("22:00"), { timezone:"UTC" });
 
-// ── Startup pipeline — only runs countries that have no data yet ──
 async function runStartupPipeline() {
   console.log("🚀 [Startup] Checking for countries with no data...");
   const { data: existing } = await supabase
@@ -1758,17 +1647,53 @@ async function runStartupPipeline() {
 // ══════════════════════════════════════════════════════════════════
 // API ENDPOINTS
 // ══════════════════════════════════════════════════════════════════
+
 // ── Admin auth middleware ─────────────────────────────────────────
 function requireAdminAuth(req, res, next) {
   const authHeader = req.headers["authorization"]||"";
   const b64 = authHeader.startsWith("Basic ") ? authHeader.slice(6) : "";
-  const [user, pass] = Buffer.from(b64, "base64").toString().split(":");
-  const validUser = process.env.ADMIN_USERNAME||"admin";
-  const validPass = process.env.ADMIN_PASSWORD||"changeme";
-  if(user === validUser && pass === validPass) return next();
+  const decoded = Buffer.from(b64, "base64").toString();
+  const colonIndex = decoded.indexOf(":");
+  const user = decoded.slice(0, colonIndex);
+  const pass = decoded.slice(colonIndex + 1);
+  const validUser = process.env.ADMIN_USERNAME || "admin";
+  const validPass = process.env.ADMIN_PASSWORD || "changeme";
+  if (user === validUser && pass === validPass) return next();
   res.setHeader("WWW-Authenticate", 'Basic realm="GlobeVoyage Mission Control"');
   res.status(401).send("Unauthorized");
 }
+
+// ── NEW: Auth verify endpoint — called directly by login.html ─────
+// Validates credentials from ADMIN_USERNAME / ADMIN_PASSWORD env vars
+// and returns JSON so the login page doesn't depend on HEAD behaviour.
+app.post("/api/auth/verify", (req, res) => {
+  const authHeader = req.headers["authorization"] || "";
+  const b64 = authHeader.startsWith("Basic ") ? authHeader.slice(6) : "";
+
+  if (!b64) {
+    return res.status(401).json({ ok: false, error: "No credentials provided" });
+  }
+
+  const decoded = Buffer.from(b64, "base64").toString();
+  const colonIndex = decoded.indexOf(":");
+  if (colonIndex === -1) {
+    return res.status(401).json({ ok: false, error: "Invalid credentials format" });
+  }
+
+  const user = decoded.slice(0, colonIndex);
+  const pass = decoded.slice(colonIndex + 1);
+
+  const validUser = process.env.ADMIN_USERNAME || "admin";
+  const validPass = process.env.ADMIN_PASSWORD || "changeme";
+
+  if (user === validUser && pass === validPass) {
+    console.log(`[Auth] ✅ Login success for user: ${user}`);
+    return res.json({ ok: true, user });
+  }
+
+  console.log(`[Auth] ❌ Login failed for user: ${user}`);
+  return res.status(401).json({ ok: false, error: "Invalid username or password" });
+});
 
 // ── /admin_control — mission control dashboard (password protected) ──
 const fs2 = require("fs");
@@ -1777,32 +1702,13 @@ app.get("/admin_control", requireAdminAuth, (req, res) => {
   const filePath = path2.join(__dirname, "admin_control.html");
   if(fs2.existsSync(filePath)) {
     res.setHeader("Content-Type","text/html");
-    res.setHeader("Cache-Control","no-store"); // never cache — always re-auth
+    res.setHeader("Cache-Control","no-store");
     res.sendFile(filePath);
   } else {
     res.status(404).send("admin_control.html not found — make sure it is in the project root");
   }
 });
 
-// ── Auth verify endpoint — used by login page ─────────────────────
-app.post("/api/auth/verify", (req, res) => {
-  const authHeader = req.headers["authorization"] || "";
-  const b64 = authHeader.startsWith("Basic ") ? authHeader.slice(6) : "";
-  const decoded = Buffer.from(b64, "base64").toString();
-  const colonIndex = decoded.indexOf(":");
-  const user = decoded.slice(0, colonIndex);
-  const pass = decoded.slice(colonIndex + 1);
-
-  const validUser = process.env.ADMIN_USERNAME || "admin";
-  const validPass = process.env.ADMIN_PASSWORD || "changeme";
-
-  if (user === validUser && pass === validPass) {
-    return res.json({ ok: true, user });
-  }
-  return res.status(401).json({ ok: false, error: "Invalid credentials" });
-});
-
-// Block any directory listing or access to source files
 app.get("/admin_control.html", (req,res) => res.status(404).end());
 app.get("/index.js", (req,res) => res.status(404).end());
 app.get("/package.json", (req,res) => res.status(404).end());
@@ -1826,8 +1732,6 @@ app.get("/api/status", (req,res) => {
   const uptimeSecs = Math.round((now - new Date(serverBoot).getTime()) / 1000);
   const uptimeMins = Math.round(uptimeSecs / 60);
   const uptimeHrs  = (uptimeSecs / 3600).toFixed(1);
-
-  // Calculate next scheduled run times (UTC)
   const runHours = [6, 14, 22];
   const nowDate  = new Date();
   const nextRuns = runHours.map(h => {
@@ -1843,11 +1747,8 @@ app.get("/api/status", (req,res) => {
       timestamp:   next.toISOString(),
     };
   });
-
-  // Ping health: if last ping was > 15s ago, something is wrong
   const pingAgeMs  = lastPingAt ? now - new Date(lastPingAt).getTime() : null;
   const pingHealthy = pingAgeMs !== null && pingAgeMs < 15000;
-
   res.json({
     server: {
       booted_at:     serverBoot,
@@ -1946,7 +1847,6 @@ app.get("/api/pipeline/status", async (req,res) => {
 app.get("/api/health", async (req,res) => {
   const checks = {};
 
-  // ── Supabase ──────────────────────────────────────────────────
   try {
     const {error,count} = await supabase.from("country_intel").select("*",{count:"exact",head:true});
     checks.supabase = {ok:!error,label:"Supabase DB",detail:error?error.message:`Connected — ${count} countries stored`};
@@ -1954,7 +1854,6 @@ app.get("/api/health", async (req,res) => {
 
   checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
 
-  // ── GNews: never call live API ─────────────────────────────
   gnewsResetIfNeeded();
   const gnewsRemaining = GNEWS_DAILY_CAP - gnewsCallsToday;
   sourceHealth.newsapi = {
@@ -1966,7 +1865,6 @@ app.get("/api/health", async (req,res) => {
       : "No API key",
   };
 
-  // ── Active live tests for all other sources ───────────────────
   const liveTest = async (key, fn) => {
     const start = Date.now();
     try {
@@ -1984,12 +1882,7 @@ app.get("/api/health", async (req,res) => {
     }
   };
 
-  // ── Live tests: ONLY free/unlimited sources ────────────────────
-  // NEVER live-test paid RapidAPI endpoints — they have strict monthly
-  // rate limits and the health check runs every 30s which burns quota instantly.
-  // Paid sources just get a key-configured check.
   await Promise.allSettled([
-    // Free — safe to ping every 30s
     liveTest("wikipedia",     ()=>axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
     liveTest("wikivoyage",    ()=>axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
     liveTest("foursquare",    ()=>axios.get("https://api.opentripmap.com/0.1/en/places/radius",{params:{radius:10000,lon:2.35,lat:48.85,format:"json",limit:1,apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12"},timeout:6000})),
@@ -2000,8 +1893,6 @@ app.get("/api/health", async (req,res) => {
     liveTest("rest_countries",()=>axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000})),
     liveTest("currency",      ()=>axios.get("https://open.er-api.com/v6/latest/USD",{timeout:6000})),
     liveTest("waqi",          ()=>axios.get("https://api.waqi.info/feed/geo:48.85;2.35/?token=demo",{timeout:6000})),
-
-    // Has key — test once (reasonable rate limit)
     ENV.OPENWEATHER_API_KEY
       ? liveTest("openweathermap",()=>axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000}))
       : Promise.resolve(sourceHealth.openweathermap={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
@@ -2017,30 +1908,25 @@ app.get("/api/health", async (req,res) => {
     ENV.UNSPLASH_ACCESS_KEY
       ? liveTest("unsplash",      ()=>axios.get("https://api.unsplash.com/search/photos",{params:{query:"travel",per_page:1},headers:{Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}`},timeout:6000}))
       : Promise.resolve(sourceHealth.unsplash={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
-    // OpenAQ — free but needs correct auth header format
     ENV.OPENAQ_API_KEY
       ? liveTest("openaq",        ()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},headers:{"X-API-Key":ENV.OPENAQ_API_KEY},timeout:6000}))
       : liveTest("openaq",        ()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},timeout:6000})),
   ]);
 
-  // ── Paid/rate-limited sources: key-presence check only ──────────
-  // These are NOT live-tested to preserve monthly quotas.
-  // Status shows "Key configured" or "No API key".
   const paidSources = {
-    newsapi:        { key: ENV.GNEWS_API_KEY,        label:"GNews API",              detail: ENV.GNEWS_API_KEY ? (() => { gnewsResetIfNeeded(); return `Key configured — ${GNEWS_DAILY_CAP-gnewsCallsToday}/${GNEWS_DAILY_CAP} calls remaining today`; })() : "No API key" },
-    aviationstack:  { key: ENV.AVIATIONSTACK_API_KEY, label:"Aviationstack Flights", detail: ENV.AVIATIONSTACK_API_KEY ? "Key configured (100 req/month — not live-tested)" : "No API key" },
-    numbeo:         { key: ENV.RAPIDAPI_KEY,          label:"Numbeo Cost of Living", detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    airbnb:         { key: ENV.RAPIDAPI_KEY,          label:"Airbnb (RapidAPI)",     detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    booking:        { key: ENV.RAPIDAPI_KEY,          label:"Booking.com",           detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    tripadvisor:    { key: ENV.RAPIDAPI_KEY,          label:"TripAdvisor",           detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    skyscanner:     { key: ENV.RAPIDAPI_KEY,          label:"Skyscanner Flights",    detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    google_places:  { key: ENV.RAPIDAPI_KEY,          label:"Google Places",         detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    travel_advisor: { key: ENV.RAPIDAPI_KEY,          label:"Travel Advisor",        detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    hotels_com:     { key: ENV.RAPIDAPI_KEY,          label:"Hotels.com",            detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    youtube:        { key: ENV.RAPIDAPI_KEY,          label:"YouTube Travel Videos", detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    newsapi:        { key: ENV.GNEWS_API_KEY,         detail: ENV.GNEWS_API_KEY ? (() => { gnewsResetIfNeeded(); return `Key configured — ${GNEWS_DAILY_CAP-gnewsCallsToday}/${GNEWS_DAILY_CAP} calls remaining today`; })() : "No API key" },
+    aviationstack:  { key: ENV.AVIATIONSTACK_API_KEY, detail: ENV.AVIATIONSTACK_API_KEY ? "Key configured (100 req/month — not live-tested)" : "No API key" },
+    numbeo:         { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    airbnb:         { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    booking:        { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    tripadvisor:    { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    skyscanner:     { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    google_places:  { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    travel_advisor: { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    hotels_com:     { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    youtube:        { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
   };
   Object.entries(paidSources).forEach(([k, v]) => {
-    // Preserve last successful pipeline run data if exists, otherwise set key-check status
     const existing = sourceHealth[k];
     sourceHealth[k] = {
       ok:             !!v.key,
@@ -2086,7 +1972,6 @@ app.get("/api/health", async (req,res) => {
     {label:"OpenAQ",            key:"OPENAQ_API_KEY"},
     {label:"Aviationstack",     key:"AVIATIONSTACK_API_KEY"},
     {label:"RapidAPI",          key:"RAPIDAPI_KEY"},
-    // GeoNames removed — now using OpenStreetMap Nominatim (no key needed)
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
@@ -2097,6 +1982,7 @@ app.get("/api/health", async (req,res) => {
 
   res.json({status:Object.values(checks).filter(c=>c.ok===false).length===0?"healthy":"degraded",timestamp:new Date().toISOString(),checks});
 });
+
 app.get("/api/countries", (req,res) => {
   const byCont={};
   COUNTRIES.forEach(c=>{if(!byCont[c.continent])byCont[c.continent]=[];byCont[c.continent].push(c);});
@@ -2169,7 +2055,6 @@ app.delete("/api/destinations/:id",async(req,res)=>{const{error}=await supabase.
 // GEO HIERARCHY API ENDPOINTS
 // ══════════════════════════════════════════════════════════════════
 
-// GET /api/geo/countries/:iso/states — all states for a country
 app.get("/api/geo/countries/:iso/states", async (req, res) => {
   const iso = req.params.iso.toUpperCase();
   try {
@@ -2179,7 +2064,6 @@ app.get("/api/geo/countries/:iso/states", async (req, res) => {
       .eq("country_iso", iso)
       .order("name");
     if(error) return res.status(500).json({ error: error.message });
-    // If no states in DB yet, trigger a fetch in the background
     if(!data || data.length === 0) {
       fetchAndSaveStates(iso).catch(console.error);
       return res.json({ states:[], loading:true, message:"States loading — check back in 30 seconds" });
@@ -2188,7 +2072,6 @@ app.get("/api/geo/countries/:iso/states", async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/geo/states/:id/areas — all areas within a state
 app.get("/api/geo/states/:id/areas", async (req, res) => {
   const stateId = parseInt(req.params.id);
   if(isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
@@ -2196,15 +2079,12 @@ app.get("/api/geo/states/:id/areas", async (req, res) => {
     const { data: state } = await supabase
       .from("states").select("id,geoname_id,name,country_iso").eq("id", stateId).single();
     if(!state) return res.status(404).json({ error:"State not found" });
-
     const { data, error } = await supabase
       .from("areas")
       .select("id,name,ascii_name,area_code,type,population,latitude,longitude,timezone")
       .eq("state_id", stateId)
       .order("population", { ascending:false });
     if(error) return res.status(500).json({ error: error.message });
-
-    // If no areas yet, fetch in background
     if(!data || data.length === 0) {
       fetchAndSaveAreas(state.id, state.geoname_id, state.country_iso).catch(console.error);
       return res.json({ areas:[], loading:true, message:"Areas loading — check back in 30 seconds" });
@@ -2213,7 +2093,6 @@ app.get("/api/geo/states/:id/areas", async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/geo/areas/:id — single area detail
 app.get("/api/geo/areas/:id", async (req, res) => {
   const id = parseInt(req.params.id);
   if(isNaN(id)) return res.status(400).json({ error:"Invalid area ID" });
@@ -2225,7 +2104,6 @@ app.get("/api/geo/areas/:id", async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/geo/search?q=lagos&type=area|state — search across hierarchy
 app.get("/api/geo/search", async (req, res) => {
   const q    = (req.query.q||"").trim();
   const type = req.query.type||"all";
@@ -2251,26 +2129,22 @@ app.get("/api/geo/search", async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/geo/stats — how many states/areas loaded per country
 app.get("/api/geo/stats", async (req, res) => {
   try {
     const [statesRes, areasRes] = await Promise.all([
       supabase.from("states").select("*", { count:"exact", head:true }),
       supabase.from("areas").select("*",  { count:"exact", head:true }),
     ]);
-    // Tables might not exist yet — return zeros gracefully
     if(statesRes.error) {
       return res.json({
         total_states:0, total_areas:0, countries_loaded:0, countries_pending:195,
         coverage_pct:0, per_country:{}, geo_pipeline_running:geoPipelineRunning,
-        geonames_configured:!!ENV.GEONAMES_USERNAME,
         setup_needed:true,
         message:"Run geo_migration.sql in Supabase first to create states and areas tables",
       });
     }
     const totalStates = statesRes.count||0;
     const totalAreas  = areasRes.count||0;
-    // Per-country state counts
     const { data:perCountry } = await supabase
       .from("states")
       .select("country_iso")
@@ -2289,20 +2163,18 @@ app.get("/api/geo/stats", async (req, res) => {
       coverage_pct:  Math.round(loaded/195*100),
       per_country:   countryCounts,
       geo_pipeline_running:   geoPipelineRunning,
-    geo_pipeline_status:    {
-      countries_done:  geoStatus.countries_done,
-      progress_pct:    Math.round(geoStatus.countries_done / COUNTRIES.length * 100),
-      current_country: geoStatus.current_country,
-      last_error:      geoStatus.last_error,
-      total_states:    geoStatus.total_states,
-      total_areas:     geoStatus.total_areas,
-    },
-    geonames_configured: !!ENV.GEONAMES_USERNAME,
-  });
+      geo_pipeline_status: {
+        countries_done:  geoStatus.countries_done,
+        progress_pct:    Math.round(geoStatus.countries_done / COUNTRIES.length * 100),
+        current_country: geoStatus.current_country,
+        last_error:      geoStatus.last_error,
+        total_states:    geoStatus.total_states,
+        total_areas:     geoStatus.total_areas,
+      },
+    });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/geo/pipeline/status — live progress
 app.get("/api/geo/pipeline/status", (req, res) => {
   res.json({
     running:         geoPipelineRunning,
@@ -2315,11 +2187,9 @@ app.get("/api/geo/pipeline/status", (req, res) => {
     last_error:      geoStatus.last_error,
     started_at:      geoStatus.started_at,
     completed_at:    geoStatus.completed_at,
-    geonames_configured: !!ENV.GEONAMES_USERNAME,
   });
 });
 
-// GET /api/geo/test — verify Nominatim (OSM) is reachable
 app.get("/api/geo/test", async (req, res) => {
   try {
     const t = Date.now();
@@ -2340,7 +2210,6 @@ app.get("/api/geo/test", async (req, res) => {
   }
 });
 
-// POST /api/geo/pipeline/start — trigger full geo pipeline
 app.post("/api/geo/pipeline/start", async (req, res) => {
   if(geoPipelineRunning) {
     return res.json({
@@ -2349,13 +2218,11 @@ app.post("/api/geo/pipeline/start", async (req, res) => {
       current_country: geoStatus.current_country,
     });
   }
-  // No API key needed for geo pipeline (uses OpenStreetMap Nominatim)
   const forceAll = req.query.force === "true";
   res.json({ message:"Geo pipeline started", force_all: forceAll });
   runGeoPipeline(forceAll).catch(console.error);
 });
 
-// POST /api/geo/pipeline/country/:iso — trigger geo pipeline for one country
 app.post("/api/geo/pipeline/country/:iso", async (req, res) => {
   const iso = req.params.iso.toUpperCase();
   const country = COUNTRIES.find(c=>c.iso===iso);
@@ -2365,7 +2232,7 @@ app.post("/api/geo/pipeline/country/:iso", async (req, res) => {
     const statesAdded = await fetchAndSaveStates(iso);
     if(statesAdded > 0) {
       const { data:savedStates } = await supabase.from("states")
-        .select("id,geoname_id").eq("country_iso", iso);
+        .select("id, geoname_id").eq("country_iso", iso);
       for(const state of savedStates||[]) {
         await fetchAndSaveAreas(state.id, state.geoname_id, iso);
         await new Promise(r=>setTimeout(r,250));
@@ -2376,7 +2243,7 @@ app.post("/api/geo/pipeline/country/:iso", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════
-// GLOBE — EXACT WORKING CODE FROM LAST KNOWN WORKING LOG
+// GLOBE
 // ══════════════════════════════════════════════════════════════════
 app.get("/globe", (req, res) => {
   res.setHeader("Content-Type","text/html");
