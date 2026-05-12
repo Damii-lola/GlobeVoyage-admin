@@ -1784,6 +1784,24 @@ app.get("/admin_control", requireAdminAuth, (req, res) => {
   }
 });
 
+// ── Auth verify endpoint — used by login page ─────────────────────
+app.post("/api/auth/verify", (req, res) => {
+  const authHeader = req.headers["authorization"] || "";
+  const b64 = authHeader.startsWith("Basic ") ? authHeader.slice(6) : "";
+  const decoded = Buffer.from(b64, "base64").toString();
+  const colonIndex = decoded.indexOf(":");
+  const user = decoded.slice(0, colonIndex);
+  const pass = decoded.slice(colonIndex + 1);
+
+  const validUser = process.env.ADMIN_USERNAME || "admin";
+  const validPass = process.env.ADMIN_PASSWORD || "changeme";
+
+  if (user === validUser && pass === validPass) {
+    return res.json({ ok: true, user });
+  }
+  return res.status(401).json({ ok: false, error: "Invalid credentials" });
+});
+
 // Block any directory listing or access to source files
 app.get("/admin_control.html", (req,res) => res.status(404).end());
 app.get("/index.js", (req,res) => res.status(404).end());
