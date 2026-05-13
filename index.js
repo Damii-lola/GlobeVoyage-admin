@@ -959,19 +959,74 @@ const ISO3_TO_ISO2 = {
 // Gives states/provinces and cities for all 195 countries.
 // ══════════════════════════════════════════════════════════════════
 
+// CountriesNow uses specific country name strings that differ from
+// our COUNTRIES list for some entries. This map handles all mismatches.
+const COUNTRIESNOW_NAME_MAP = {
+  // Our name              → CountriesNow name
+  "DR Congo":              "Democratic Republic of the Congo",
+  "Republic of Congo":     "Republic of the Congo",
+  "Ivory Coast":           "Côte d'Ivoire",
+  "Eswatini":              "Swaziland",
+  "Gambia":                "Gambia, The",
+  "Palestine":             "Palestinian Territory",
+  "North Macedonia":       "Macedonia",
+  "Bosnia and Herzegovina":"Bosnia and Herzegovina",
+  "Brunei":                "Brunei Darussalam",
+  "Cape Verde":            "Cabo Verde",
+  "East Timor":            "Timor-Leste",
+  "Timor-Leste":           "Timor-Leste",
+  "Myanmar":               "Myanmar (Burma)",
+  "North Korea":           "Korea, North",
+  "South Korea":           "Korea, South",
+  "Laos":                  "Lao People's Democratic Republic",
+  "Syria":                 "Syrian Arab Republic",
+  "Taiwan":                "Taiwan, Province of China",
+  "Vietnam":               "Viet Nam",
+  "Iran":                  "Iran, Islamic Republic of",
+  "Russia":                "Russia",
+  "Moldova":               "Moldova, Republic of",
+  "Tanzania":              "Tanzania, United Republic of",
+  "Sao Tome and Principe": "Sao Tome and Principe",
+  "Fiji":                  "Fiji",
+  "Micronesia":            "Micronesia, Federated States of",
+  "Marshall Islands":      "Marshall Islands",
+  "Saint Kitts and Nevis": "Saint Kitts and Nevis",
+  "Saint Lucia":           "Saint Lucia",
+  "Saint Vincent and the Grenadines": "Saint Vincent and the Grenadines",
+  "Trinidad and Tobago":   "Trinidad and Tobago",
+};
+
+function getCountriesNowName(iso) {
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return null;
+  return COUNTRIESNOW_NAME_MAP[country.name] || country.name;
+}
+
 async function fetchAndSaveStates(iso) {
-  const countryName = COUNTRIES.find(c => c.iso === iso)?.name || iso;
+  const countryName = getCountriesNowName(iso);
+  if (!countryName) return 0;
 
   try {
-    // CountriesNow: get all states/provinces for a country
     const r = await axios.post(
       "https://countriesnow.space/api/v0.1/countries/states",
       { country: countryName },
-      { timeout: 10000, headers: { "Content-Type": "application/json" } }
+      { timeout: 12000, headers: { "Content-Type": "application/json" } }
     );
 
     if (r.data?.error) {
-      console.log(`[GeoPipeline] ${iso} — CountriesNow: ${r.data.msg}`);
+      // Try fallback with original name if mapped name failed
+      const originalName = COUNTRIES.find(c => c.iso === iso)?.name;
+      if (originalName && originalName !== countryName) {
+        const r2 = await axios.post(
+          "https://countriesnow.space/api/v0.1/countries/states",
+          { country: originalName },
+          { timeout: 12000, headers: { "Content-Type": "application/json" } }
+        );
+        if (!r2.data?.error && r2.data?.data?.states?.length) {
+          return await saveStatesFromResponse(r2.data.data.states, iso, originalName);
+        }
+      }
+      console.log(`[GeoPipeline] ${iso} — CountriesNow: ${r.data.msg} (skipping)`);
       return 0;
     }
 
@@ -981,40 +1036,48 @@ async function fetchAndSaveStates(iso) {
       return 0;
     }
 
-    const rows = states.map((s, idx) => ({
-      country_iso: iso,
-      // Stable numeric ID from country+index (no external ID available)
-      geoname_id:  Math.abs(hashCode(`${iso}-state-${s.name || idx}`)),
-      name:        s.name || "Unknown",
-      ascii_name:  s.name || "Unknown",
-      state_code:  s.state_code || null,
-      type:        "state",
-      population:  0,
-      latitude:    null,
-      longitude:   null,
-      timezone:    null,
-      updated_at:  new Date().toISOString(),
-    })).filter(r => r.name !== "Unknown");
-
-    if (!rows.length) return 0;
-
-    const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
-    if (error) { console.error(`[GeoPipeline] States upsert ${iso}:`, error.message); return 0; }
-    console.log(`[GeoPipeline] ✓ ${iso} (${countryName}) — ${rows.length} states saved`);
-    return rows.length;
+    return await saveStatesFromResponse(states, iso, countryName);
 
   } catch(e) {
+    // 404 means CountriesNow doesn't have this country — skip gracefully
+    if (e.response?.status === 404) {
+      console.log(`[GeoPipeline] ${iso} — CountriesNow 404 (country not in dataset), skipping`);
+      return 0;
+    }
     console.error(`[GeoPipeline] fetchAndSaveStates error ${iso}:`, e.message);
     geoStatus.last_error = `${iso}: ${e.message}`;
     return 0;
   }
 }
 
+async function saveStatesFromResponse(states, iso, countryName) {
+  const rows = states.map((s, idx) => ({
+    country_iso: iso,
+    geoname_id:  Math.abs(hashCode(`${iso}-state-${s.name || idx}`)),
+    name:        s.name || "Unknown",
+    ascii_name:  s.name || "Unknown",
+    state_code:  s.state_code || null,
+    type:        "state",
+    population:  0,
+    latitude:    null,
+    longitude:   null,
+    timezone:    null,
+    updated_at:  new Date().toISOString(),
+  })).filter(r => r.name !== "Unknown");
+
+  if (!rows.length) return 0;
+
+  const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
+  if (error) { console.error(`[GeoPipeline] States upsert ${iso}:`, error.message); return 0; }
+  console.log(`[GeoPipeline] ✓ ${iso} (${countryName}) — ${rows.length} states saved`);
+  return rows.length;
+}
+
 async function fetchAndSaveAreas(stateId, _unused, countryIso) {
-  const countryName = COUNTRIES.find(c => c.iso === countryIso)?.name || countryIso;
+  const countryName = getCountriesNowName(countryIso);
+  if (!countryName) return 0;
 
   try {
-    // Get the state name from DB
     const { data: stateRow } = await supabase
       .from("states")
       .select("name")
@@ -1023,11 +1086,10 @@ async function fetchAndSaveAreas(stateId, _unused, countryIso) {
     const stateName = stateRow?.name || "";
     if (!stateName) return 0;
 
-    // CountriesNow: get all cities for a specific state
     const r = await axios.post(
       "https://countriesnow.space/api/v0.1/countries/state/cities",
       { country: countryName, state: stateName },
-      { timeout: 10000, headers: { "Content-Type": "application/json" } }
+      { timeout: 12000, headers: { "Content-Type": "application/json" } }
     );
 
     if (r.data?.error) return 0;
@@ -1056,6 +1118,7 @@ async function fetchAndSaveAreas(stateId, _unused, countryIso) {
     return rows.length;
 
   } catch(e) {
+    if (e.response?.status === 404) return 0; // gracefully skip missing states
     console.error(`fetchAndSaveAreas error:`, e.message);
     return 0;
   }
