@@ -955,13 +955,26 @@ const ISO3_TO_ISO2 = {
 
 const NOMINATIM_UA = "GlobeVoyage/2.0 (travel-app; contact@globevoyage.app)";
 
-async function nominatimSearch(params) {
-  const r = await axios.get("https://nominatim.openstreetmap.org/search", {
-    params: { format:"json", limit:50, addressdetails:1, ...params },
-    headers:{ "User-Agent": NOMINATIM_UA, "Accept-Language":"en" },
-    timeout: 10000,
-  });
-  return r.data||[];
+// Nominatim rate limit: 1 req/sec. On 429, wait and retry up to 3 times.
+async function nominatimSearch(params, _retries = 3) {
+  try {
+    const r = await axios.get("https://nominatim.openstreetmap.org/search", {
+      params: { format:"json", limit:50, addressdetails:1, ...params },
+      headers:{ "User-Agent": NOMINATIM_UA, "Accept-Language":"en" },
+      timeout: 12000,
+    });
+    return r.data||[];
+  } catch(e) {
+    const status = e.response?.status;
+    if (status === 429 && _retries > 0) {
+      // Back off: 5s on first retry, 10s on second, 20s on third
+      const waitMs = (4 - _retries) * 5000;
+      console.warn(`[Nominatim] 429 rate limit hit — waiting ${waitMs/1000}s then retrying (${_retries} retries left)...`);
+      await new Promise(r => setTimeout(r, waitMs));
+      return nominatimSearch(params, _retries - 1);
+    }
+    throw e;
+  }
 }
 
 async function nominatimDetails(osmId, osmType) {
@@ -1095,10 +1108,17 @@ async function runGeoPipeline(forceAll=false) {
     await nominatimSearch({ q:"Nigeria", limit:1 });
     console.log("[GeoPipeline] ✓ Nominatim reachable — starting pipeline");
   } catch(e) {
-    geoStatus.last_error = "Nominatim unreachable: " + e.message;
+    const status = e.response?.status;
+    geoStatus.last_error = status === 429
+      ? "Nominatim rate limited (429) — wait 60 seconds then try again"
+      : "Nominatim unreachable: " + e.message;
     console.error("[GeoPipeline]", geoStatus.last_error);
     return;
   }
+
+  // Wait 2 seconds after the connectivity test before starting real requests
+  await new Promise(r => setTimeout(r, 2000));
+
   geoPipelineRunning   = true;
   geoStatus.started_at = new Date().toISOString();
   geoStatus.last_error = null;
@@ -1128,15 +1148,20 @@ async function runGeoPipeline(forceAll=false) {
         for(const state of savedStates||[]) {
           const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
           geoStatus.total_areas += areasAdded;
-          await new Promise(r=>setTimeout(r,1100));
+          await new Promise(r=>setTimeout(r, 1500)); // 1500ms — safely under Nominatim 1 req/sec
         }
       }
       geoStatus.countries_done++;
       console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | total: ${geoStatus.countries_done}/${COUNTRIES.length} countries`);
-      await new Promise(r=>setTimeout(r,1100));
+      await new Promise(r=>setTimeout(r, 1500)); // 1500ms between countries
     } catch(e) {
       geoStatus.last_error = `${country.name}: ${e.message}`;
       console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
+      // If we hit a 429, pause for 30 seconds before continuing
+      if(e.response?.status === 429) {
+        console.warn("[GeoPipeline] 429 received — pausing 30s...");
+        await new Promise(r => setTimeout(r, 30000));
+      }
     }
   }
   geoPipelineRunning      = false;
@@ -2206,7 +2231,20 @@ app.get("/api/geo/test", async (req, res) => {
       message:     "Nominatim is reachable — ready to run geo pipeline. No API key needed!",
     });
   } catch(e) {
-    res.json({ ok:false, error: e.message, fix:"Check server internet connectivity" });
+    const status = e.response?.status;
+    if (status === 429) {
+      return res.json({
+        ok:    false,
+        error: "Nominatim rate limit hit (429) — too many requests. Wait 60 seconds then try again.",
+        fix:   "Nominatim allows 1 request/second. If the pipeline was recently running, wait a minute before testing.",
+        status: 429,
+      });
+    }
+    res.json({
+      ok:    false,
+      error: e.message,
+      fix:   status ? `HTTP ${status} from Nominatim` : "Check server internet connectivity — Render must be able to reach nominatim.openstreetmap.org",
+    });
   }
 });
 
