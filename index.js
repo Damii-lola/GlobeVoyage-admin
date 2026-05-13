@@ -2099,6 +2099,24 @@ app.get("/api/health", async (req,res) => {
     liveTest("rest_countries",()=>axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000})),
     liveTest("currency",      ()=>axios.get("https://open.er-api.com/v6/latest/USD",{timeout:6000})),
     liveTest("waqi",          ()=>axios.get("https://api.waqi.info/feed/geo:48.85;2.35/?token=demo",{timeout:6000})),
+    // National news RSS — sample a few representative feeds
+    liveTest("news_bbc",      ()=>axios.get("https://feeds.bbci.co.uk/news/rss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_aljazeera",()=>axios.get("https://www.aljazeera.com/xml/rss/all.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_foxnews",  ()=>axios.get("https://moxie.foxnews.com/google-publisher/latest.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_nhk",      ()=>axios.get("https://www3.nhk.or.jp/rss/news/cat0.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_dw",       ()=>axios.get("https://rss.dw.com/rdf/rss-en-all",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_abc_au",   ()=>axios.get("https://www.abc.net.au/news/feed/1948/rss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_cna",      ()=>axios.get("https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_trt",      ()=>axios.get("https://www.trtworld.com/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_rt",       ()=>axios.get("https://www.rt.com/rss/",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_france24", ()=>axios.get("https://www.france24.com/en/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_xinhua",   ()=>axios.get("https://www.xinhuanet.com/english/rss/worldrss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_ndtv",     ()=>axios.get("https://feeds.feedburner.com/ndtvnews-top-stories",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_channels_tv",()=>axios.get("https://www.channelstv.com/feed/",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_news24",   ()=>axios.get("https://feeds.news24.com/articles/news24/TopStories/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_cbc",      ()=>axios.get("https://www.cbc.ca/cmlink/rss-topstories",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_abc_br",   ()=>axios.get("https://feeds.folha.uol.com.br/emcimadahora/rss091.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_rnz",      ()=>axios.get("https://www.rnz.co.nz/rss/top.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     ENV.OPENWEATHER_API_KEY
       ? liveTest("openweathermap",()=>axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000}))
       : Promise.resolve(sourceHealth.openweathermap={ok:false,last_check:new Date().toISOString(),error:"No API key",response_ms:0,success_count:0,fail_count:0}),
@@ -2148,7 +2166,12 @@ app.get("/api/health", async (req,res) => {
   const sources = ["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news",
     "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy",
     "unsplash","openaq","aviationstack","numbeo","rest_countries","airbnb",
-    "booking","tripadvisor","skyscanner","currency","google_places","travel_advisor","hotels_com","youtube","waqi"];
+    "booking","tripadvisor","skyscanner","currency","google_places","travel_advisor","hotels_com","youtube","waqi",
+    // National news channels
+    "news_bbc","news_aljazeera","news_foxnews","news_nhk","news_dw","news_abc_au",
+    "news_cna","news_trt","news_rt","news_france24","news_xinhua","news_ndtv",
+    "news_channels_tv","news_news24","news_cbc","news_abc_br","news_rnz",
+  ];
   const labelMap = {
     wikipedia:"Wikipedia", wikivoyage:"Wikivoyage", foursquare:"Places (OpenTripMap)",
     openweathermap:"OpenWeatherMap", newsapi:"GNews API", google_news:"Google News RSS",
@@ -2159,6 +2182,16 @@ app.get("/api/health", async (req,res) => {
     booking:"Booking.com", tripadvisor:"TripAdvisor", skyscanner:"Skyscanner Flights",
     currency:"Currency Exchange", google_places:"Google Places", travel_advisor:"Travel Advisor",
     hotels_com:"Hotels.com", youtube:"YouTube Travel Videos", waqi:"World Air Quality Index",
+    // National news
+    news_bbc:"📺 BBC News (UK)", news_aljazeera:"📺 Al Jazeera (Qatar)",
+    news_foxnews:"📺 Fox News (USA)", news_nhk:"📺 NHK World (Japan)",
+    news_dw:"📺 Deutsche Welle (Germany)", news_abc_au:"📺 ABC News (Australia)",
+    news_cna:"📺 Channel News Asia (Singapore)", news_trt:"📺 TRT World (Turkey)",
+    news_rt:"📺 RT News (Russia)", news_france24:"📺 France 24 (France)",
+    news_xinhua:"📺 Xinhua News (China)", news_ndtv:"📺 NDTV (India)",
+    news_channels_tv:"📺 Channels TV (Nigeria)", news_news24:"📺 News24 (South Africa)",
+    news_cbc:"📺 CBC News (Canada)", news_abc_br:"📺 Folha de S.Paulo (Brazil)",
+    news_rnz:"📺 RNZ News (New Zealand)",
   };
   sources.forEach(k=>{
     const h=sourceHealth[k]||{};
