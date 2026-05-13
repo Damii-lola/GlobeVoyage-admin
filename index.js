@@ -1149,7 +1149,7 @@ const geoStatus = {
 async function runGeoPipeline(forceAll=false) {
   if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
 
-  // Quick connectivity test — no key needed
+  // Quick connectivity test
   console.log("[GeoPipeline] Testing CountriesNow connectivity...");
   try {
     const test = await axios.post(
@@ -1168,11 +1168,23 @@ async function runGeoPipeline(forceAll=false) {
   geoPipelineRunning   = true;
   geoStatus.started_at = new Date().toISOString();
   geoStatus.last_error = null;
-  geoStatus.total_states = 0;
-  geoStatus.total_areas  = 0;
   geoStatus.countries_done = 0;
 
-  console.log(`🌍 [GeoPipeline] Starting for ${COUNTRIES.length} countries...`);
+  // Seed total_states and total_areas from DB so counts are accurate
+  // even when resuming a previously interrupted pipeline run
+  try {
+    const [sr, ar] = await Promise.all([
+      supabase.from("states").select("*", { count:"exact", head:true }),
+      supabase.from("areas").select("*",  { count:"exact", head:true }),
+    ]);
+    geoStatus.total_states = sr.count || 0;
+    geoStatus.total_areas  = ar.count || 0;
+  } catch(e) {
+    geoStatus.total_states = 0;
+    geoStatus.total_areas  = 0;
+  }
+
+  console.log(`🌍 [GeoPipeline] Starting for ${COUNTRIES.length} countries (resume-safe — skips already loaded)...`);
 
   for(const country of COUNTRIES) {
     try {
@@ -1183,7 +1195,7 @@ async function runGeoPipeline(forceAll=false) {
           .select("*", { count:"exact", head:true })
           .eq("country_iso", country.iso);
         if(count !== null && count > 0) {
-          console.log(`⏭  [GeoPipeline] ${country.name} — ${count} states already loaded, skipping`);
+          // Already done — count it and move on without re-fetching
           geoStatus.countries_done++;
           continue;
         }
@@ -1200,24 +1212,26 @@ async function runGeoPipeline(forceAll=false) {
         for(const state of savedStates||[]) {
           const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
           geoStatus.total_areas += areasAdded;
-          await new Promise(r => setTimeout(r, 300)); // gentle — no rate limit but be polite
+          await new Promise(r => setTimeout(r, 300));
         }
       }
 
       geoStatus.countries_done++;
-      console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | total: ${geoStatus.countries_done}/${COUNTRIES.length} countries`);
+      const pct = Math.round(geoStatus.countries_done / COUNTRIES.length * 100);
+      console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | ${geoStatus.countries_done}/${COUNTRIES.length} (${pct}%)`);
       await new Promise(r => setTimeout(r, 300));
 
     } catch(e) {
       geoStatus.last_error = `${country.name}: ${e.message}`;
       console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
+      // Don't stop the whole pipeline on a single country error — just continue
     }
   }
 
   geoPipelineRunning      = false;
   geoStatus.current_country = null;
   geoStatus.completed_at  = new Date().toISOString();
-  console.log(`🎉 [GeoPipeline] Complete — ${geoStatus.total_states} states, ${geoStatus.total_areas} areas across ${geoStatus.countries_done} countries`);
+  console.log(`🎉 [GeoPipeline] Complete — ${geoStatus.total_states} states, ${geoStatus.total_areas} cities across ${geoStatus.countries_done} countries`);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1572,6 +1586,120 @@ Max: 6 recommendations, 14 calendar days, 4 trending items.`;
 // ══════════════════════════════════════════════════════════════════
 // MAIN PIPELINE
 // ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// NATIONAL NEWS CHANNELS — RSS feeds from each country's main
+// broadcaster/news channel. No API key needed — all public RSS.
+// ══════════════════════════════════════════════════════════════════
+
+const NATIONAL_NEWS_FEEDS = {
+  // North America
+  USA: { name:"Fox News",          url:"https://moxie.foxnews.com/google-publisher/latest.xml",   type:"rss" },
+  CAN: { name:"CBC News",          url:"https://www.cbc.ca/cmlink/rss-topstories",                type:"rss" },
+  MEX: { name:"El Universal",      url:"https://www.eluniversal.com.mx/rss.xml",                  type:"rss" },
+  // Europe
+  GBR: { name:"BBC News",          url:"https://feeds.bbci.co.uk/news/rss.xml",                   type:"rss" },
+  DEU: { name:"Deutsche Welle",    url:"https://rss.dw.com/rdf/rss-en-all",                       type:"rss" },
+  FRA: { name:"France 24",         url:"https://www.france24.com/en/rss",                         type:"rss" },
+  ITA: { name:"RAI News",          url:"https://www.rainews.it/dl/rainews/media/rss.xml",          type:"rss" },
+  ESP: { name:"El País",           url:"https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada", type:"rss" },
+  NLD: { name:"NOS News",          url:"https://feeds.nos.nl/nosnieuwsalgemeen",                  type:"rss" },
+  RUS: { name:"RT News",           url:"https://www.rt.com/rss/",                                 type:"rss" },
+  CHE: { name:"SWI swissinfo",     url:"https://www.swissinfo.ch/eng/rss/rss_headlines",          type:"rss" },
+  POL: { name:"TVP World",         url:"https://tvpworld.com/rss",                                type:"rss" },
+  PRT: { name:"RTP News",          url:"https://www.rtp.pt/noticias/rss",                         type:"rss" },
+  SWE: { name:"SVT Nyheter",       url:"https://www.svt.se/nyheter/rss.xml",                      type:"rss" },
+  NOR: { name:"NRK News",          url:"https://www.nrk.no/nyheter/rss.xml",                      type:"rss" },
+  DNK: { name:"DR News",           url:"https://www.dr.dk/nyheder/service/feeds/allenyheder",     type:"rss" },
+  GRC: { name:"Ekathimerini",      url:"https://www.ekathimerini.com/rss/?cat=1",                 type:"rss" },
+  UKR: { name:"Ukrinform",         url:"https://www.ukrinform.net/rss/block-lastnews",            type:"rss" },
+  AUT: { name:"ORF News",          url:"https://rss.orf.at/news.xml",                             type:"rss" },
+  BEL: { name:"RTBF",              url:"https://www.rtbf.be/api/proxy/rss?source=https%3A%2F%2Fapp.rtbf.be%2Fapi%2Fbranding%2Frss%3Ftype%3Darticle%26term%3D399", type:"rss" },
+  HRV: { name:"N1 Croatia",        url:"https://hr.n1info.com/feed/",                             type:"rss" },
+  CZE: { name:"Czech Radio",       url:"https://english.radio.cz/rss/english",                   type:"rss" },
+  // Asia
+  CHN: { name:"Xinhua News",       url:"https://www.xinhuanet.com/english/rss/worldrss.xml",      type:"rss" },
+  JPN: { name:"NHK World",         url:"https://www3.nhk.or.jp/rss/news/cat0.xml",               type:"rss" },
+  IND: { name:"NDTV",              url:"https://feeds.feedburner.com/ndtvnews-top-stories",       type:"rss" },
+  KOR: { name:"KBS World",         url:"https://world.kbs.co.kr/rss/rss_news.htm",               type:"rss" },
+  SGP: { name:"Channel News Asia", url:"https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", type:"rss" },
+  ARE: { name:"Al Arabiya",        url:"https://www.alarabiya.net/tools/rss",                     type:"rss" },
+  SAU: { name:"Arab News",         url:"https://www.arabnews.com/rss.xml",                        type:"rss" },
+  QAT: { name:"Al Jazeera",        url:"https://www.aljazeera.com/xml/rss/all.xml",               type:"rss" },
+  TUR: { name:"TRT World",         url:"https://www.trtworld.com/rss",                            type:"rss" },
+  IRN: { name:"Press TV",          url:"https://www.presstv.ir/rss",                              type:"rss" },
+  PAK: { name:"Geo News",          url:"https://www.geo.tv/rss/1",                                type:"rss" },
+  BGD: { name:"The Daily Star BD", url:"https://www.thedailystar.net/rss.xml",                    type:"rss" },
+  LKA: { name:"Daily Mirror LK",   url:"https://www.dailymirror.lk/rss",                         type:"rss" },
+  THA: { name:"Bangkok Post",      url:"https://www.bangkokpost.com/rss/data/topstories.xml",     type:"rss" },
+  VNM: { name:"VnExpress",         url:"https://vnexpress.net/rss/tin-moi-nhat.rss",              type:"rss" },
+  IDN: { name:"Antara News",       url:"https://en.antaranews.com/rss/news.xml",                  type:"rss" },
+  MYS: { name:"Bernama",           url:"https://www.bernama.com/en/rss.php",                      type:"rss" },
+  PHL: { name:"ABS-CBN News",      url:"https://news.abs-cbn.com/rss",                            type:"rss" },
+  ISR: { name:"Haaretz",           url:"https://www.haaretz.com/cmlink/1.4526661",                type:"rss" },
+  IRQ: { name:"Baghdad Post",      url:"https://thebaghdadpost.com/en/rss",                       type:"rss" },
+  JOR: { name:"Jordan Times",      url:"https://jordantimes.com/rss.xml",                         type:"rss" },
+  // Africa
+  NGA: { name:"Channels TV",       url:"https://www.channelstv.com/feed/",                        type:"rss" },
+  ZAF: { name:"News24",            url:"https://feeds.news24.com/articles/news24/TopStories/rss",  type:"rss" },
+  KEN: { name:"Nation Africa",     url:"https://nation.africa/kenya/rss",                         type:"rss" },
+  GHA: { name:"Ghana Web",         url:"https://www.ghanaweb.com/GhanaHomePage/NewsArchive/rssfeed2.php", type:"rss" },
+  ETH: { name:"Addis Standard",    url:"https://addisstandard.com/feed/",                         type:"rss" },
+  EGY: { name:"Al-Ahram",          url:"https://english.ahram.org.eg/rss.aspx",                   type:"rss" },
+  MAR: { name:"Morocco World News", url:"https://www.moroccoworldnews.com/feed",                  type:"rss" },
+  TUN: { name:"Tunisia Live",      url:"https://www.tunisia-live.net/feed/",                      type:"rss" },
+  TZA: { name:"The Citizen TZ",    url:"https://www.thecitizen.co.tz/feed",                       type:"rss" },
+  UGA: { name:"Monitor UG",        url:"https://www.monitor.co.ug/ugd/feed",                      type:"rss" },
+  SEN: { name:"Dakar Actu",        url:"https://www.dakaractu.com/feed",                           type:"rss" },
+  CMR: { name:"Cameroon Tribune",  url:"https://www.cameroon-tribune.cm/rss.xml",                 type:"rss" },
+  // South America
+  BRA: { name:"Folha de S.Paulo",  url:"https://feeds.folha.uol.com.br/emcimadahora/rss091.xml", type:"rss" },
+  ARG: { name:"Infobae",           url:"https://www.infobae.com/feeds/rss/",                      type:"rss" },
+  CHL: { name:"La Tercera",        url:"https://www.latercera.com/feed/",                         type:"rss" },
+  COL: { name:"El Tiempo",         url:"https://www.eltiempo.com/rss/noticias.xml",               type:"rss" },
+  PER: { name:"El Comercio PE",    url:"https://elcomercio.pe/rss/portada.xml",                   type:"rss" },
+  VEN: { name:"El Nacional",       url:"https://www.el-nacional.com/feed/",                       type:"rss" },
+  // Oceania
+  AUS: { name:"ABC News AU",       url:"https://www.abc.net.au/news/feed/1948/rss.xml",           type:"rss" },
+  NZL: { name:"RNZ News",          url:"https://www.rnz.co.nz/rss/top.xml",                       type:"rss" },
+};
+
+const nationalNewsCache = {};
+
+async function fetchNationalNews(iso) {
+  const feed = NATIONAL_NEWS_FEEDS[iso];
+  if (!feed) return null;
+
+  // Cache for 2 hours
+  const cached = nationalNewsCache[iso];
+  if (cached && Date.now() < cached.expires) return cached.data;
+
+  return timed("national_news", async () => {
+    const r = await axios.get(feed.url, {
+      timeout: 8000,
+      headers: { "User-Agent": "GlobeVoyage/2.0" },
+    });
+    const parsed = await xml2js.parseStringPromise(r.data, { explicitArray: false });
+    const items  = parsed?.rss?.channel?.item || parsed?.feed?.entry || [];
+    const arr    = Array.isArray(items) ? items : [items];
+
+    const articles = arr.filter(i => i && (i.title || i.title?._)).slice(0, 8).map(i => ({
+      title:       typeof i.title === "object" ? (i.title._ || i.title.__text || "") : (i.title || ""),
+      url:         i.link?.href || i.link || i.guid?._ || i.guid || "",
+      source:      feed.name,
+      country_iso: iso,
+      published_at:i.pubDate || i.updated || i["dc:date"] || null,
+      description: typeof i.description === "object"
+        ? (i.description._ || "").replace(/<[^>]*>/g, "").slice(0, 200)
+        : (i.description || "").replace(/<[^>]*>/g, "").slice(0, 200),
+      risk_level:  riskScore((typeof i.title === "object" ? i.title._ : i.title) || ""),
+    })).filter(a => a.title);
+
+    const data = { source: feed.name, articles };
+    nationalNewsCache[iso] = { data, expires: Date.now() + 2*60*60*1000 };
+    return data;
+  });
+}
+
 async function runPipeline(iso, countryName, continent) {
   const start = Date.now();
   console.log(`🌍 Pipeline: ${countryName} (${iso})`);
@@ -1581,7 +1709,8 @@ async function runPipeline(iso, countryName, continent) {
 
   const [wiki,wv,places,weather,news,gNews,gdacs,tm,eb,phq,social,
          photos,airQuality,flights,costOfLiving,countryMeta,airbnb,
-         booking,tripadvisor,flightPrices,currencyRates,googlePlaces,travelAdvisor,hotelDeals,youtubeVideos,waqi] = await Promise.all([
+         booking,tripadvisor,flightPrices,currencyRates,googlePlaces,travelAdvisor,hotelDeals,youtubeVideos,waqi,
+         nationalNews] = await Promise.all([
     safe(()=>fetchWikipedia(countryName),         {summary:""}),
     safe(()=>fetchWikivoyage(countryName),        {sections:{},highlights:[]}),
     safe(()=>fetchFoursquare(countryName, iso),   []),
@@ -1608,6 +1737,7 @@ async function runPipeline(iso, countryName, continent) {
     safe(()=>fetchHotelDeals(countryName, iso),   null),
     safe(()=>fetchYoutubeVideos(countryName, iso),null),
     safe(()=>fetchWAQI(countryName, iso),         null),
+    safe(()=>fetchNationalNews(iso),              null),
   ]);
 
   const allNews   = [...(news||[]),...(gNews||[])].slice(0,10);
@@ -1643,6 +1773,7 @@ async function runPipeline(iso, countryName, continent) {
     restaurants:     travelAdvisor||null,
     hotel_deals:     hotelDeals||null,
     youtube_videos:  youtubeVideos||null,
+    national_news:   nationalNews||null,
   },{onConflict:"iso"});
 
   const duration = Date.now()-start;
@@ -2220,31 +2351,43 @@ app.get("/api/geo/stats", async (req, res) => {
     }
     const totalStates = statesRes.count||0;
     const totalAreas  = areasRes.count||0;
+
+    // Count distinct countries that have at least one state loaded
     const { data:perCountry } = await supabase
       .from("states")
       .select("country_iso")
       .order("country_iso");
+
     const countryCounts = {};
     (perCountry||[]).forEach(r => {
       countryCounts[r.country_iso] = (countryCounts[r.country_iso]||0) + 1;
     });
-    const loaded   = Object.keys(countryCounts).length;
-    const pending  = 195 - loaded;
+    const loaded  = Object.keys(countryCounts).length;
+    const pending = COUNTRIES.length - loaded;
+
+    // List which countries still need loading
+    const loadedSet   = new Set(Object.keys(countryCounts));
+    const pendingList = COUNTRIES.filter(c => !loadedSet.has(c.iso)).map(c => c.name);
+
     res.json({
-      total_states:  totalStates||0,
-      total_areas:   totalAreas||0,
-      countries_loaded: loaded,
+      total_states:      totalStates,
+      total_areas:       totalAreas,
+      countries_loaded:  loaded,
       countries_pending: pending,
-      coverage_pct:  Math.round(loaded/195*100),
-      per_country:   countryCounts,
-      geo_pipeline_running:   geoPipelineRunning,
+      coverage_pct:      Math.round(loaded / COUNTRIES.length * 100),
+      pending_countries: pendingList.slice(0, 20), // first 20 for display
+      per_country:       countryCounts,
+      geo_pipeline_running: geoPipelineRunning,
       geo_pipeline_status: {
+        running:         geoPipelineRunning,
         countries_done:  geoStatus.countries_done,
+        countries_total: COUNTRIES.length,
         progress_pct:    Math.round(geoStatus.countries_done / COUNTRIES.length * 100),
         current_country: geoStatus.current_country,
         last_error:      geoStatus.last_error,
         total_states:    geoStatus.total_states,
         total_areas:     geoStatus.total_areas,
+        completed_at:    geoStatus.completed_at,
       },
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
