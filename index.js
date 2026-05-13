@@ -954,88 +954,47 @@ const ISO3_TO_ISO2 = {
 };
 
 // ══════════════════════════════════════════════════════════════════
-// GEONAMES API — replaces Nominatim
-// Free account: geonames.org (2 min signup) → 1000 req/hour vs
-// Nominatim's 1 req/sec which gets blocked on shared server IPs.
-// Set GEONAMES_USERNAME in Render env vars after signing up.
-// Falls back to a graceful no-op if key not set.
+// GEO HIERARCHY — CountriesNow API (countriesnow.space)
+// Completely free, no API key, no rate limits, no signup.
+// Gives states/provinces and cities for all 195 countries.
 // ══════════════════════════════════════════════════════════════════
 
-// GeoNames country ISO2 → geonameId cache (fetched once per country)
-const geonamesCountryIdCache = {};
-
-async function geonamesGet(endpoint, params) {
-  const username = process.env.GEONAMES_USERNAME;
-  if (!username) throw new Error("GEONAMES_USERNAME env var not set — sign up free at geonames.org");
-  const r = await axios.get(`http://api.geonames.org/${endpoint}`, {
-    params: { ...params, username, style:"FULL" },
-    timeout: 10000,
-  });
-  // GeoNames returns 200 even on auth errors — check for error body
-  if (r.data?.status) {
-    throw new Error(`GeoNames error ${r.data.status.value}: ${r.data.status.message}`);
-  }
-  return r.data;
-}
-
-// Get the GeoNames country geonameId from ISO2 code
-async function getCountryGeonameId(iso2) {
-  if (geonamesCountryIdCache[iso2]) return geonamesCountryIdCache[iso2];
-  const data = await geonamesGet("countryInfoJSON", { country: iso2 });
-  const info = data?.geonames?.[0];
-  if (!info) throw new Error(`No GeoNames data for ${iso2}`);
-  geonamesCountryIdCache[iso2] = info.geonameId;
-  return info.geonameId;
-}
-
 async function fetchAndSaveStates(iso) {
-  const countryName = COUNTRIES.find(c=>c.iso===iso)?.name || iso;
-  const iso2 = ISO3_TO_ISO2[iso];
-  if (!iso2) return 0;
-
-  if (!process.env.GEONAMES_USERNAME) {
-    console.log(`[GeoPipeline] GEONAMES_USERNAME not set — skipping ${iso}`);
-    geoStatus.last_error = "GEONAMES_USERNAME not configured — sign up free at geonames.org and add to Render env vars";
-    return 0;
-  }
+  const countryName = COUNTRIES.find(c => c.iso === iso)?.name || iso;
 
   try {
-    // Get the country's top-level geonameId first
-    const countryGeonameId = await getCountryGeonameId(iso2);
-
-    // Fetch admin level 1 (states/provinces) as children of the country
-    const data = await geonamesGet("childrenJSON", {
-      geonameId: countryGeonameId,
-      maxRows:   100,
-    });
-
-    const children = (data?.geonames || []).filter(g =>
-      g.fcl === "A" && ["ADM1","ADM1H","ADMD"].includes(g.fcode)
+    // CountriesNow: get all states/provinces for a country
+    const r = await axios.post(
+      "https://countriesnow.space/api/v0.1/countries/states",
+      { country: countryName },
+      { timeout: 10000, headers: { "Content-Type": "application/json" } }
     );
 
-    // If no ADM1, try all A-class children (some countries use different codes)
-    const adminList = children.length > 0
-      ? children
-      : (data?.geonames || []).filter(g => g.fcl === "A").slice(0, 50);
-
-    if (!adminList.length) {
-      console.log(`[GeoPipeline] ${iso} — no admin divisions found in GeoNames`);
+    if (r.data?.error) {
+      console.log(`[GeoPipeline] ${iso} — CountriesNow: ${r.data.msg}`);
       return 0;
     }
 
-    const rows = adminList.map(s => ({
+    const states = r.data?.data?.states || [];
+    if (!states.length) {
+      console.log(`[GeoPipeline] ${iso} — no states returned`);
+      return 0;
+    }
+
+    const rows = states.map((s, idx) => ({
       country_iso: iso,
-      geoname_id:  s.geonameId,
-      name:        s.name || s.toponymName || "Unknown",
-      ascii_name:  s.asciiName || s.name || "Unknown",
-      state_code:  s.adminCode1 || null,
-      type:        s.fcode || "ADM1",
-      population:  s.population || 0,
-      latitude:    parseFloat(s.lat) || null,
-      longitude:   parseFloat(s.lng) || null,
-      timezone:    s.timezone?.timeZoneId || null,
+      // Stable numeric ID from country+index (no external ID available)
+      geoname_id:  Math.abs(hashCode(`${iso}-state-${s.name || idx}`)),
+      name:        s.name || "Unknown",
+      ascii_name:  s.name || "Unknown",
+      state_code:  s.state_code || null,
+      type:        "state",
+      population:  0,
+      latitude:    null,
+      longitude:   null,
+      timezone:    null,
       updated_at:  new Date().toISOString(),
-    })).filter(r => r.name !== "Unknown" && r.geoname_id);
+    })).filter(r => r.name !== "Unknown");
 
     if (!rows.length) return 0;
 
@@ -1051,41 +1010,44 @@ async function fetchAndSaveStates(iso) {
   }
 }
 
-async function fetchAndSaveAreas(stateId, geonameId, countryIso) {
-  if (!process.env.GEONAMES_USERNAME) return 0;
-  if (!geonameId) return 0;
+async function fetchAndSaveAreas(stateId, _unused, countryIso) {
+  const countryName = COUNTRIES.find(c => c.iso === countryIso)?.name || countryIso;
 
   try {
-    // Fetch admin level 2 children (districts/municipalities) of the state
-    const data = await geonamesGet("childrenJSON", {
-      geonameId: geonameId,
-      maxRows:   200,
-    });
+    // Get the state name from DB
+    const { data: stateRow } = await supabase
+      .from("states")
+      .select("name")
+      .eq("id", stateId)
+      .single();
+    const stateName = stateRow?.name || "";
+    if (!stateName) return 0;
 
-    const areaList = (data?.geonames || []).filter(g =>
-      g.fcl === "A" && ["ADM2","ADM2H","ADM3","ADM3H"].includes(g.fcode)
+    // CountriesNow: get all cities for a specific state
+    const r = await axios.post(
+      "https://countriesnow.space/api/v0.1/countries/state/cities",
+      { country: countryName, state: stateName },
+      { timeout: 10000, headers: { "Content-Type": "application/json" } }
     );
 
-    // Fallback: all P-class (populated places) if no admin subdivisions
-    const finalList = areaList.length > 0
-      ? areaList
-      : (data?.geonames || []).filter(g => g.fcl === "P" && g.population > 10000).slice(0, 50);
+    if (r.data?.error) return 0;
 
-    if (!finalList.length) return 0;
+    const cities = r.data?.data || [];
+    if (!cities.length) return 0;
 
-    const rows = finalList.map(a => ({
+    const rows = cities.slice(0, 80).map((cityName, idx) => ({
       state_id:    stateId,
       country_iso: countryIso,
-      geoname_id:  a.geonameId,
-      name:        a.name || a.toponymName || "Unknown",
-      ascii_name:  a.asciiName || a.name || "Unknown",
-      type:        a.fcode || "ADM2",
-      population:  a.population || 0,
-      latitude:    parseFloat(a.lat) || null,
-      longitude:   parseFloat(a.lng) || null,
-      timezone:    a.timezone?.timeZoneId || null,
+      geoname_id:  Math.abs(hashCode(`${stateId}-city-${cityName || idx}`)),
+      name:        cityName || "Unknown",
+      ascii_name:  cityName || "Unknown",
+      type:        "city",
+      population:  0,
+      latitude:    null,
+      longitude:   null,
+      timezone:    null,
       updated_at:  new Date().toISOString(),
-    })).filter(r => r.name !== "Unknown" && r.geoname_id);
+    })).filter(r => r.name !== "Unknown");
 
     if (!rows.length) return 0;
 
@@ -1097,6 +1059,17 @@ async function fetchAndSaveAreas(stateId, geonameId, countryIso) {
     console.error(`fetchAndSaveAreas error:`, e.message);
     return 0;
   }
+}
+
+// Stable numeric hash — turns a string into a consistent integer ID
+function hashCode(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const chr = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + chr;
+    hash |= 0;
+  }
+  return hash;
 }
 
 let geoPipelineRunning = false;
@@ -1113,19 +1086,18 @@ const geoStatus = {
 async function runGeoPipeline(forceAll=false) {
   if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
 
-  if (!process.env.GEONAMES_USERNAME) {
-    geoStatus.last_error = "GEONAMES_USERNAME not configured — sign up free at geonames.org and add to Render env vars";
-    console.error("[GeoPipeline]", geoStatus.last_error);
-    return;
-  }
-
-  // Quick connectivity test
-  console.log("[GeoPipeline] Testing GeoNames connectivity...");
+  // Quick connectivity test — no key needed
+  console.log("[GeoPipeline] Testing CountriesNow connectivity...");
   try {
-    await geonamesGet("countryInfoJSON", { country: "NG", maxRows: 1 });
-    console.log("[GeoPipeline] ✓ GeoNames reachable — starting pipeline");
+    const test = await axios.post(
+      "https://countriesnow.space/api/v0.1/countries/states",
+      { country: "Nigeria" },
+      { timeout: 10000 }
+    );
+    if (test.data?.error) throw new Error(test.data.msg);
+    console.log(`[GeoPipeline] ✓ CountriesNow reachable — ${test.data?.data?.states?.length} states for Nigeria`);
   } catch(e) {
-    geoStatus.last_error = "GeoNames unreachable: " + e.message;
+    geoStatus.last_error = "CountriesNow unreachable: " + e.message;
     console.error("[GeoPipeline]", geoStatus.last_error);
     return;
   }
@@ -1165,13 +1137,13 @@ async function runGeoPipeline(forceAll=false) {
         for(const state of savedStates||[]) {
           const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
           geoStatus.total_areas += areasAdded;
-          await new Promise(r => setTimeout(r, 1200)); // ~50 req/min, well under 1000/hr limit
+          await new Promise(r => setTimeout(r, 300)); // gentle — no rate limit but be polite
         }
       }
 
       geoStatus.countries_done++;
       console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | total: ${geoStatus.countries_done}/${COUNTRIES.length} countries`);
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 300));
 
     } catch(e) {
       geoStatus.last_error = `${country.name}: ${e.message}`;
@@ -2231,34 +2203,30 @@ app.get("/api/geo/pipeline/status", (req, res) => {
 });
 
 app.get("/api/geo/test", async (req, res) => {
-  if (!process.env.GEONAMES_USERNAME) {
-    return res.json({
-      ok:    false,
-      error: "GEONAMES_USERNAME not configured",
-      fix:   "Sign up free at geonames.org (2 min) → enable free web services in your account settings → add GEONAMES_USERNAME to Render env vars → redeploy",
-    });
-  }
   try {
     const t = Date.now();
-    const data = await geonamesGet("countryInfoJSON", { country: "NG", maxRows: 1 });
+    const r = await axios.post(
+      "https://countriesnow.space/api/v0.1/countries/states",
+      { country: "Nigeria" },
+      { timeout: 10000 }
+    );
     const ms = Date.now() - t;
-    const info = data?.geonames?.[0];
-    if (!info) {
-      return res.json({ ok:false, error:"GeoNames returned no data — check username is correct and free web services are enabled at geonames.org/manageaccount" });
+    if (r.data?.error) {
+      return res.json({ ok: false, error: r.data.msg || "CountriesNow returned an error" });
     }
+    const states = r.data?.data?.states || [];
     res.json({
       ok:          true,
-      source:      "GeoNames API (free, 1000 req/hour — no rate limit issues)",
+      source:      "CountriesNow API (countriesnow.space) — free, no key, no rate limits",
       response_ms: ms,
-      test_result: `${info.countryName} — geonameId: ${info.geonameId}`,
-      message:     "GeoNames is working — ready to run geo pipeline!",
-      username:    process.env.GEONAMES_USERNAME,
+      test_result: `Nigeria has ${states.length} states — e.g. "${states[0]?.name}"`,
+      message:     "CountriesNow is working — ready to run geo pipeline! No API key needed.",
     });
   } catch(e) {
     res.json({
       ok:    false,
       error: e.message,
-      fix:   "Check GEONAMES_USERNAME is correct and that free web services are enabled at geonames.org/manageaccount",
+      fix:   "countriesnow.space may be temporarily down — try again in a minute",
     });
   }
 });
