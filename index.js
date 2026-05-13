@@ -953,90 +953,97 @@ const ISO3_TO_ISO2 = {
   PNG:"PG",WSM:"WS",SLB:"SB",TON:"TO",TUV:"TV",VUT:"VU",
 };
 
-const NOMINATIM_UA = "GlobeVoyage/2.0 (travel-app; contact@globevoyage.app)";
+// ══════════════════════════════════════════════════════════════════
+// GEONAMES API — replaces Nominatim
+// Free account: geonames.org (2 min signup) → 1000 req/hour vs
+// Nominatim's 1 req/sec which gets blocked on shared server IPs.
+// Set GEONAMES_USERNAME in Render env vars after signing up.
+// Falls back to a graceful no-op if key not set.
+// ══════════════════════════════════════════════════════════════════
 
-// Nominatim rate limit: 1 req/sec. On 429, wait and retry up to 3 times.
-async function nominatimSearch(params, _retries = 3) {
-  try {
-    const r = await axios.get("https://nominatim.openstreetmap.org/search", {
-      params: { format:"json", limit:50, addressdetails:1, ...params },
-      headers:{ "User-Agent": NOMINATIM_UA, "Accept-Language":"en" },
-      timeout: 12000,
-    });
-    return r.data||[];
-  } catch(e) {
-    const status = e.response?.status;
-    if (status === 429 && _retries > 0) {
-      // Back off: 5s on first retry, 10s on second, 20s on third
-      const waitMs = (4 - _retries) * 5000;
-      console.warn(`[Nominatim] 429 rate limit hit — waiting ${waitMs/1000}s then retrying (${_retries} retries left)...`);
-      await new Promise(r => setTimeout(r, waitMs));
-      return nominatimSearch(params, _retries - 1);
-    }
-    throw e;
-  }
-}
+// GeoNames country ISO2 → geonameId cache (fetched once per country)
+const geonamesCountryIdCache = {};
 
-async function nominatimDetails(osmId, osmType) {
-  const r = await axios.get("https://nominatim.openstreetmap.org/details", {
-    params:{ osmid:osmId, osmtype:osmType, format:"json", addressdetails:1 },
-    headers:{ "User-Agent": NOMINATIM_UA, "Accept-Language":"en" },
+async function geonamesGet(endpoint, params) {
+  const username = process.env.GEONAMES_USERNAME;
+  if (!username) throw new Error("GEONAMES_USERNAME env var not set — sign up free at geonames.org");
+  const r = await axios.get(`http://api.geonames.org/${endpoint}`, {
+    params: { ...params, username, style:"FULL" },
     timeout: 10000,
   });
-  return r.data||{};
+  // GeoNames returns 200 even on auth errors — check for error body
+  if (r.data?.status) {
+    throw new Error(`GeoNames error ${r.data.status.value}: ${r.data.status.message}`);
+  }
+  return r.data;
+}
+
+// Get the GeoNames country geonameId from ISO2 code
+async function getCountryGeonameId(iso2) {
+  if (geonamesCountryIdCache[iso2]) return geonamesCountryIdCache[iso2];
+  const data = await geonamesGet("countryInfoJSON", { country: iso2 });
+  const info = data?.geonames?.[0];
+  if (!info) throw new Error(`No GeoNames data for ${iso2}`);
+  geonamesCountryIdCache[iso2] = info.geonameId;
+  return info.geonameId;
 }
 
 async function fetchAndSaveStates(iso) {
   const countryName = COUNTRIES.find(c=>c.iso===iso)?.name || iso;
   const iso2 = ISO3_TO_ISO2[iso];
-  if(!iso2) return 0;
+  if (!iso2) return 0;
+
+  if (!process.env.GEONAMES_USERNAME) {
+    console.log(`[GeoPipeline] GEONAMES_USERNAME not set — skipping ${iso}`);
+    geoStatus.last_error = "GEONAMES_USERNAME not configured — sign up free at geonames.org and add to Render env vars";
+    return 0;
+  }
+
   try {
-    const results = await nominatimSearch({
-      country:       iso2,
-      featuretype:   "state",
-      addressdetails: 0,
-      limit:         50,
+    // Get the country's top-level geonameId first
+    const countryGeonameId = await getCountryGeonameId(iso2);
+
+    // Fetch admin level 1 (states/provinces) as children of the country
+    const data = await geonamesGet("childrenJSON", {
+      geonameId: countryGeonameId,
+      maxRows:   100,
     });
-    let adminResults = results.filter(r =>
-      r.addresstype && ["state","province","territory","region","prefecture",
-        "department","governorate","emirate","county","district"].includes(r.addresstype)
+
+    const children = (data?.geonames || []).filter(g =>
+      g.fcl === "A" && ["ADM1","ADM1H","ADMD"].includes(g.fcode)
     );
-    if(adminResults.length === 0) {
-      const fallback = await nominatimSearch({
-        q:       `administrative divisions ${countryName}`,
-        country: iso2,
-        limit:   50,
-      });
-      adminResults = fallback.filter(r => r.class === "boundary" && r.type === "administrative");
-    }
-    if(adminResults.length === 0) {
-      console.log(`[GeoPipeline] ${iso} — no admin divisions found via Nominatim`);
+
+    // If no ADM1, try all A-class children (some countries use different codes)
+    const adminList = children.length > 0
+      ? children
+      : (data?.geonames || []).filter(g => g.fcl === "A").slice(0, 50);
+
+    if (!adminList.length) {
+      console.log(`[GeoPipeline] ${iso} — no admin divisions found in GeoNames`);
       return 0;
     }
-    const seen = new Set();
-    const unique = adminResults.filter(r => {
-      if(seen.has(r.display_name)) return false;
-      seen.add(r.display_name);
-      return true;
-    });
-    const rows = unique.map(s => ({
+
+    const rows = adminList.map(s => ({
       country_iso: iso,
-      geoname_id:  parseInt(s.osm_id)||null,
-      name:        s.name || s.display_name?.split(",")[0]?.trim() || "Unknown",
-      ascii_name:  s.name || s.display_name?.split(",")[0]?.trim() || "Unknown",
-      state_code:  null,
-      type:        s.addresstype || s.type || "region",
-      population:  0,
-      latitude:    parseFloat(s.lat)||null,
-      longitude:   parseFloat(s.lon)||null,
-      timezone:    null,
+      geoname_id:  s.geonameId,
+      name:        s.name || s.toponymName || "Unknown",
+      ascii_name:  s.asciiName || s.name || "Unknown",
+      state_code:  s.adminCode1 || null,
+      type:        s.fcode || "ADM1",
+      population:  s.population || 0,
+      latitude:    parseFloat(s.lat) || null,
+      longitude:   parseFloat(s.lng) || null,
+      timezone:    s.timezone?.timeZoneId || null,
       updated_at:  new Date().toISOString(),
     })).filter(r => r.name !== "Unknown" && r.geoname_id);
-    if(!rows.length) return 0;
+
+    if (!rows.length) return 0;
+
     const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
-    if(error) { console.error(`[GeoPipeline] States upsert ${iso}:`, error.message); return 0; }
+    if (error) { console.error(`[GeoPipeline] States upsert ${iso}:`, error.message); return 0; }
     console.log(`[GeoPipeline] ✓ ${iso} (${countryName}) — ${rows.length} states saved`);
     return rows.length;
+
   } catch(e) {
     console.error(`[GeoPipeline] fetchAndSaveStates error ${iso}:`, e.message);
     geoStatus.last_error = `${iso}: ${e.message}`;
@@ -1044,46 +1051,48 @@ async function fetchAndSaveStates(iso) {
   }
 }
 
-async function fetchAndSaveAreas(stateId, osmId, countryIso) {
-  const stateName = (await supabase.from("states").select("name").eq("id",stateId).single())?.data?.name || "";
-  const iso2 = ISO3_TO_ISO2[countryIso];
-  if(!iso2) return 0;
+async function fetchAndSaveAreas(stateId, geonameId, countryIso) {
+  if (!process.env.GEONAMES_USERNAME) return 0;
+  if (!geonameId) return 0;
+
   try {
-    const results = await nominatimSearch({
-      q:       stateName ? `${stateName} districts areas` : "",
-      country: iso2,
-      limit:   50,
+    // Fetch admin level 2 children (districts/municipalities) of the state
+    const data = await geonamesGet("childrenJSON", {
+      geonameId: geonameId,
+      maxRows:   200,
     });
-    const areaResults = results.filter(r =>
-      r.class === "boundary" &&
-      ["administrative","political"].includes(r.type) &&
-      r.addresstype && ["district","county","municipality","borough","town",
-        "suburb","quarter","neighbourhood","city_district"].includes(r.addresstype)
+
+    const areaList = (data?.geonames || []).filter(g =>
+      g.fcl === "A" && ["ADM2","ADM2H","ADM3","ADM3H"].includes(g.fcode)
     );
-    if(!areaResults.length) return 0;
-    const seen = new Set();
-    const unique = areaResults.filter(r => {
-      if(seen.has(r.osm_id)) return false;
-      seen.add(r.osm_id);
-      return true;
-    });
-    const rows = unique.map(a => ({
+
+    // Fallback: all P-class (populated places) if no admin subdivisions
+    const finalList = areaList.length > 0
+      ? areaList
+      : (data?.geonames || []).filter(g => g.fcl === "P" && g.population > 10000).slice(0, 50);
+
+    if (!finalList.length) return 0;
+
+    const rows = finalList.map(a => ({
       state_id:    stateId,
       country_iso: countryIso,
-      geoname_id:  parseInt(a.osm_id)||null,
-      name:        a.name || a.display_name?.split(",")[0]?.trim() || "Unknown",
-      ascii_name:  a.name || a.display_name?.split(",")[0]?.trim() || "Unknown",
-      type:        a.addresstype || "district",
-      population:  0,
-      latitude:    parseFloat(a.lat)||null,
-      longitude:   parseFloat(a.lon)||null,
-      timezone:    null,
+      geoname_id:  a.geonameId,
+      name:        a.name || a.toponymName || "Unknown",
+      ascii_name:  a.asciiName || a.name || "Unknown",
+      type:        a.fcode || "ADM2",
+      population:  a.population || 0,
+      latitude:    parseFloat(a.lat) || null,
+      longitude:   parseFloat(a.lng) || null,
+      timezone:    a.timezone?.timeZoneId || null,
       updated_at:  new Date().toISOString(),
     })).filter(r => r.name !== "Unknown" && r.geoname_id);
-    if(!rows.length) return 0;
+
+    if (!rows.length) return 0;
+
     const { error } = await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
-    if(error) { console.error(`Areas upsert error:`, error.message); return 0; }
+    if (error) { console.error(`Areas upsert error:`, error.message); return 0; }
     return rows.length;
+
   } catch(e) {
     console.error(`fetchAndSaveAreas error:`, e.message);
     return 0;
@@ -1103,21 +1112,23 @@ const geoStatus = {
 
 async function runGeoPipeline(forceAll=false) {
   if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
-  console.log("[GeoPipeline] Testing Nominatim connectivity...");
-  try {
-    await nominatimSearch({ q:"Nigeria", limit:1 });
-    console.log("[GeoPipeline] ✓ Nominatim reachable — starting pipeline");
-  } catch(e) {
-    const status = e.response?.status;
-    geoStatus.last_error = status === 429
-      ? "Nominatim rate limited (429) — wait 60 seconds then try again"
-      : "Nominatim unreachable: " + e.message;
+
+  if (!process.env.GEONAMES_USERNAME) {
+    geoStatus.last_error = "GEONAMES_USERNAME not configured — sign up free at geonames.org and add to Render env vars";
     console.error("[GeoPipeline]", geoStatus.last_error);
     return;
   }
 
-  // Wait 2 seconds after the connectivity test before starting real requests
-  await new Promise(r => setTimeout(r, 2000));
+  // Quick connectivity test
+  console.log("[GeoPipeline] Testing GeoNames connectivity...");
+  try {
+    await geonamesGet("countryInfoJSON", { country: "NG", maxRows: 1 });
+    console.log("[GeoPipeline] ✓ GeoNames reachable — starting pipeline");
+  } catch(e) {
+    geoStatus.last_error = "GeoNames unreachable: " + e.message;
+    console.error("[GeoPipeline]", geoStatus.last_error);
+    return;
+  }
 
   geoPipelineRunning   = true;
   geoStatus.started_at = new Date().toISOString();
@@ -1125,10 +1136,13 @@ async function runGeoPipeline(forceAll=false) {
   geoStatus.total_states = 0;
   geoStatus.total_areas  = 0;
   geoStatus.countries_done = 0;
+
   console.log(`🌍 [GeoPipeline] Starting for ${COUNTRIES.length} countries...`);
+
   for(const country of COUNTRIES) {
     try {
       geoStatus.current_country = country.name;
+
       if(!forceAll) {
         const { count } = await supabase.from("states")
           .select("*", { count:"exact", head:true })
@@ -1139,31 +1153,32 @@ async function runGeoPipeline(forceAll=false) {
           continue;
         }
       }
+
       const statesAdded = await fetchAndSaveStates(country.iso);
       geoStatus.total_states += statesAdded;
+
       if(statesAdded > 0) {
         const { data: savedStates } = await supabase.from("states")
           .select("id, geoname_id, name")
           .eq("country_iso", country.iso);
+
         for(const state of savedStates||[]) {
           const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
           geoStatus.total_areas += areasAdded;
-          await new Promise(r=>setTimeout(r, 1500)); // 1500ms — safely under Nominatim 1 req/sec
+          await new Promise(r => setTimeout(r, 1200)); // ~50 req/min, well under 1000/hr limit
         }
       }
+
       geoStatus.countries_done++;
       console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | total: ${geoStatus.countries_done}/${COUNTRIES.length} countries`);
-      await new Promise(r=>setTimeout(r, 1500)); // 1500ms between countries
+      await new Promise(r => setTimeout(r, 1200));
+
     } catch(e) {
       geoStatus.last_error = `${country.name}: ${e.message}`;
       console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
-      // If we hit a 429, pause for 30 seconds before continuing
-      if(e.response?.status === 429) {
-        console.warn("[GeoPipeline] 429 received — pausing 30s...");
-        await new Promise(r => setTimeout(r, 30000));
-      }
     }
   }
+
   geoPipelineRunning      = false;
   geoStatus.current_country = null;
   geoStatus.completed_at  = new Date().toISOString();
@@ -2216,34 +2231,34 @@ app.get("/api/geo/pipeline/status", (req, res) => {
 });
 
 app.get("/api/geo/test", async (req, res) => {
+  if (!process.env.GEONAMES_USERNAME) {
+    return res.json({
+      ok:    false,
+      error: "GEONAMES_USERNAME not configured",
+      fix:   "Sign up free at geonames.org (2 min) → enable free web services in your account settings → add GEONAMES_USERNAME to Render env vars → redeploy",
+    });
+  }
   try {
     const t = Date.now();
-    const results = await nominatimSearch({ q:"Nigeria", limit:1 });
-    const ms = Date.now()-t;
-    if(!results || results.length === 0) {
-      return res.json({ ok:false, error:"Nominatim returned no results — may be temporarily down" });
+    const data = await geonamesGet("countryInfoJSON", { country: "NG", maxRows: 1 });
+    const ms = Date.now() - t;
+    const info = data?.geonames?.[0];
+    if (!info) {
+      return res.json({ ok:false, error:"GeoNames returned no data — check username is correct and free web services are enabled at geonames.org/manageaccount" });
     }
     res.json({
       ok:          true,
-      source:      "OpenStreetMap Nominatim (free, no key required)",
+      source:      "GeoNames API (free, 1000 req/hour — no rate limit issues)",
       response_ms: ms,
-      test_result: results[0]?.display_name||"Nigeria found",
-      message:     "Nominatim is reachable — ready to run geo pipeline. No API key needed!",
+      test_result: `${info.countryName} — geonameId: ${info.geonameId}`,
+      message:     "GeoNames is working — ready to run geo pipeline!",
+      username:    process.env.GEONAMES_USERNAME,
     });
   } catch(e) {
-    const status = e.response?.status;
-    if (status === 429) {
-      return res.json({
-        ok:    false,
-        error: "Nominatim rate limit hit (429) — too many requests. Wait 60 seconds then try again.",
-        fix:   "Nominatim allows 1 request/second. If the pipeline was recently running, wait a minute before testing.",
-        status: 429,
-      });
-    }
     res.json({
       ok:    false,
       error: e.message,
-      fix:   status ? `HTTP ${status} from Nominatim` : "Check server internet connectivity — Render must be able to reach nominatim.openstreetmap.org",
+      fix:   "Check GEONAMES_USERNAME is correct and that free web services are enabled at geonames.org/manageaccount",
     });
   }
 });
