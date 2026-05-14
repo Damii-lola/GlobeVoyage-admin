@@ -2242,13 +2242,28 @@ app.get("/api/health", async (req,res) => {
   } catch(e) { checks.supabase={ok:false,label:"Supabase DB",detail:e.message}; }
 
   checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
-  checks.verification_ai = {
-    ok: !!ENV.MISTRAL_API_KEY,
-    label: "🤖 Verification AI (Mistral Large + Web Search)",
-    detail: ENV.MISTRAL_API_KEY
-      ? "Using Mistral Large with web search — verifies data currency, accuracy and safety each pipeline run"
-      : "No MISTRAL_API_KEY — add to Render env vars to enable data verification",
-  };
+
+  // Verification AI — live test: ping Mistral with a minimal request to confirm it responds
+  if(ENV.MISTRAL_API_KEY) {
+    await liveTest("verification_ai", () =>
+      axios.post("https://api.mistral.ai/v1/chat/completions",
+        { model:"mistral-large-latest", messages:[{role:"user",content:"Reply with the single word OK"}], max_tokens:5, temperature:0 },
+        { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:10000 }
+      )
+    );
+    // Override the detail text to be descriptive after the live test updates sourceHealth
+    if(sourceHealth.verification_ai?.ok) {
+      sourceHealth.verification_ai._detail_override =
+        `Live OK (${sourceHealth.verification_ai.response_ms}ms) — Mistral Large + web search, verifies every country on each pipeline run`;
+    }
+  } else {
+    sourceHealth.verification_ai = {
+      ok: false, last_check: new Date().toISOString(), response_ms: 0,
+      error: "No MISTRAL_API_KEY configured",
+      success_count: 0, fail_count: 0,
+      _detail_override: "No MISTRAL_API_KEY — add to Render env vars",
+    };
+  }
 
   gnewsResetIfNeeded();
   const gnewsRemaining = GNEWS_DAILY_CAP - gnewsCallsToday;
