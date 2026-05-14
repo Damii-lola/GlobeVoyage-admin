@@ -2243,18 +2243,29 @@ app.get("/api/health", async (req,res) => {
 
   checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
 
-  // Verification AI — live test: ping Mistral with a minimal request to confirm it responds
+  // Verification AI — live ping Mistral directly (cannot use liveTest here as it's defined later in scope)
   if(ENV.MISTRAL_API_KEY) {
-    await liveTest("verification_ai", () =>
-      axios.post("https://api.mistral.ai/v1/chat/completions",
-        { model:"mistral-large-latest", messages:[{role:"user",content:"Reply with the single word OK"}], max_tokens:5, temperature:0 },
+    const vt = Date.now();
+    try {
+      await axios.post("https://api.mistral.ai/v1/chat/completions",
+        { model:"mistral-large-latest", messages:[{role:"user",content:"Reply OK"}], max_tokens:5, temperature:0 },
         { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:10000 }
-      )
-    );
-    // Override the detail text to be descriptive after the live test updates sourceHealth
-    if(sourceHealth.verification_ai?.ok) {
-      sourceHealth.verification_ai._detail_override =
-        `Live OK (${sourceHealth.verification_ai.response_ms}ms) — Mistral Large + web search, verifies every country on each pipeline run`;
+      );
+      const vms = Date.now()-vt;
+      sourceHealth.verification_ai = {
+        ok: true, last_check: new Date().toISOString(), response_ms: vms,
+        error: null, success_count: (sourceHealth.verification_ai?.success_count||0)+1,
+        fail_count: sourceHealth.verification_ai?.fail_count||0,
+        _detail_override: `Live OK (${vms}ms) — Mistral Large + web search, verifies every country each pipeline run`,
+      };
+    } catch(e) {
+      const vms = Date.now()-vt;
+      sourceHealth.verification_ai = {
+        ok: false, last_check: new Date().toISOString(), response_ms: vms,
+        error: e.message, success_count: sourceHealth.verification_ai?.success_count||0,
+        fail_count: (sourceHealth.verification_ai?.fail_count||0)+1,
+        _detail_override: `Failed: ${e.message}`,
+      };
     }
   } else {
     sourceHealth.verification_ai = {
@@ -2438,7 +2449,12 @@ app.get("/api/countries", (req,res) => {
 // ══════════════════════════════════════════════════════════════════
 // TEXTURE PROXY
 // ══════════════════════════════════════════════════════════════════
-const TEXTURES={"earth-day":"https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg","earth-night":"https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg","earth-clouds":"https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png","earth-water":"https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png"};
+const TEXTURES={
+  "earth-day":    "https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg",
+  "earth-night":  "https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg",
+  "earth-clouds": "https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png",
+  "earth-water":  "https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png",
+};
 const textureCache = {};
 
 app.options("/texture/:name", (req,res) => {
@@ -3264,7 +3280,14 @@ app.listen(PORT, async()=>{
   for(const [name, url] of Object.entries(TEXTURES)) {
     axios.get(url,{responseType:"arraybuffer",timeout:20000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
       .then(r=>{textureCache[name]=Buffer.from(r.data);console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`);})
-      .catch(e=>console.error(`✗ Texture pre-warm failed: ${name}`,e.message));
+      .catch(e=>{
+        // Clouds texture is cosmetic — log quietly, don't pollute startup logs
+        if(name === "earth-clouds") {
+          console.log(`ℹ Clouds texture unavailable (${e.response?.status||e.message}) — globe renders without clouds`);
+        } else {
+          console.error(`✗ Texture pre-warm failed: ${name}`, e.message);
+        }
+      });
   }
   setTimeout(runStartupPipeline, 15000);
   setTimeout(resumeGeoPipelineIfIncomplete, 30000); // auto-resume geo if incomplete after restart
