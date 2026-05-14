@@ -20,6 +20,7 @@ const supabase = createClient(
 
 const ENV = {
   MISTRAL_API_KEY:      process.env.MISTRAL_API_KEY,
+  ANTHROPIC_API_KEY:    process.env.ANTHROPIC_API_KEY,
   OPENWEATHER_API_KEY:  process.env.OPENWEATHER_API_KEY,
   TICKETMASTER_API_KEY: process.env.TICKETMASTER_API_KEY,
   PREDICTHQ_API_KEY:    process.env.PREDICTHQ_API_KEY,
@@ -1168,10 +1169,8 @@ async function runGeoPipeline(forceAll=false) {
   geoPipelineRunning   = true;
   geoStatus.started_at = new Date().toISOString();
   geoStatus.last_error = null;
-  geoStatus.countries_done = 0;
 
-  // Seed total_states and total_areas from DB so counts are accurate
-  // even when resuming a previously interrupted pipeline run
+  // Seed totals from DB — accurate even after Render server restarts
   try {
     const [sr, ar] = await Promise.all([
       supabase.from("states").select("*", { count:"exact", head:true }),
@@ -1184,22 +1183,32 @@ async function runGeoPipeline(forceAll=false) {
     geoStatus.total_areas  = 0;
   }
 
-  console.log(`🌍 [GeoPipeline] Starting for ${COUNTRIES.length} countries (resume-safe — skips already loaded)...`);
+  // THE KEY FIX: query DB for which countries already have states loaded.
+  // This means after a Render restart we NEVER re-process countries already done.
+  // We also never rely on in-memory state — always source of truth is the DB.
+  let alreadyLoaded = new Set();
+  try {
+    const { data: existing } = await supabase
+      .from("states")
+      .select("country_iso");
+    (existing || []).forEach(r => alreadyLoaded.add(r.country_iso));
+    console.log(`[GeoPipeline] DB state: ${alreadyLoaded.size}/195 countries already have geo data`);
+  } catch(e) {
+    console.error("[GeoPipeline] Could not fetch loaded countries from DB:", e.message);
+  }
 
-  for(const country of COUNTRIES) {
+  // Start countries_done from DB count so display is accurate from first update
+  geoStatus.countries_done = alreadyLoaded.size;
+
+  const toProcess = forceAll
+    ? COUNTRIES
+    : COUNTRIES.filter(c => !alreadyLoaded.has(c.iso));
+
+  console.log(`🌍 [GeoPipeline] Processing ${toProcess.length} remaining countries (${alreadyLoaded.size} already done)...`);
+
+  for(const country of toProcess) {
     try {
       geoStatus.current_country = country.name;
-
-      if(!forceAll) {
-        const { count } = await supabase.from("states")
-          .select("*", { count:"exact", head:true })
-          .eq("country_iso", country.iso);
-        if(count !== null && count > 0) {
-          // Already done — count it and move on without re-fetching
-          geoStatus.countries_done++;
-          continue;
-        }
-      }
 
       const statesAdded = await fetchAndSaveStates(country.iso);
       geoStatus.total_states += statesAdded;
@@ -1217,6 +1226,7 @@ async function runGeoPipeline(forceAll=false) {
       }
 
       geoStatus.countries_done++;
+      alreadyLoaded.add(country.iso);
       const pct = Math.round(geoStatus.countries_done / COUNTRIES.length * 100);
       console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | ${geoStatus.countries_done}/${COUNTRIES.length} (${pct}%)`);
       await new Promise(r => setTimeout(r, 300));
@@ -1224,7 +1234,7 @@ async function runGeoPipeline(forceAll=false) {
     } catch(e) {
       geoStatus.last_error = `${country.name}: ${e.message}`;
       console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
-      // Don't stop the whole pipeline on a single country error — just continue
+      geoStatus.countries_done++; // count it as processed even on error — don't stall
     }
   }
 
@@ -1234,9 +1244,25 @@ async function runGeoPipeline(forceAll=false) {
   console.log(`🎉 [GeoPipeline] Complete — ${geoStatus.total_states} states, ${geoStatus.total_areas} cities across ${geoStatus.countries_done} countries`);
 }
 
-// ══════════════════════════════════════════════════════════════════
-// ADDITIONAL RAPIDAPI TRAVEL SOURCES
-// ══════════════════════════════════════════════════════════════════
+// Auto-resume on Render restart — if DB is incomplete, continue from where we left off
+async function resumeGeoPipelineIfIncomplete() {
+  try {
+    await new Promise(r => setTimeout(r, 25000)); // wait for DB to settle after boot
+    const { data: existing } = await supabase.from("states").select("country_iso");
+    const loaded  = new Set((existing || []).map(r => r.country_iso));
+    const missing = COUNTRIES.filter(c => !loaded.has(c.iso));
+    if(missing.length === 0) {
+      console.log(`✅ [GeoPipeline] Auto-resume check: all 195 countries loaded`);
+      return;
+    }
+    console.log(`🔄 [GeoPipeline] Auto-resume: ${missing.length} countries missing after restart — continuing...`);
+    runGeoPipeline(false).catch(console.error);
+  } catch(e) {
+    console.error("[GeoPipeline] Auto-resume failed:", e.message);
+  }
+}
+
+
 
 const bookingCache = {};
 async function fetchBooking(countryName, iso) {
@@ -1625,7 +1651,7 @@ const NATIONAL_NEWS_FEEDS = {
   ARE: { name:"Al Arabiya",        url:"https://www.alarabiya.net/tools/rss",                     type:"rss" },
   SAU: { name:"Arab News",         url:"https://www.arabnews.com/rss.xml",                        type:"rss" },
   QAT: { name:"Al Jazeera",        url:"https://www.aljazeera.com/xml/rss/all.xml",               type:"rss" },
-  TUR: { name:"TRT World",         url:"https://www.trtworld.com/rss",                            type:"rss" },
+  TUR: { name:"TRT World",         url:"https://www.trtworld.com/rss/topstories",                 type:"rss" },
   IRN: { name:"Press TV",          url:"https://www.presstv.ir/rss",                              type:"rss" },
   PAK: { name:"Geo News",          url:"https://www.geo.tv/rss/1",                                type:"rss" },
   BGD: { name:"The Daily Star BD", url:"https://www.thedailystar.net/rss.xml",                    type:"rss" },
@@ -1700,6 +1726,112 @@ async function fetchNationalNews(iso) {
   });
 }
 
+// ══════════════════════════════════════════════════════════════════
+// VERIFICATION AI — Claude Sonnet via Anthropic API
+// Runs AFTER all data sources are collected for a country.
+// Purpose: verify that collected data is current, real, and accurate.
+// Has web search enabled so it can cross-check against live internet.
+// Flags stale, suspicious or contradictory data before it gets saved.
+// ══════════════════════════════════════════════════════════════════
+async function runVerificationAI(countryName, continent, rawData) {
+  if(!process.env.ANTHROPIC_API_KEY) {
+    console.log(`[VerifyAI] No ANTHROPIC_API_KEY set — skipping verification for ${countryName}`);
+    return null;
+  }
+
+  return timed("verification_ai", async () => {
+    // Build a compact summary of what the pipeline collected
+    const summary = {
+      weather:      rawData.weather?.now ? `${rawData.weather.now.temp}°C, ${rawData.weather.now.condition}` : null,
+      top_news:     (rawData.news||[]).slice(0,3).map(n => n.title),
+      events:       (rawData.events||[]).slice(0,4).map(e => `${e.name} (${e.date||"TBC"})`),
+      ai_briefing:  rawData.ai?.briefing || null,
+      ai_safety:    rawData.ai?.safety_summary || null,
+      cost_meal:    rawData.costOfLiving?.meal_cheap ? `$${rawData.costOfLiving.meal_cheap}` : null,
+      air_quality:  rawData.airQuality?.aqi_label || null,
+      nat_news:     rawData.nationalNews?.articles?.slice(0,2).map(a => a.title) || [],
+    };
+
+    const prompt = `You are a travel data verification specialist for GlobeVoyage, a real-time travel intelligence app.
+
+Your job is to verify that the data collected for ${countryName} (${continent}) is:
+1. CURRENT — reflects today's actual situation, not outdated info
+2. REAL — not hallucinated, fabricated, or test data
+3. ACCURATE — consistent across sources, no major contradictions
+4. SAFE — safety assessments are realistic and up to date
+
+Here is what our pipeline collected today:
+${JSON.stringify(summary, null, 2)}
+
+Today's date: ${new Date().toISOString().split("T")[0]}
+
+Use your knowledge and web search to cross-check this data. Look for:
+- Is the weather plausible for ${countryName} at this time of year?
+- Are the news headlines real and current (not old recycled stories)?
+- Are the events real and happening at the stated dates?
+- Is the safety assessment realistic given current conditions?
+- Are costs plausible for this country?
+- Any major current events (conflicts, disasters, elections, travel bans) that should be flagged?
+
+Respond ONLY in valid JSON, no markdown:
+{
+  "verified": true,
+  "confidence": 0.95,
+  "flags": [],
+  "corrections": {},
+  "current_alerts": [],
+  "verification_notes": "Brief summary of what was checked",
+  "data_freshness": "fresh|stale|mixed",
+  "safety_level": "safe|caution|warning|danger",
+  "safety_detail": "One current sentence about safety",
+  "trending_topic": "The single most notable current thing about this country right now",
+  "verified_at": "${new Date().toISOString()}"
+}
+
+flags: array of strings describing any issues found (empty if all good)
+corrections: object of field→corrected_value for anything that needs fixing
+current_alerts: array of urgent travel alerts the app should show users`;
+
+    const response = await axios.post(
+      "https://api.anthropic.com/v1/messages",
+      {
+        model:      "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        tools: [
+          {
+            type: "web_search_20250305",
+            name: "web_search",
+          }
+        ],
+        messages: [{ role: "user", content: prompt }],
+      },
+      {
+        headers: {
+          "x-api-key":         process.env.ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "Content-Type":      "application/json",
+        },
+        timeout: 45000,
+      }
+    );
+
+    // Extract text blocks from response (may include tool_use blocks from web search)
+    const textBlocks = (response.data?.content || [])
+      .filter(b => b.type === "text")
+      .map(b => b.text)
+      .join("");
+
+    if(!textBlocks) return null;
+
+    try {
+      return JSON.parse(textBlocks.replace(/```json|```/g, "").trim());
+    } catch(e) {
+      console.error(`[VerifyAI] JSON parse error for ${countryName}:`, e.message);
+      return null;
+    }
+  });
+}
+
 async function runPipeline(iso, countryName, continent) {
   const start = Date.now();
   console.log(`🌍 Pipeline: ${countryName} (${iso})`);
@@ -1749,6 +1881,12 @@ async function runPipeline(iso, countryName, continent) {
 
   const ai = await safe(()=>runMistral(countryName,continent,{wiki,wv,places,weather,news:allNews,gdacs,events:allEvents,social,airQuality:airQuality||waqi,costOfLiving,countryMeta,booking,tripadvisor,travelAdvisor}),null);
 
+  // Verification AI — cross-checks all collected data for currency, accuracy, safety
+  const verification = await safe(()=>runVerificationAI(countryName, continent, {
+    weather, news:allNews, events:allEvents, costOfLiving,
+    airQuality:airQuality||waqi, nationalNews, ai,
+  }), null);
+
   const {error} = await supabase.from("country_intel").upsert({
     iso, country_name:countryName, continent, last_updated:new Date().toISOString(),
     wiki_summary:wiki?.summary||"", wiki_highlights:wv?.highlights||[], wiki_sections:wv?.sections||{},
@@ -1774,6 +1912,7 @@ async function runPipeline(iso, countryName, continent) {
     hotel_deals:     hotelDeals||null,
     youtube_videos:  youtubeVideos||null,
     national_news:   nationalNews||null,
+    verification:    verification||null,
   },{onConflict:"iso"});
 
   const duration = Date.now()-start;
@@ -2059,6 +2198,13 @@ app.get("/api/health", async (req,res) => {
   } catch(e) { checks.supabase={ok:false,label:"Supabase DB",detail:e.message}; }
 
   checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
+  checks.verification_ai = {
+    ok: !!process.env.ANTHROPIC_API_KEY,
+    label: "🤖 Verification AI (Claude)",
+    detail: process.env.ANTHROPIC_API_KEY
+      ? "ANTHROPIC_API_KEY configured — Claude + web search verifying data each pipeline run"
+      : "No ANTHROPIC_API_KEY — add to Render env vars to enable data verification",
+  };
 
   gnewsResetIfNeeded();
   const gnewsRemaining = GNEWS_DAILY_CAP - gnewsCallsToday;
@@ -2107,7 +2253,7 @@ app.get("/api/health", async (req,res) => {
     liveTest("news_dw",       ()=>axios.get("https://rss.dw.com/rdf/rss-en-all",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("news_abc_au",   ()=>axios.get("https://www.abc.net.au/news/feed/1948/rss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("news_cna",      ()=>axios.get("https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_trt",      ()=>axios.get("https://www.trtworld.com/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
+    liveTest("news_trt",      ()=>axios.get("https://www.trtworld.com/rss/topstories",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("news_rt",       ()=>axios.get("https://www.rt.com/rss/",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("news_france24", ()=>axios.get("https://www.france24.com/en/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("news_xinhua",   ()=>axios.get("https://www.xinhuanet.com/english/rss/worldrss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
@@ -2167,6 +2313,7 @@ app.get("/api/health", async (req,res) => {
     "gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy",
     "unsplash","openaq","aviationstack","numbeo","rest_countries","airbnb",
     "booking","tripadvisor","skyscanner","currency","google_places","travel_advisor","hotels_com","youtube","waqi",
+    "verification_ai",
     // National news channels
     "news_bbc","news_aljazeera","news_foxnews","news_nhk","news_dw","news_abc_au",
     "news_cna","news_trt","news_rt","news_france24","news_xinhua","news_ndtv",
@@ -2182,6 +2329,7 @@ app.get("/api/health", async (req,res) => {
     booking:"Booking.com", tripadvisor:"TripAdvisor", skyscanner:"Skyscanner Flights",
     currency:"Currency Exchange", google_places:"Google Places", travel_advisor:"Travel Advisor",
     hotels_com:"Hotels.com", youtube:"YouTube Travel Videos", waqi:"World Air Quality Index",
+    verification_ai:"🤖 Verification AI (Claude + Web Search)",
     // National news
     news_bbc:"📺 BBC News (UK)", news_aljazeera:"📺 Al Jazeera (Qatar)",
     news_foxnews:"📺 Fox News (USA)", news_nhk:"📺 NHK World (Japan)",
@@ -2202,6 +2350,7 @@ app.get("/api/health", async (req,res) => {
 
   const envKeys=[
     {label:"Mistral AI",        key:"MISTRAL_API_KEY"},
+    {label:"Anthropic (Verify)",key:"ANTHROPIC_API_KEY"},
     {label:"OpenWeatherMap",    key:"OPENWEATHER_API_KEY"},
     {label:"Ticketmaster",      key:"TICKETMASTER_API_KEY"},
     {label:"PredictHQ",         key:"PREDICTHQ_API_KEY"},
@@ -3059,5 +3208,6 @@ app.listen(PORT, async()=>{
       .then(r=>{textureCache[name]=Buffer.from(r.data);console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`);})
       .catch(e=>console.error(`✗ Texture pre-warm failed: ${name}`,e.message));
   }
-  setTimeout(runStartupPipeline,15000);
+  setTimeout(runStartupPipeline, 15000);
+  setTimeout(resumeGeoPipelineIfIncomplete, 30000); // auto-resume geo if incomplete after restart
 });
