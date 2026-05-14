@@ -20,7 +20,6 @@ const supabase = createClient(
 
 const ENV = {
   MISTRAL_API_KEY:      process.env.MISTRAL_API_KEY,
-  ANTHROPIC_API_KEY:    process.env.ANTHROPIC_API_KEY,
   OPENWEATHER_API_KEY:  process.env.OPENWEATHER_API_KEY,
   TICKETMASTER_API_KEY: process.env.TICKETMASTER_API_KEY,
   PREDICTHQ_API_KEY:    process.env.PREDICTHQ_API_KEY,
@@ -1727,105 +1726,150 @@ async function fetchNationalNews(iso) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// VERIFICATION AI — Claude Sonnet via Anthropic API
+// VERIFICATION AI — Mistral Large + Web Search (Agents API)
 // Runs AFTER all data sources are collected for a country.
 // Purpose: verify that collected data is current, real, and accurate.
-// Has web search enabled so it can cross-check against live internet.
+// Uses Mistral's web_search tool for live internet cross-checking.
 // Flags stale, suspicious or contradictory data before it gets saved.
 // ══════════════════════════════════════════════════════════════════
 async function runVerificationAI(countryName, continent, rawData) {
-  if(!process.env.ANTHROPIC_API_KEY) {
-    console.log(`[VerifyAI] No ANTHROPIC_API_KEY set — skipping verification for ${countryName}`);
+  if(!ENV.MISTRAL_API_KEY) {
+    console.log(`[VerifyAI] No MISTRAL_API_KEY — skipping verification for ${countryName}`);
     return null;
   }
 
   return timed("verification_ai", async () => {
-    // Build a compact summary of what the pipeline collected
+    const today = new Date().toISOString().split("T")[0];
+
     const summary = {
-      weather:      rawData.weather?.now ? `${rawData.weather.now.temp}°C, ${rawData.weather.now.condition}` : null,
-      top_news:     (rawData.news||[]).slice(0,3).map(n => n.title),
-      events:       (rawData.events||[]).slice(0,4).map(e => `${e.name} (${e.date||"TBC"})`),
-      ai_briefing:  rawData.ai?.briefing || null,
-      ai_safety:    rawData.ai?.safety_summary || null,
-      cost_meal:    rawData.costOfLiving?.meal_cheap ? `$${rawData.costOfLiving.meal_cheap}` : null,
-      air_quality:  rawData.airQuality?.aqi_label || null,
-      nat_news:     rawData.nationalNews?.articles?.slice(0,2).map(a => a.title) || [],
+      weather:     rawData.weather?.now
+        ? `${rawData.weather.now.temp}°C, ${rawData.weather.now.condition}` : null,
+      top_news:    (rawData.news||[]).slice(0,4).map(n => n.title),
+      events:      (rawData.events||[]).slice(0,4).map(e => `${e.name} (${e.date||"TBC"})`),
+      briefing:    rawData.ai?.briefing || null,
+      safety:      rawData.ai?.safety_summary || null,
+      cost_meal:   rawData.costOfLiving?.meal_cheap ? `$${rawData.costOfLiving.meal_cheap}` : null,
+      air_quality: rawData.airQuality?.aqi_label || null,
+      nat_news:    rawData.nationalNews?.articles?.slice(0,3).map(a => a.title) || [],
     };
 
-    const prompt = `You are a travel data verification specialist for GlobeVoyage, a real-time travel intelligence app.
+    const prompt = `You are a senior travel intelligence analyst and fact-checker for GlobeVoyage, a real-time global travel app used by millions.
 
-Your job is to verify that the data collected for ${countryName} (${continent}) is:
-1. CURRENT — reflects today's actual situation, not outdated info
-2. REAL — not hallucinated, fabricated, or test data
-3. ACCURATE — consistent across sources, no major contradictions
-4. SAFE — safety assessments are realistic and up to date
+Today is ${today}. Your job is to verify travel data for ${countryName} (${continent}).
+
+USE YOUR WEB SEARCH to look up:
+1. Current news about ${countryName} — any conflicts, disasters, strikes, elections, or major events happening RIGHT NOW
+2. Current travel advisories or warnings for ${countryName} from any government
+3. Whether the events listed below are real and upcoming
+4. Verify the safety situation is accurately described
+5. Any major breaking stories our pipeline may have missed
 
 Here is what our pipeline collected today:
 ${JSON.stringify(summary, null, 2)}
 
-Today's date: ${new Date().toISOString().split("T")[0]}
-
-Use your knowledge and web search to cross-check this data. Look for:
-- Is the weather plausible for ${countryName} at this time of year?
-- Are the news headlines real and current (not old recycled stories)?
-- Are the events real and happening at the stated dates?
-- Is the safety assessment realistic given current conditions?
-- Are costs plausible for this country?
-- Any major current events (conflicts, disasters, elections, travel bans) that should be flagged?
-
-Respond ONLY in valid JSON, no markdown:
+After searching, respond ONLY in valid JSON with no markdown fences:
 {
   "verified": true,
   "confidence": 0.95,
   "flags": [],
   "corrections": {},
   "current_alerts": [],
-  "verification_notes": "Brief summary of what was checked",
-  "data_freshness": "fresh|stale|mixed",
-  "safety_level": "safe|caution|warning|danger",
-  "safety_detail": "One current sentence about safety",
+  "verification_notes": "Brief summary of what you searched and found",
+  "data_freshness": "fresh",
+  "safety_level": "safe",
+  "safety_detail": "One current honest sentence about safety right now",
   "trending_topic": "The single most notable current thing about this country right now",
+  "missed_stories": [],
   "verified_at": "${new Date().toISOString()}"
 }
 
-flags: array of strings describing any issues found (empty if all good)
-corrections: object of field→corrected_value for anything that needs fixing
-current_alerts: array of urgent travel alerts the app should show users`;
+Field definitions:
+- verified: false if data has serious errors
+- confidence: 0.0-1.0 how confident you are the data is accurate
+- flags: list of specific problems found e.g. ["Outdated safety warning", "Event cancelled"]
+- corrections: object of what to change e.g. {"safety_summary": "corrected text"}
+- current_alerts: urgent alerts users must see e.g. ["Airport strike May 15", "Flooding in capital"]
+- data_freshness: "fresh" | "stale" | "mixed"
+- safety_level: "safe" | "caution" | "warning" | "danger"
+- missed_stories: important current stories our sources missed`;
 
-    const response = await axios.post(
-      "https://api.anthropic.com/v1/messages",
+    // Use Mistral Agents API with web_search tool enabled
+    const r = await axios.post(
+      "https://api.mistral.ai/v1/agents/completions",
       {
-        model:      "claude-sonnet-4-20250514",
-        max_tokens: 1000,
+        agent_id: null, // use inline tools instead of a saved agent
+        model:    "mistral-large-latest",
+        messages: [{ role: "user", content: prompt }],
         tools: [
           {
-            type: "web_search_20250305",
-            name: "web_search",
+            type: "function",
+            function: {
+              name:        "web_search",
+              description: "Search the web for current information",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: { type: "string", description: "Search query" }
+                },
+                required: ["query"]
+              }
+            }
           }
         ],
-        messages: [{ role: "user", content: prompt }],
+        tool_choice:  "auto",
+        temperature:  0.1,
+        max_tokens:   1200,
       },
       {
         headers: {
-          "x-api-key":         process.env.ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "Content-Type":      "application/json",
+          Authorization:  `Bearer ${ENV.MISTRAL_API_KEY}`,
+          "Content-Type": "application/json",
         },
-        timeout: 45000,
+        timeout: 50000,
       }
     );
 
-    // Extract text blocks from response (may include tool_use blocks from web search)
-    const textBlocks = (response.data?.content || [])
-      .filter(b => b.type === "text")
-      .map(b => b.text)
-      .join("");
+    // Handle tool_calls — Mistral may call web_search, then we need to respond
+    // For simplicity we handle one round of tool calls using Mistral's built-in search
+    let finalText = "";
+    const choice = r.data?.choices?.[0];
 
-    if(!textBlocks) return null;
+    if(choice?.finish_reason === "tool_calls") {
+      // Mistral wants to search — re-run using the chat completions endpoint
+      // with the web_search_preview tool which handles search server-side
+      const r2 = await axios.post(
+        "https://api.mistral.ai/v1/chat/completions",
+        {
+          model:    "mistral-large-latest",
+          messages: [{ role: "user", content: prompt }],
+          tools: [{ type: "web_search" }],
+          tool_choice:  "auto",
+          temperature:  0.1,
+          max_tokens:   1200,
+        },
+        {
+          headers: {
+            Authorization:  `Bearer ${ENV.MISTRAL_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 50000,
+        }
+      );
+      finalText = r2.data?.choices?.[0]?.message?.content || "";
+    } else {
+      finalText = choice?.message?.content || "";
+    }
+
+    if(!finalText) return null;
 
     try {
-      return JSON.parse(textBlocks.replace(/```json|```/g, "").trim());
+      return JSON.parse(finalText.replace(/```json|```/g, "").trim());
     } catch(e) {
+      // If Mistral wrapped in explanation text, extract the JSON block
+      const match = finalText.match(/\{[\s\S]*\}/);
+      if(match) {
+        try { return JSON.parse(match[0]); } catch(e2) {}
+      }
       console.error(`[VerifyAI] JSON parse error for ${countryName}:`, e.message);
       return null;
     }
@@ -2199,11 +2243,11 @@ app.get("/api/health", async (req,res) => {
 
   checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
   checks.verification_ai = {
-    ok: !!process.env.ANTHROPIC_API_KEY,
-    label: "🤖 Verification AI (Claude)",
-    detail: process.env.ANTHROPIC_API_KEY
-      ? "ANTHROPIC_API_KEY configured — Claude + web search verifying data each pipeline run"
-      : "No ANTHROPIC_API_KEY — add to Render env vars to enable data verification",
+    ok: !!ENV.MISTRAL_API_KEY,
+    label: "🤖 Verification AI (Mistral Large + Web Search)",
+    detail: ENV.MISTRAL_API_KEY
+      ? "Using Mistral Large with web search — verifies data currency, accuracy and safety each pipeline run"
+      : "No MISTRAL_API_KEY — add to Render env vars to enable data verification",
   };
 
   gnewsResetIfNeeded();
@@ -2349,17 +2393,16 @@ app.get("/api/health", async (req,res) => {
   });
 
   const envKeys=[
-    {label:"Mistral AI",        key:"MISTRAL_API_KEY"},
-    {label:"Anthropic (Verify)",key:"ANTHROPIC_API_KEY"},
-    {label:"OpenWeatherMap",    key:"OPENWEATHER_API_KEY"},
-    {label:"Ticketmaster",      key:"TICKETMASTER_API_KEY"},
-    {label:"PredictHQ",         key:"PREDICTHQ_API_KEY"},
-    {label:"GNews API",         key:"GNEWS_API_KEY"},
-    {label:"Geoapify",          key:"GEOAPIFY_API_KEY"},
-    {label:"Unsplash",          key:"UNSPLASH_ACCESS_KEY"},
-    {label:"OpenAQ",            key:"OPENAQ_API_KEY"},
-    {label:"Aviationstack",     key:"AVIATIONSTACK_API_KEY"},
-    {label:"RapidAPI",          key:"RAPIDAPI_KEY"},
+    {label:"Mistral AI + Verify", key:"MISTRAL_API_KEY"},
+    {label:"OpenWeatherMap",      key:"OPENWEATHER_API_KEY"},
+    {label:"Ticketmaster",        key:"TICKETMASTER_API_KEY"},
+    {label:"PredictHQ",           key:"PREDICTHQ_API_KEY"},
+    {label:"GNews API",           key:"GNEWS_API_KEY"},
+    {label:"Geoapify",            key:"GEOAPIFY_API_KEY"},
+    {label:"Unsplash",            key:"UNSPLASH_ACCESS_KEY"},
+    {label:"OpenAQ",              key:"OPENAQ_API_KEY"},
+    {label:"Aviationstack",       key:"AVIATIONSTACK_API_KEY"},
+    {label:"RapidAPI",            key:"RAPIDAPI_KEY"},
   ];
   checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
 
