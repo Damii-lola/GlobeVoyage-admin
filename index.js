@@ -1301,22 +1301,56 @@ async function fetchBooking(countryName, iso) {
       },
       timeout: 12000,
     });
-    const hotels = (h.data?.data?.hotels||[]).slice(0,5).map(hotel => ({
-      name:         hotel.property?.name,
-      rating:       hotel.property?.reviewScore,
-      review_count: hotel.property?.reviewCount,
-      price_per_night: hotel.property?.priceBreakdown?.grossPrice?.value,
-      currency:     hotel.property?.priceBreakdown?.grossPrice?.currency||"USD",
-      stars:        hotel.property?.propertyClass,
-      photo:        hotel.property?.photoUrls?.[0]||null,
-      checkin:      hotel.property?.checkin?.fromTime,
-    }));
+    const hotels = (h.data?.data?.hotels||[]).slice(0,8).map(hotel => {
+      const hotelId   = hotel.hotel_id || hotel.property?.id;
+      const hotelName = hotel.property?.name || "";
+      const checkinEnc  = encodeURIComponent(checkin);
+      const checkoutEnc = encodeURIComponent(checkout);
+      // Real Booking.com deep link — opens directly to the hotel page
+      const bookingUrl = hotelId
+        ? `https://www.booking.com/hotel/xx/${String(hotelName).toLowerCase().replace(/[^a-z0-9]+/g,"-")}.html?aid=304142&checkin=${checkinEnc}&checkout=${checkoutEnc}&no_rooms=1&group_adults=2`
+        : `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(countryName)}&checkin=${checkinEnc}&checkout=${checkoutEnc}&no_rooms=1&group_adults=2`;
+      // Booking.com app deep link (opens app if installed, falls back to web)
+      const appDeepLink = hotelId
+        ? `booking://hotel/${hotelId}?checkin=${checkin}&checkout=${checkout}&adults=2`
+        : `booking://search?dest_name=${encodeURIComponent(countryName)}&checkin=${checkin}&checkout=${checkout}`;
+      return {
+        hotel_id:        hotelId,
+        name:            hotelName,
+        rating:          hotel.property?.reviewScore,
+        rating_word:     hotel.property?.reviewScoreWord,
+        review_count:    hotel.property?.reviewCount,
+        price_per_night: hotel.property?.priceBreakdown?.grossPrice?.value,
+        currency:        hotel.property?.priceBreakdown?.grossPrice?.currency||"USD",
+        stars:           hotel.property?.propertyClass,
+        photo:           hotel.property?.photoUrls?.[0]||null,
+        photos:          hotel.property?.photoUrls?.slice(0,4)||[],
+        checkin_from:    hotel.property?.checkin?.fromTime,
+        checkout_until:  hotel.property?.checkout?.untilTime,
+        latitude:        hotel.property?.latitude||null,
+        longitude:       hotel.property?.longitude||null,
+        booking_url:     bookingUrl,
+        app_deep_link:   appDeepLink,
+        is_preferred:    hotel.property?.isPreferred||false,
+      };
+    });
     const prices = hotels.map(h=>h.price_per_night).filter(Boolean);
+    // Search results deep link — opens Booking.com search for this country
+    const searchUrl = `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(countryName)}&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=1&group_adults=2&order=popularity`;
+    const appSearchLink = `booking://search?dest_name=${encodeURIComponent(countryName)}&dest_type=country&checkin=${checkin}&checkout=${checkout}`;
     const data = {
       hotels,
       avg_price_per_night: prices.length ? Math.round(prices.reduce((a,b)=>a+b,0)/prices.length) : null,
-      destination: dest.city_name||countryName,
-      currency: "USD",
+      min_price:           prices.length ? Math.round(Math.min(...prices)) : null,
+      max_price:           prices.length ? Math.round(Math.max(...prices)) : null,
+      destination:         dest.city_name||countryName,
+      dest_id:             dest.dest_id,
+      currency:            "USD",
+      checkin,
+      checkout,
+      search_url:          searchUrl,
+      app_search_link:     appSearchLink,
+      total_results:       h.data?.data?.meta?.totalCount||null,
     };
     bookingCache[iso] = { data, expires: Date.now()+6*60*60*1000 };
     return data;
@@ -2212,6 +2246,177 @@ app.get("/api/intel", async (req,res) => {
   res.json({countries:data||[],total:(data||[]).length});
 });
 
+// ══════════════════════════════════════════════════════════════════
+// BOOKING.COM ENDPOINTS
+// ══════════════════════════════════════════════════════════════════
+
+// GET /api/booking/:iso — get cached hotel data for a country
+app.get("/api/booking/:iso", async (req, res) => {
+  const iso = req.params.iso.toUpperCase();
+  const { data, error } = await supabase
+    .from("country_intel")
+    .select("booking, country_name")
+    .eq("iso", iso)
+    .single();
+  if (error || !data) return res.status(404).json({ error: "No booking data for this country" });
+  if (!data.booking) {
+    // Trigger a fresh fetch in the background
+    const country = COUNTRIES.find(c => c.iso === iso);
+    if (country) fetchBooking(country.name, iso).catch(console.error);
+    return res.status(202).json({ message: "Booking data loading — check back in 30 seconds" });
+  }
+  res.json({ iso, country: data.country_name, ...data.booking });
+});
+
+// GET /api/booking/:iso/search — live search with custom dates & guests
+// Query params: checkin, checkout, adults, rooms, currency
+app.get("/api/booking/:iso/search", async (req, res) => {
+  const iso      = req.params.iso.toUpperCase();
+  const country  = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Unknown country ISO" });
+  if (!ENV.RAPIDAPI_KEY) return res.status(503).json({ error: "RapidAPI key not configured" });
+
+  const checkin  = req.query.checkin  || getFutureDate(7);
+  const checkout = req.query.checkout || getFutureDate(10);
+  const adults   = parseInt(req.query.adults) || 2;
+  const rooms    = parseInt(req.query.rooms)  || 1;
+  const currency = req.query.currency || "USD";
+  const sort     = req.query.sort || "popularity"; // popularity | price | review_score
+  const page     = parseInt(req.query.page) || 1;
+
+  try {
+    // Step 1: get destination ID
+    const destR = await axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchDestination", {
+      params: { query: country.name },
+      headers: { "X-RapidAPI-Key": ENV.RAPIDAPI_KEY, "X-RapidAPI-Host": "booking-com15.p.rapidapi.com" },
+      timeout: 10000,
+    });
+    const dest = destR.data?.data?.[0];
+    if (!dest) return res.status(404).json({ error: "Destination not found on Booking.com" });
+
+    // Step 2: search hotels
+    const hotelsR = await axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/searchHotels", {
+      params: {
+        dest_id:        dest.dest_id,
+        search_type:    dest.search_type || "CITY",
+        arrival_date:   checkin,
+        departure_date: checkout,
+        adults,
+        room_qty:       rooms,
+        page_number:    page,
+        languagecode:   "en-us",
+        currency_code:  currency,
+        sort_by:        sort,
+      },
+      headers: { "X-RapidAPI-Key": ENV.RAPIDAPI_KEY, "X-RapidAPI-Host": "booking-com15.p.rapidapi.com" },
+      timeout: 12000,
+    });
+
+    const hotels = (hotelsR.data?.data?.hotels || []).slice(0, 10).map(hotel => {
+      const hotelId = hotel.hotel_id || hotel.property?.id;
+      const name    = hotel.property?.name || "";
+      const bookingUrl   = `https://www.booking.com/hotel/xx/${name.toLowerCase().replace(/[^a-z0-9]+/g,"-")}.html?aid=304142&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=${rooms}&group_adults=${adults}`;
+      const appDeepLink  = hotelId ? `booking://hotel/${hotelId}?checkin=${checkin}&checkout=${checkout}&adults=${adults}` : null;
+      return {
+        hotel_id:        hotelId,
+        name,
+        rating:          hotel.property?.reviewScore,
+        rating_word:     hotel.property?.reviewScoreWord,
+        review_count:    hotel.property?.reviewCount,
+        price_per_night: hotel.property?.priceBreakdown?.grossPrice?.value,
+        currency:        hotel.property?.priceBreakdown?.grossPrice?.currency || currency,
+        stars:           hotel.property?.propertyClass,
+        photo:           hotel.property?.photoUrls?.[0] || null,
+        photos:          hotel.property?.photoUrls?.slice(0, 4) || [],
+        checkin_from:    hotel.property?.checkin?.fromTime,
+        checkout_until:  hotel.property?.checkout?.untilTime,
+        latitude:        hotel.property?.latitude || null,
+        longitude:       hotel.property?.longitude || null,
+        is_preferred:    hotel.property?.isPreferred || false,
+        booking_url:     bookingUrl,
+        app_deep_link:   appDeepLink,
+      };
+    });
+
+    const prices = hotels.map(h => h.price_per_night).filter(Boolean);
+    const searchUrl = `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(country.name)}&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=${rooms}&group_adults=${adults}&order=${sort}`;
+
+    res.json({
+      iso,
+      country:       country.name,
+      destination:   dest.city_name || country.name,
+      checkin,
+      checkout,
+      adults,
+      rooms,
+      currency,
+      hotels,
+      total_results: hotelsR.data?.data?.meta?.totalCount || null,
+      page,
+      avg_price:     prices.length ? Math.round(prices.reduce((a,b)=>a+b,0)/prices.length) : null,
+      min_price:     prices.length ? Math.round(Math.min(...prices)) : null,
+      max_price:     prices.length ? Math.round(Math.max(...prices)) : null,
+      search_url:    searchUrl,
+      app_search_link: `booking://search?dest_name=${encodeURIComponent(country.name)}&dest_type=country&checkin=${checkin}&checkout=${checkout}&adults=${adults}`,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/booking/:iso/hotel/:hotelId — get full details for a specific hotel
+app.get("/api/booking/:iso/hotel/:hotelId", async (req, res) => {
+  const iso     = req.params.iso.toUpperCase();
+  const hotelId = req.params.hotelId;
+  if (!ENV.RAPIDAPI_KEY) return res.status(503).json({ error: "RapidAPI key not configured" });
+
+  try {
+    const r = await axios.get("https://booking-com15.p.rapidapi.com/api/v1/hotels/getHotelDetails", {
+      params: {
+        hotel_id:     hotelId,
+        arrival_date: getFutureDate(14),
+        departure_date: getFutureDate(17),
+        adults:       2,
+        room_qty:     1,
+        languagecode: "en-us",
+        currency_code:"USD",
+      },
+      headers: { "X-RapidAPI-Key": ENV.RAPIDAPI_KEY, "X-RapidAPI-Host": "booking-com15.p.rapidapi.com" },
+      timeout: 12000,
+    });
+
+    const d = r.data?.data;
+    if (!d) return res.status(404).json({ error: "Hotel not found" });
+
+    const checkin  = getFutureDate(14);
+    const checkout = getFutureDate(17);
+    res.json({
+      hotel_id:      hotelId,
+      name:          d.hotel_name,
+      description:   d.description_translations?.find(t=>t.language==="en")?.description || d.description || "",
+      stars:         d.hotel_class,
+      rating:        d.review_score,
+      rating_word:   d.review_score_word,
+      review_count:  d.review_nr,
+      address:       d.address,
+      city:          d.city,
+      country:       d.country_trans,
+      latitude:      d.latitude,
+      longitude:     d.longitude,
+      photos:        (d.rooms?.[0]?.photos||[]).slice(0,8).map(p=>p.url_original||p.url_max||""),
+      amenities:     d.facilities_block?.facilities?.map(f=>f.name) || [],
+      checkin_from:  d.checkin?.from,
+      checkout_until:d.checkout?.until,
+      price_per_night: d.composite_price_breakdown?.gross_amount_per_night?.value,
+      currency:      d.composite_price_breakdown?.gross_amount_per_night?.currency || "USD",
+      booking_url:   `https://www.booking.com/hotel/xx/${(d.hotel_name||"hotel").toLowerCase().replace(/[^a-z0-9]+/g,"-")}.html?aid=304142&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=1&group_adults=2`,
+      app_deep_link: `booking://hotel/${hotelId}?checkin=${checkin}&checkout=${checkout}&adults=2`,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/api/pipeline/run/:iso", async (req,res) => {
   const iso = req.params.iso.toUpperCase();
   const c = COUNTRIES.find(x=>x.iso===iso);
@@ -2358,7 +2563,7 @@ app.get("/api/health", async (req,res) => {
     aviationstack:  { key: ENV.AVIATIONSTACK_API_KEY, detail: ENV.AVIATIONSTACK_API_KEY ? "Key configured (100 req/month — not live-tested)" : "No API key" },
     numbeo:         { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
     airbnb:         { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
-    booking:        { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
+    booking:        { key: ENV.RAPIDAPI_KEY, detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured — /api/booking/:iso, /api/booking/:iso/search, /api/booking/:iso/hotel/:id" : "No RapidAPI key" },
     tripadvisor:    { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
     skyscanner:     { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
     google_places:  { key: ENV.RAPIDAPI_KEY,          detail: ENV.RAPIDAPI_KEY ? "RapidAPI key configured" : "No RapidAPI key" },
