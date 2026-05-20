@@ -417,10 +417,13 @@ async function fetchPlacesByCoords(lat, lon) {
 }
 
 // ── NEW: Google News RSS for any search query ─────────────────────
-async function fetchGoogleNewsByQuery(query) {
+async function fetchGoogleNewsByQuery(query, iso2) {
   try {
     const q = encodeURIComponent(query);
-    const r = await axios.get(`https://news.google.com/rss/search?q=${q}&hl=en&gl=US&ceid=US:en`,{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
+    // Use country-specific Google News when iso2 is provided — prevents wrong-country results
+    const gl  = (iso2 || 'US').toLowerCase();
+    const ceid = `${gl.toUpperCase()}:en`;
+    const r = await axios.get(`https://news.google.com/rss/search?q=${q}&hl=en&gl=${gl}&ceid=${ceid}`,{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}});
     const parsed = await xml2js.parseStringPromise(r.data,{explicitArray:false});
     const items = parsed?.rss?.channel?.item||[];
     const arr = Array.isArray(items)?items:[items];
@@ -892,19 +895,42 @@ async function saveStatesFromResponse(states, iso, countryName) {
   return rows.length;
 }
 
+// Filter out garbage city names from AI/API results
+const BAD_CITY_WORDS = new Set(['list','unknown','n/a','null','undefined','none','other','various','multiple','city','town','village','district','region','area','state','province','territory','country']);
+function isValidCityName(name, stateName, countryName) {
+  if (!name || typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (trimmed.length < 2 || trimmed.length > 60) return false;
+  if (BAD_CITY_WORDS.has(trimmed.toLowerCase())) return false;
+  // Reject if it exactly matches the state or country name
+  if (stateName && trimmed.toLowerCase() === stateName.toLowerCase()) return false;
+  if (countryName && trimmed.toLowerCase() === countryName.toLowerCase()) return false;
+  // Reject address-like strings (multiple commas or too many words)
+  if ((trimmed.match(/,/g)||[]).length >= 2) return false;
+  // Reject strings that look like descriptions (contain "developers", "estate", "planners" etc.)
+  if (/\b(developer|estate|planner|institute|corporation|association|committee|authority|council|board|agency|ministry|bureau|department|office|centre|center|gate|road|street|avenue|boulevard|highway|expressway|airport|station|park|garden|housing|compound|layout|quarters|barracks|cantonment)\b/i.test(trimmed)) return false;
+  // Must have at least one letter
+  if (!/[a-zA-Z]/.test(trimmed)) return false;
+  return true;
+}
+
 async function fetchAndSaveAreas(stateId, _unused, countryIso) {
   try {
     const { data: stateRow } = await supabase.from("states").select("name").eq("id",stateId).single();
     const stateName = stateRow?.name || "";
     if (!stateName) return 0;
     const country = COUNTRIES.find(c => c.iso === countryIso);
-    const cities = await fetchCitiesMultiSource(stateName, country?.name || countryIso, countryIso);
+    const countryName = country?.name || countryIso;
+    const cities = await fetchCitiesMultiSource(stateName, countryName, countryIso);
     if (!cities.length) return 0;
-    const rows = cities.slice(0,80).map((cityName,idx) => ({
-      state_id:stateId, country_iso:countryIso, geoname_id:Math.abs(hashCode(`${stateId}-city-${cityName||idx}`)),
-      name:cityName||"Unknown", ascii_name:cityName||"Unknown", type:"city",
-      population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString(),
-    })).filter(r=>r.name!=="Unknown");
+    const rows = cities
+      .slice(0,100)
+      .filter(cityName => isValidCityName(cityName, stateName, countryName))
+      .map((cityName,idx) => ({
+        state_id:stateId, country_iso:countryIso, geoname_id:Math.abs(hashCode(`${stateId}-city-${cityName||idx}`)),
+        name:cityName.trim(), ascii_name:cityName.trim(), type:"city",
+        population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString(),
+      }));
     if (!rows.length) return 0;
     const { error } = await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
     if (error) { console.error(`Areas upsert error:`, error.message); return 0; }
@@ -1573,13 +1599,19 @@ async function runStatePipeline(stateId) {
     supabase.from("states").update({ latitude: coords.lat, longitude: coords.lon }).eq("id", stateId).then(()=>{}).catch(()=>{});
   }
 
+  const iso2 = ISO3_TO_ISO2[state.country_iso] || 'US';
+
   const safe = async (fn, fallback) => { try { return await fn(); } catch(e) { return fallback; } };
+
+  // Use quoted state name + country to prevent geographic confusion (e.g. FCT Nigeria vs DC)
+  const newsQuery   = `"${stateName}" "${countryName}" travel tourism`;
+  const eventsQuery = `"${stateName}" "${countryName}" events festival`;
 
   const [weather, newsRaw, photos, eventsRaw, places, waqiData] = await Promise.all([
     safe(() => fetchWeatherByCoords(coords.lat, coords.lon), { now:null, forecast:[] }),
-    safe(() => fetchGoogleNewsByQuery(`${stateName} ${countryName} travel tourism`), []),
+    safe(() => fetchGoogleNewsByQuery(newsQuery, iso2), []),
     safe(() => fetchUnsplash(`${stateName} ${countryName}`), []),
-    safe(() => fetchGoogleNewsByQuery(`${stateName} events festival things to do`), []),
+    safe(() => fetchGoogleNewsByQuery(eventsQuery, iso2), []),
     safe(() => fetchPlacesByCoords(coords.lat, coords.lon), []),
     safe(() => fetchWAQIByCoords(coords.lat, coords.lon, stateName), null),
   ]);
