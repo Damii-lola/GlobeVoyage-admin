@@ -963,7 +963,28 @@ async function fetchStatesMultiSource(iso) {
   if (!country) return [];
   const cnName = getCountriesNowName(iso) || country.name;
 
-  // ── SOURCE 1: CountriesNow ────────────────────────────────────
+  // ── SOURCE 1: Mistral AI (primary — always available, most comprehensive) ──
+  if (ENV.MISTRAL_API_KEY) {
+    try {
+      const prompt = `List ALL official states, provinces, regions, or first-level administrative divisions of ${country.name} (ISO: ${iso}).
+Return ONLY a valid JSON array — no markdown, no explanation, nothing else:
+[{"name":"Full Official Division Name","state_code":"CODE_OR_NULL","type":"state"}]
+Be comprehensive and accurate — include every single first-level administrative division of ${country.name}.`;
+      const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+        { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:2500 },
+        { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:30000 }
+      );
+      const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const states = parsed.map(s=>({ name:(s.name||'').trim(), state_code:s.state_code||null })).filter(s=>s.name);
+        console.log(`[GeoMulti] ${iso} ✓ Mistral AI — ${states.length} states`);
+        return states;
+      }
+    } catch(e) { console.log(`[GeoMulti] ${iso} AI failed: ${e.message?.slice(0,50)}`); }
+  }
+
+  // ── SOURCE 2: CountriesNow (fallback) ────────────────────────
   const namesToTry = [cnName];
   if (cnName !== country.name) namesToTry.push(country.name);
   for (const name of namesToTry) {
@@ -977,27 +998,7 @@ async function fetchStatesMultiSource(iso) {
     } catch(e) { console.log(`[GeoMulti] ${iso} CountriesNow fail: ${e.message?.slice(0,40)}`); }
   }
 
-  // ── SOURCE 2: OpenStreetMap Nominatim (free, no key) ──────────
-  const iso2 = ISO3_TO_ISO2[iso];
-  if (iso2) {
-    try {
-      await nominatimThrottle();
-      const r = await axios.get('https://nominatim.openstreetmap.org/search', {
-        params:{ q:`${country.name}`, featureType:'state', format:'json', limit:50, countrycodes:iso2.toLowerCase(), addressdetails:0 },
-        headers:{ 'User-Agent': WIKI_UA }, timeout:12000
-      });
-      const states = (r.data||[])
-        .filter(s=>s.display_name)
-        .map(s=>({ name:s.display_name.split(',')[0].trim(), state_code:null }))
-        .filter(s=>s.name && s.name.length>1 && !s.name.toLowerCase().includes(country.name.toLowerCase()));
-      if (states.length>1) {
-        console.log(`[GeoMulti] ${iso} ✓ Nominatim/OSM — ${states.length} states`);
-        return states;
-      }
-    } catch(e) { console.log(`[GeoMulti] ${iso} Nominatim fail: ${e.message?.slice(0,40)}`); }
-  }
-
-  // ── SOURCE 3: Google Maps Places API ─────────────────────────
+  // ── SOURCE 3: Google Maps Places API (fallback) ───────────────
   if (ENV.GOOGLE_MAPS_KEY) {
     try {
       const r = await axios.get('https://maps.googleapis.com/maps/api/place/textsearch/json', {
@@ -1007,53 +1008,52 @@ async function fetchStatesMultiSource(iso) {
       const states = (r.data?.results||[])
         .map(p=>({ name:p.name, state_code:null }))
         .filter(s=>s.name && !s.name.toLowerCase().includes(country.name.toLowerCase()));
-      if (states.length>1) {
+      if (states.length > 1) {
         console.log(`[GeoMulti] ${iso} ✓ Google Maps — ${states.length} states`);
         return states;
       }
     } catch(e) { console.log(`[GeoMulti] ${iso} Google Maps fail: ${e.message?.slice(0,40)}`); }
   }
 
-  // ── SOURCE 4: Mistral AI (last resort) ────────────────────────
-  if (ENV.MISTRAL_API_KEY) {
-    try {
-      const prompt = `List ALL official states, provinces, or first-level administrative regions of ${country.name} (${iso}).
-Return ONLY valid JSON array, no markdown, no explanation:
-[{"name":"Full Official Name","state_code":"XX_OR_NULL"}]
-Include every single first-level administrative division. Be comprehensive and accurate.`;
-      const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
-        { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:2000 },
-        { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:30000 }
-      );
-      const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed) && parsed.length>0) {
-        const states = parsed.map(s=>({ name:(s.name||'').trim(), state_code:s.state_code||null })).filter(s=>s.name);
-        console.log(`[GeoMulti] ${iso} ✓ Mistral AI — ${states.length} states`);
-        return states;
-      }
-    } catch(e) { console.log(`[GeoMulti] ${iso} AI fail: ${e.message?.slice(0,40)}`); }
-  }
-
-  console.log(`[GeoMulti] ${iso} — All 4 sources exhausted`);
+  console.log(`[GeoMulti] ${iso} — All sources exhausted`);
   return [];
 }
 
 async function fetchCitiesMultiSource(stateName, countryName, iso) {
   const cnName = getCountriesNowName(iso) || countryName;
+
+  // ── SOURCE 1: Mistral AI (primary) ───────────────────────────
+  if (ENV.MISTRAL_API_KEY) {
+    try {
+      const prompt = `List ALL cities, towns, districts, local government areas, and municipalities in ${stateName}, ${countryName}.
+Return ONLY a valid JSON array of names — no markdown, no explanation:
+["City1","Town2","District3","LGA4","Municipality5"]
+Be comprehensive — include at least 15-30 locations if they exist. Be accurate.`;
+      const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+        { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:800 },
+        { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:20000 }
+      );
+      const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
+      const cities = JSON.parse(text);
+      if (Array.isArray(cities) && cities.length > 0) {
+        console.log(`[GeoMulti] ${stateName} ✓ Mistral AI — ${cities.length} cities`);
+        return cities.filter(Boolean);
+      }
+    } catch(e) { console.log(`[GeoMulti] ${stateName} AI cities fail: ${e.message?.slice(0,40)}`); }
+  }
+
+  // ── SOURCE 2: CountriesNow (fallback) ────────────────────────
   const namesToTry = [cnName];
   if (cnName !== countryName) namesToTry.push(countryName);
-
-  // ── SOURCE 1: CountriesNow ────────────────────────────────────
   for (const name of namesToTry) {
     try {
       const r = await axios.post("https://countriesnow.space/api/v0.1/countries/state/cities",
         { country:name, state:stateName }, { timeout:10000, headers:{"Content-Type":"application/json"} });
-      if (!r.data?.error && r.data?.data?.length>0) return r.data.data.filter(Boolean);
+      if (!r.data?.error && r.data?.data?.length > 0) return r.data.data.filter(Boolean);
     } catch(e) {}
   }
 
-  // ── SOURCE 2: Google Maps Places API ─────────────────────────
+  // ── SOURCE 3: Google Maps Places API (fallback) ───────────────
   if (ENV.GOOGLE_MAPS_KEY) {
     try {
       const r = await axios.get('https://maps.googleapis.com/maps/api/place/textsearch/json', {
@@ -1061,38 +1061,10 @@ async function fetchCitiesMultiSource(stateName, countryName, iso) {
         timeout:8000
       });
       const cities = (r.data?.results||[]).map(p=>p.name).filter(Boolean);
-      if (cities.length>0) return cities;
+      if (cities.length > 0) return cities;
     } catch(e) {}
   }
 
-  // ── SOURCE 3: Nominatim OSM ───────────────────────────────────
-  try {
-    await nominatimThrottle();
-    const iso2 = ISO3_TO_ISO2[iso];
-    const r = await axios.get('https://nominatim.openstreetmap.org/search', {
-      params:{ q:`${stateName}, ${countryName}`, featureType:'city', format:'json', limit:30, ...(iso2?{countrycodes:iso2.toLowerCase()}:{}) },
-      headers:{ 'User-Agent': WIKI_UA }, timeout:10000
-    });
-    const cities = (r.data||[]).map(c=>c.display_name.split(',')[0].trim()).filter(Boolean);
-    if (cities.length>0) return cities;
-  } catch(e) {}
-
-  // ── SOURCE 4: Mistral AI ──────────────────────────────────────
-  if (ENV.MISTRAL_API_KEY) {
-    try {
-      const prompt = `List major cities, towns, and municipalities in ${stateName}, ${countryName}.
-Return ONLY a valid JSON array of city names — no markdown, no explanation:
-["City1","City2","City3"]
-Include at least 10 cities if they exist. Be accurate.`;
-      const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
-        { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:600 },
-        { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:20000 }
-      );
-      const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
-      const cities = JSON.parse(text);
-      if (Array.isArray(cities) && cities.length>0) return cities.filter(Boolean);
-    } catch(e) {}
-  }
   return [];
 }
 
@@ -2056,39 +2028,159 @@ app.post("/api/intel/state/:stateId/run", async (req, res) => {
   runStatePipeline(stateId).catch(console.error);
 });
 
-// ── AREA INTEL — generate via Mistral ────────────────────────────
-app.post("/api/intel/area", async (req, res) => {
-  const { area, state, country } = req.body;
-  if(!area || !country) return res.status(400).json({ error:"Missing area or country" });
+// ── AI States — AI-first, saves to DB, returns with IDs ──────────
+app.get("/api/geo/ai-states/:iso", async (req, res) => {
+  const iso = req.params.iso.toUpperCase();
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error:"Unknown country ISO" });
 
-  if(!ENV.MISTRAL_API_KEY) {
-    return res.json({ briefing:"Mistral API key not configured.", recommendations:[], hidden_gem:null });
-  }
+  // Check DB first
+  try {
+    const { data:existing } = await supabase.from("states")
+      .select("id,name,state_code,type,country_iso").eq("country_iso",iso).order("name");
+    if (existing && existing.length > 0)
+      return res.json({ states:existing, source:"database", total:existing.length });
+  } catch(e) {}
 
-  const prompt = `You are GlobeVoyage AI. Generate concise travel intel for ${area}${state ? ", "+state : ""}, ${country}.
-
-Respond ONLY in valid JSON (no markdown):
-{
-  "briefing": "2-3 sentences about ${area} for travellers — what makes it unique, what to expect",
-  "hidden_gem": "One specific hidden spot or experience locals love in ${area}",
-  "best_time": "Best time of day or year to visit",
-  "recommendations": [
-    {"title": "", "why": "", "type": "food|culture|nature|nightlife|shopping", "rating": 4}
-  ]
-}
-Max 3 recommendations. Be specific and accurate.`;
+  if (!ENV.MISTRAL_API_KEY) return res.json({ states:[], error:"No Mistral key configured" });
 
   try {
-    const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
-      { model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.3, max_tokens:800 },
-      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:25000 }
+    const prompt = `List ALL official states, provinces, regions, territories, or first-level administrative divisions of ${country.name} (ISO: ${iso}).
+Return ONLY a valid JSON array — no markdown, no explanation, nothing else:
+[{"name":"Full Official Name","state_code":"CODE_OR_NULL","type":"state"}]
+Be comprehensive — include every single first-level division. Be accurate and complete.`;
+
+    const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+      { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:2500 },
+      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:30000 }
     );
-    const text = r.data?.choices?.[0]?.message?.content||"";
-    const data = JSON.parse(text.replace(/```json|```/g,"").trim());
-    res.json(data);
-  } catch(e) {
-    res.json({ briefing:`${area} is a notable location in ${state||country}.`, recommendations:[], error:e.message });
-  }
+    const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const stateRows = parsed.map(s=>({ name:(s.name||'').trim(), state_code:s.state_code||null })).filter(s=>s.name);
+      await saveStatesFromResponse(stateRows, iso, country.name);
+      const { data:saved } = await supabase.from("states")
+        .select("id,name,state_code,type,country_iso").eq("country_iso",iso).order("name");
+      return res.json({ states:saved||stateRows, source:"ai", total:(saved||stateRows).length });
+    }
+  } catch(e) { return res.status(500).json({ error:e.message }); }
+  return res.json({ states:[] });
+});
+
+// ── AI Cities — AI-first, saves to DB, returns with IDs ──────────
+app.get("/api/geo/ai-cities/:stateId", async (req, res) => {
+  const stateId = parseInt(req.params.stateId);
+  if (isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
+
+  // Check DB first
+  try {
+    const { data:existing } = await supabase.from("areas")
+      .select("id,name,type,state_id,country_iso").eq("state_id",stateId).order("name");
+    if (existing && existing.length > 0)
+      return res.json({ areas:existing, source:"database", total:existing.length });
+  } catch(e) {}
+
+  const { data:state } = await supabase.from("states")
+    .select("name,country_iso").eq("id",stateId).single();
+  if (!state) return res.status(404).json({ error:"State not found" });
+
+  const country = COUNTRIES.find(c => c.iso === state.country_iso);
+  if (!ENV.MISTRAL_API_KEY) return res.json({ areas:[], error:"No Mistral key" });
+
+  try {
+    const prompt = `List ALL cities, towns, districts, local government areas, and municipalities in ${state.name}, ${country?.name || state.country_iso}.
+Return ONLY a valid JSON array of names — no markdown, no explanation:
+["City1","Town2","District3","LGA4","Municipality5"]
+Be comprehensive — include at least 15-30 locations. Be accurate and complete.`;
+
+    const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+      { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:1000 },
+      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:20000 }
+    );
+    const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
+    const cities = JSON.parse(text);
+    if (Array.isArray(cities) && cities.length > 0) {
+      const rows = cities.filter(Boolean).slice(0,80).map((name,idx) => ({
+        state_id:stateId, country_iso:state.country_iso,
+        geoname_id:Math.abs(hashCode(`${stateId}-ai-${name}-${idx}`)),
+        name:name.trim(), ascii_name:name.trim(), type:'city',
+        population:0, latitude:null, longitude:null, timezone:null,
+        updated_at:new Date().toISOString()
+      }));
+      await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
+      const { data:saved } = await supabase.from("areas")
+        .select("id,name,type,state_id,country_iso").eq("state_id",stateId).order("name");
+      return res.json({ areas:saved||rows, source:"ai", total:(saved||rows).length });
+    }
+  } catch(e) { return res.status(500).json({ error:e.message }); }
+  return res.json({ areas:[] });
+});
+
+// ── AREA INTEL — massively expanded with AI + news + photos ───────
+app.post("/api/intel/area", async (req, res) => {
+  const { area, state, country } = req.body;
+  if (!area || !country) return res.status(400).json({ error:"Missing area or country" });
+  if (!ENV.MISTRAL_API_KEY) return res.json({ briefing:null, recommendations:[], error:"No Mistral key" });
+
+  const location = `${area}${state ? ", "+state : ""}, ${country}`;
+
+  const [aiResult, news, photos] = await Promise.all([
+    (async () => {
+      const prompt = `You are GlobeVoyage AI. Generate rich, detailed travel intel for ${location}.
+Return ONLY valid JSON — no markdown, no code fences, no preamble:
+{
+  "briefing": "4-5 detailed sentences about ${area}: its character, atmosphere, history, who lives there, what makes it unique and worth visiting",
+  "hidden_gem": "One very specific hidden spot or local secret. Use a real place name and explain exactly why it is special and how to find it.",
+  "best_time": "Best time of day AND best season/months to visit ${area}, with specific practical reasons",
+  "safety": "Honest safety situation in ${area}: safe zones, areas to watch, night safety, specific traveller tips",
+  "transport": "Specific ways to reach ${area} from major nearby cities and how to get around within it — buses, taxis, apps, okada/boda, train, walking, etc.",
+  "food_scene": "4-5 sentences on the food scene: signature dishes, best eating spots, street food vs restaurants, price range, must-try items",
+  "cost_estimate": "Daily budget in USD: budget $X-Y/day, mid-range $Y-Z/day, comfort $Z+/day — what each covers",
+  "local_tips": [
+    "Unique tip specific to ${area} that most tourists miss",
+    "Practical logistical tip that saves time or money",
+    "Cultural etiquette or local custom to respect",
+    "How to avoid common scams or tourist traps here",
+    "Best kept secret spot or activity only locals do",
+    "Useful app, contact or resource for visiting ${area}"
+  ],
+  "trending": "What is currently popular, newly opened, or trending in ${area} for visitors and locals in 2025-2026",
+  "avoid": "Specific areas, times, situations or things to avoid in ${area} — be practical and honest",
+  "day_itinerary": "A full suggested day in ${area}: morning (8-12) → afternoon (12-18) → evening (18+), with specific places and activities at each time",
+  "weather_note": "Typical weather in ${area}, best and worst seasons, what to pack",
+  "language_tips": "Languages spoken in ${area}, key local phrases in the local language, how locals communicate",
+  "recommendations": [
+    {"title":"Real specific place or activity name","why":"2-3 sentences on why worth visiting and what to expect","type":"food|culture|nature|nightlife|shopping|adventure|wellness|history|market","rating":4.5,"price":"free|$|$$|$$$","duration":"suggested time","best_for":"solo|couples|families|groups"},
+    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""},
+    {"title":"","why":"","type":"","rating":4.5,"price":"","duration":"","best_for":""},
+    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""},
+    {"title":"","why":"","type":"","rating":4.5,"price":"","duration":"","best_for":""},
+    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""},
+    {"title":"","why":"","type":"","rating":4.5,"price":"","duration":"","best_for":""},
+    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""}
+  ],
+  "events": [
+    {"name":"Real event or festival name","description":"What it is and why to attend","when":"Specific months or recurring schedule","type":"festival|market|cultural|sports|religious"},
+    {"name":"","description":"","when":"","type":""},
+    {"name":"","description":"","when":"","type":""}
+  ],
+  "sub_areas": ["Neighbourhood1","District2","Market Area3","Suburb4","Quarter5","Zone6"]
+}
+Be specific, accurate, and genuinely helpful for a real traveller going to ${location}.`;
+
+      const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+        { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0.2, max_tokens:3000 },
+        { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:40000 }
+      );
+      const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
+      return JSON.parse(text);
+    })().catch(e => ({ briefing:`${area} is located in ${location}.`, recommendations:[], error:e.message })),
+
+    fetchGoogleNewsByQuery(`${area} ${state||''} ${country}`).catch(()=>[]),
+    fetchUnsplash(`${area} ${country}`).catch(()=>[]),
+  ]);
+
+  res.json({ ...aiResult, news:(news||[]).slice(0,6), photos:(photos||[]).slice(0,6) });
 });
 
 // ── STATE INTEL TABLE INFO ────────────────────────────────────────
