@@ -2483,21 +2483,40 @@ app.get("/api/geo/states/:id/areas", async (req, res) => {
   try {
     const { data:state } = await supabase.from("states").select("id,geoname_id,name,country_iso").eq("id",stateId).single();
     if(!state) return res.status(404).json({ error:"State not found" });
+
+    // HARDCODED TAKES PRIORITY — always check hardcoded first
+    const country = COUNTRIES.find(c => c.iso === state.country_iso);
+    const hardcodedNames = country ? getHardcodedAreas(state.name, country.name) : [];
+
+    if(hardcodedNames.length > 0) {
+      // Refresh DB from hardcoded in background (delete stale, insert fresh)
+      (async () => {
+        try {
+          await supabase.from("areas").delete().eq("state_id", stateId);
+          const rows = hardcodedNames.filter(Boolean).map((name,idx) => ({
+            state_id:stateId, country_iso:state.country_iso,
+            geoname_id:Math.abs(hashCode(`${stateId}-hc2-${name}-${idx}`)),
+            name:name.trim(), ascii_name:name.trim(), type:"city",
+            population:0, latitude:null, longitude:null, timezone:null,
+            updated_at:new Date().toISOString(),
+          }));
+          await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
+          console.log(`[Areas] Refreshed ${rows.length} hardcoded areas for ${state.name}`);
+        } catch(e) { console.error(`[Areas] Refresh error for ${state.name}:`, e.message); }
+      })().catch(console.error);
+      // Return hardcoded immediately
+      return res.json({
+        areas: hardcodedNames.map((name,i) => ({ id:-(i+1), name, type:"city", state_id:stateId, country_iso:state.country_iso })),
+        total: hardcodedNames.length, state_name:state.name, source:"hardcoded"
+      });
+    }
+
+    // No hardcoded — fall back to DB
     const { data, error } = await supabase.from("areas")
       .select("id,name,ascii_name,area_code,type,population,latitude,longitude,timezone")
       .eq("state_id",stateId).order("population",{ascending:false});
     if(error) return res.status(500).json({ error:error.message });
     if(!data || data.length === 0) {
-      // Try hardcoded first
-      const country = COUNTRIES.find(c => c.iso === state.country_iso);
-      const hardcoded = country ? getHardcodedAreas(state.name, country.name) : [];
-      if(hardcoded.length > 0) {
-        fetchAndSaveAreas(state.id, state.geoname_id, state.country_iso).catch(console.error);
-        return res.json({
-          areas: hardcoded.map((name,i) => ({ id:-(i+1), name, type:"city", state_id:stateId, country_iso:state.country_iso })),
-          total: hardcoded.length, state_name:state.name, source:"hardcoded_loading"
-        });
-      }
       fetchAndSaveAreas(state.id, state.geoname_id, state.country_iso).catch(console.error);
       return res.json({ areas:[], loading:true, message:"Areas loading — check back in 30 seconds" });
     }
@@ -2645,29 +2664,29 @@ app.get("/api/geo/ai-cities/:stateId", async (req, res) => {
   const stateId = parseInt(req.params.stateId);
   if (isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
 
-  // Check DB first
-  try {
-    const { data:existing } = await supabase.from("areas").select("id,name,type,state_id,country_iso").eq("state_id",stateId).order("name");
-    if (existing && existing.length > 0) return res.json({ areas:existing, source:"database", total:existing.length });
-  } catch(e) {}
-
   const { data:state } = await supabase.from("states").select("name,country_iso").eq("id",stateId).single();
   if (!state) return res.status(404).json({ error:"State not found" });
   const country = COUNTRIES.find(c => c.iso === state.country_iso);
 
-  // Try hardcoded
+  // HARDCODED FIRST — delete stale DB entries and replace
   const hardcoded = country ? getHardcodedAreas(state.name, country.name) : [];
   if(hardcoded.length > 0) {
+    await supabase.from("areas").delete().eq("state_id", stateId).catch(()=>{});
     const rows = hardcoded.filter(Boolean).slice(0,150).map((name,idx) => ({
       state_id:stateId, country_iso:state.country_iso,
-      geoname_id:Math.abs(hashCode(`${stateId}-hc-${name}-${idx}`)),
+      geoname_id:Math.abs(hashCode(`${stateId}-hc3-${name}-${idx}`)),
       name:name.trim(), ascii_name:name.trim(), type:'city',
       population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString()
     }));
     await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" }).catch(()=>{});
-    const { data:saved } = await supabase.from("areas").select("id,name,type,state_id,country_iso").eq("state_id",stateId).order("name");
-    return res.json({ areas:saved||rows, source:"hardcoded", total:(saved||rows).length });
+    return res.json({ areas:rows, source:"hardcoded", total:rows.length });
   }
+
+  // No hardcoded — fall back to DB
+  try {
+    const { data:existing } = await supabase.from("areas").select("id,name,type,state_id,country_iso").eq("state_id",stateId).order("name");
+    if (existing && existing.length > 0) return res.json({ areas:existing, source:"database", total:existing.length });
+  } catch(e) {}
 
   // Fallback to Mistral
   if (!ENV.MISTRAL_API_KEY) return res.json({ areas:[], error:"No Mistral key" });
