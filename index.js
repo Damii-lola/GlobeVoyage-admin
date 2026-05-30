@@ -492,7 +492,15 @@ async function fetchWAQIByCoords(lat, lon, name) {
   return null;
 }
 
+// Geocode rate limit: Nominatim allows 1 req/sec; use a queue
+let _lastGeocodeAt = 0;
 async function geocodePlace(placeName, countryName) {
+  // Respect Nominatim 1 req/sec rate limit
+  const now = Date.now();
+  const wait = Math.max(0, 1200 - (now - _lastGeocodeAt));
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  _lastGeocodeAt = Date.now();
+
   try {
     const r = await axios.get("https://nominatim.openstreetmap.org/search", {
       params:{ q:`${placeName}, ${countryName}`, format:"json", limit:1, addressdetails:1 },
@@ -502,7 +510,24 @@ async function geocodePlace(placeName, countryName) {
     if(r.data?.[0]) {
       return { lat:parseFloat(r.data[0].lat), lon:parseFloat(r.data[0].lon) };
     }
-  } catch(e) { console.log(`[Geocode] ${placeName}: ${e.message}`); }
+  } catch(e) {
+    console.log(`[Geocode] Nominatim failed for ${placeName}: ${e.message?.slice(0,50)}`);
+    // Fallback to Geoapify on 429 or timeout
+    if (ENV.GEOAPIFY_API_KEY && (e.response?.status === 429 || e.code === 'ECONNABORTED' || e.code === 'ERR_BAD_RESPONSE')) {
+      try {
+        await new Promise(r => setTimeout(r, 500));
+        const gr = await axios.get("https://api.geoapify.com/v1/geocode/search", {
+          params: { text:`${placeName}, ${countryName}`, apiKey:ENV.GEOAPIFY_API_KEY, limit:1 },
+          timeout: 8000
+        });
+        const feat = gr.data?.features?.[0];
+        if (feat) {
+          console.log(`[Geocode] Geoapify fallback OK for ${placeName}`);
+          return { lat: feat.geometry.coordinates[1], lon: feat.geometry.coordinates[0] };
+        }
+      } catch(ge) { console.log(`[Geocode] Geoapify also failed: ${ge.message?.slice(0,50)}`); }
+    }
+  }
   return null;
 }
 
@@ -1013,9 +1038,12 @@ Be comprehensive — include at least 10-30 locations. Be accurate.`;
         population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString(),
       }));
     if (!rows.length) return 0;
-    const { error } = await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
+    // Deduplicate by geoname_id to avoid "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    const seen = new Set();
+    const deduped = rows.filter(r => { if (seen.has(r.geoname_id)) return false; seen.add(r.geoname_id); return true; });
+    const { error } = await supabase.from("areas").upsert(deduped, { onConflict:"geoname_id" });
     if (error) { console.error(`Areas upsert error:`, error.message); return 0; }
-    return rows.length;
+    return deduped.length;
   } catch(e) {
     console.error(`fetchAndSaveAreas error:`, e.message);
     return 0;
@@ -1671,8 +1699,8 @@ Output ONLY valid JSON — no markdown, no code fences, no preamble:
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
-        {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.2,max_tokens:8000},
-        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:90000}
+        {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.2,max_tokens:6000},
+        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:75000}
       );
       const text = r.data?.choices?.[0]?.message?.content||"";
       const finish = r.data?.choices?.[0]?.finish_reason;
