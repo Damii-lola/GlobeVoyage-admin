@@ -2187,9 +2187,16 @@ async function runFullPipeline(triggerName) {
   }
   pipelineStatus.running = false;
   console.log(`✅ [${triggerName}] Pipeline complete — ${ran} ran`);
+  // Start background state intel generation after full pipeline
+  setTimeout(() => preGenerateAllStateIntel().catch(console.error), 30000);
 }
 
 cron.schedule("0 6  * * *", () => runFullPipeline("06:00"), { timezone:"UTC" });
+// Every 2 hours: fill in any states/areas that are still missing intel
+cron.schedule("0 */2 * * *", () => {
+  preGenerateAllStateIntel().catch(console.error);
+  setTimeout(() => preGenerateMissingAreaIntel().catch(console.error), 5*60*1000);
+}, { timezone:"UTC" });
 cron.schedule("0 14 * * *", () => runFullPipeline("14:00"), { timezone:"UTC" });
 cron.schedule("0 22 * * *", () => runFullPipeline("22:00"), { timezone:"UTC" });
 
@@ -2205,6 +2212,9 @@ async function runStartupPipeline() {
     await new Promise(r=>setTimeout(r,20000));
   }
   console.log("✅ [Startup] Missing countries pipeline complete");
+  // After country intel is done, pre-generate state intel in background
+  console.log("[Startup] Scheduling state intel pre-generation in 60 seconds...");
+  setTimeout(() => preGenerateAllStateIntel().catch(console.error), 60000);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2484,6 +2494,13 @@ app.post("/api/pipeline/run/:iso", async (req,res) => {
 app.post("/api/pipeline/run-all", async (req,res) => {
   res.json({message:`Full pipeline started for ${COUNTRIES.length} countries`});
   runStartupPipeline();
+});
+app.post("/api/pipeline/pregen-states", async (req,res) => {
+  res.json({message:"State intel pre-generation started in background"});
+  preGenerateAllStateIntel().catch(console.error);
+});
+app.get("/api/pipeline/pregen-status", (req,res) => {
+  res.json({ state_pregen_running: statePreGenRunning, area_intel_refresh_running: areaIntelRefreshRunning });
 });
 app.get("/api/pipeline/status", async (req,res) => {
   const {data:runs}  = await supabase.from("pipeline_runs").select("iso,status,duration_ms,ran_at,error").order("ran_at",{ascending:false}).limit(100);
@@ -3158,6 +3175,88 @@ var GEODATA='${SELF}/geodata';
 // ══════════════════════════════════════════════════════════════════
 // START SERVER
 // ══════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════
+// BACKGROUND PRE-GENERATION — State + Area Intel for all countries
+// ══════════════════════════════════════════════════════════════════
+let statePreGenRunning = false;
+
+async function preGenerateAllStateIntel() {
+  if (statePreGenRunning) { console.log("[StatePreGen] Already running"); return; }
+  if (!stateIntelTableExists) { console.log("[StatePreGen] state_intel table missing — skipping"); return; }
+  statePreGenRunning = true;
+  console.log("[StatePreGen] Starting background state intel pre-generation...");
+
+  try {
+    // Get all state IDs
+    const { data: allStates } = await supabase
+      .from("states")
+      .select("id, name, country_iso")
+      .order("country_iso");
+
+    if (!allStates || allStates.length === 0) {
+      console.log("[StatePreGen] No states in DB yet");
+      statePreGenRunning = false;
+      return;
+    }
+
+    // Get state IDs that already have intel WITH actual AI content
+    const { data: existingIntel } = await supabase
+      .from("state_intel")
+      .select("state_id")
+      .not("ai_briefing", "is", null);
+
+    const existingIds = new Set((existingIntel || []).map(r => r.state_id));
+    const missing = allStates.filter(s => !existingIds.has(s.id));
+    console.log(`[StatePreGen] ${allStates.length} total states — ${existingIds.size} have intel — ${missing.length} need generation`);
+
+    // Process in batches of 2 to avoid Mistral rate limits
+    const BATCH = 2;
+    const DELAY = 15000; // 15s between batches
+
+    for (let i = 0; i < missing.length; i += BATCH) {
+      if (!statePreGenRunning) break;
+      const batch = missing.slice(i, i + BATCH);
+      console.log(`[StatePreGen] Batch ${Math.floor(i/BATCH)+1}/${Math.ceil(missing.length/BATCH)} — ${batch.map(s=>s.name).join(', ')}`);
+
+      await Promise.allSettled(batch.map(s => runStatePipeline(s.id)));
+      
+      if (i + BATCH < missing.length) {
+        await new Promise(r => setTimeout(r, DELAY));
+      }
+    }
+    console.log(`[StatePreGen] ✅ Complete — processed ${missing.length} states`);
+  } catch(e) {
+    console.error("[StatePreGen] Error:", e.message);
+  }
+  statePreGenRunning = false;
+}
+
+async function preGenerateMissingAreaIntel() {
+  if (!areaIntelTableExists) return;
+  console.log("[AreaPreGen] Checking for areas missing intel...");
+  try {
+    // Get top-priority areas (capitals and large states) that have no AI data
+    const { data: areasNeedingIntel } = await supabase
+      .from("area_intel")
+      .select("id, area_name, state_name, country_name, country_iso")
+      .is("ai_briefing", null)
+      .limit(20);
+
+    if (!areasNeedingIntel || areasNeedingIntel.length === 0) {
+      console.log("[AreaPreGen] All cached areas have intel");
+      return;
+    }
+
+    console.log(`[AreaPreGen] ${areasNeedingIntel.length} areas need intel regeneration`);
+    for (const area of areasNeedingIntel) {
+      await generateAndStoreAreaIntel(area.area_name, area.state_name, area.country_name, area.country_iso)
+        .catch(e => console.error(`[AreaPreGen] ${area.area_name}:`, e.message));
+      await new Promise(r => setTimeout(r, 8000)); // 8s between areas
+    }
+  } catch(e) { console.error("[AreaPreGen] Error:", e.message); }
+}
+
 const PORT = process.env.PORT||3000;
 app.listen(PORT, async()=>{
   console.log(`GlobeVoyage API on port ${PORT} — ${COUNTRIES.length} countries`);
@@ -3174,6 +3273,10 @@ app.listen(PORT, async()=>{
 
   setTimeout(runStartupPipeline, 15000);
   setTimeout(resumeGeoPipelineIfIncomplete, 30000);
+  // Pre-generate state intel for states that don't have it yet (runs 90s after boot)
+  setTimeout(() => preGenerateAllStateIntel().catch(console.error), 90000);
+  // Fix any area intel records with null AI fields (runs 3min after boot)
+  setTimeout(() => preGenerateMissingAreaIntel().catch(console.error), 3*60*1000);
 
   // Start background area intel refresh after 5 minutes
   setTimeout(() => {
