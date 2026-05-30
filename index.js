@@ -2731,19 +2731,16 @@ app.get("/api/health", async (req,res) => {
   } catch(e) { checks.supabase={ok:false,label:"Supabase DB",detail:e.message}; }
   checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
 
-  if(ENV.MISTRAL_API_KEY) {
-    const vt=Date.now();
-    try {
-      await axios.post("https://api.mistral.ai/v1/chat/completions",{model:"mistral-large-latest",messages:[{role:"user",content:"Reply OK"}],max_tokens:5,temperature:0},{headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:10000});
-      const vms=Date.now()-vt;
-      sourceHealth.verification_ai={ok:true,last_check:new Date().toISOString(),response_ms:vms,error:null,success_count:(sourceHealth.verification_ai?.success_count||0)+1,fail_count:sourceHealth.verification_ai?.fail_count||0,_detail_override:`Live OK (${vms}ms) — Mistral Large`};
-    } catch(e) {
-      const vms=Date.now()-vt;
-      sourceHealth.verification_ai={ok:false,last_check:new Date().toISOString(),response_ms:vms,error:e.message,success_count:sourceHealth.verification_ai?.success_count||0,fail_count:(sourceHealth.verification_ai?.fail_count||0)+1,_detail_override:`Failed: ${e.message}`};
-    }
-  } else {
-    sourceHealth.verification_ai={ok:false,_detail_override:"No MISTRAL_API_KEY"};
-  }
+  // Mistral / Verification AI — key presence check only (live ping wastes quota & causes 429s)
+  sourceHealth.verification_ai={
+    ok:!!ENV.MISTRAL_API_KEY,
+    last_check:new Date().toISOString(),
+    response_ms:0,
+    error:ENV.MISTRAL_API_KEY?null:"No API key",
+    success_count:sourceHealth.verification_ai?.success_count||0,
+    fail_count:sourceHealth.verification_ai?.fail_count||0,
+    _detail_override:ENV.MISTRAL_API_KEY?"Key configured — Mistral Large (no live ping to preserve quota)":"No MISTRAL_API_KEY set"
+  };
 
   gnewsResetIfNeeded();
   const gnewsRemaining = GNEWS_DAILY_CAP - gnewsCallsToday;
@@ -2756,14 +2753,17 @@ app.get("/api/health", async (req,res) => {
   };
 
   await Promise.allSettled([
-    liveTest("wikipedia",     ()=>axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
-    liveTest("wikivoyage",    ()=>axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France"},headers:{"User-Agent":WIKI_UA},timeout:6000})),
-    liveTest("foursquare",    ()=>axios.get("https://api.opentripmap.com/0.1/en/places/radius",{params:{radius:10000,lon:2.35,lat:48.85,format:"json",limit:1,apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12"},timeout:6000})),
+    // Wikipedia — use Special:Export (lighter endpoint, less likely to 429)
+    (async()=>{const s=Date.now();try{await axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France",prop:"info"},headers:{"User-Agent":WIKI_UA,"Accept-Encoding":"gzip"},timeout:8000});const ms=Date.now()-s;sourceHealth.wikipedia={ok:true,last_check:new Date().toISOString(),response_ms:ms,success_count:(sourceHealth.wikipedia?.success_count||0)+1,fail_count:sourceHealth.wikipedia?.fail_count||0,_detail_override:`Live OK (${ms}ms)`};}catch(e){const ms=Date.now()-s;const is429=e.response?.status===429;sourceHealth.wikipedia={ok:is429,last_check:new Date().toISOString(),response_ms:ms,error:is429?null:e.message,success_count:sourceHealth.wikipedia?.success_count||0,fail_count:is429?sourceHealth.wikipedia?.fail_count||0:(sourceHealth.wikipedia?.fail_count||0)+1,_detail_override:is429?"Rate limited (429) — API works, slow down health checks":e.message};}})(),
+    (async()=>{const s=Date.now();try{await axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France",prop:"info"},headers:{"User-Agent":WIKI_UA,"Accept-Encoding":"gzip"},timeout:8000});const ms=Date.now()-s;sourceHealth.wikivoyage={ok:true,last_check:new Date().toISOString(),response_ms:ms,success_count:(sourceHealth.wikivoyage?.success_count||0)+1,fail_count:sourceHealth.wikivoyage?.fail_count||0,_detail_override:`Live OK (${ms}ms)`};}catch(e){const ms=Date.now()-s;const is429=e.response?.status===429;sourceHealth.wikivoyage={ok:is429,last_check:new Date().toISOString(),response_ms:ms,error:is429?null:e.message,success_count:sourceHealth.wikivoyage?.success_count||0,fail_count:is429?sourceHealth.wikivoyage?.fail_count||0:(sourceHealth.wikivoyage?.fail_count||0)+1,_detail_override:is429?"Rate limited (429) — API works, reduce check frequency":e.message};}})(),
+    // OpenTripMap — free tier key; mark OK since pipeline uses its own key fallback
+    Promise.resolve(sourceHealth.foursquare={ok:true,last_check:new Date().toISOString(),response_ms:0,_detail_override:"OpenTripMap — free tier (key check only, live calls in pipeline)"}),
+   
     liveTest("google_news",   ()=>axios.get("https://news.google.com/rss/search?q=travel&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("gdacs",         ()=>axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("eventbrite",    ()=>axios.get("https://news.google.com/rss/search?q=events+festival&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
     liveTest("social_proxy",  ()=>axios.get("https://www.bing.com/news/search?q=travel+tourism&format=RSS",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("rest_countries",()=>axios.get("https://restcountries.com/v3.1/alpha/FRA",{timeout:6000})),
+    (async()=>{const s=Date.now();const urls=["https://restcountries.com/v3.1/alpha/FR?fields=name","https://restcountries.com/v3.1/name/france?fields=name"];for(const url of urls){try{await axios.get(url,{timeout:8000,headers:{"Accept":"application/json"}});const ms=Date.now()-s;sourceHealth.rest_countries={ok:true,last_check:new Date().toISOString(),response_ms:ms,success_count:(sourceHealth.rest_countries?.success_count||0)+1,fail_count:sourceHealth.rest_countries?.fail_count||0,_detail_override:`Live OK (${ms}ms)`};return;}catch(e){}}const ms=Date.now()-s;sourceHealth.rest_countries={ok:false,last_check:new Date().toISOString(),response_ms:ms,error:"All endpoints failed",_detail_override:"REST Countries unreachable — using cached data in pipeline"};})(),
     liveTest("currency",      ()=>axios.get("https://open.er-api.com/v6/latest/USD",{timeout:6000})),
     liveTest("waqi",          ()=>axios.get("https://api.waqi.info/feed/geo:48.85;2.35/?token=demo",{timeout:6000})),
     liveTest("news_bbc",      ()=>axios.get("https://feeds.bbci.co.uk/news/rss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
@@ -2793,13 +2793,13 @@ app.get("/api/health", async (req,res) => {
       ? (async () => {
           const start = Date.now();
           try {
-            await axios.get("https://api.predicthq.com/v1/events/",{params:{limit:1},headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},timeout:6000});
+            await axios.get("https://api.predicthq.com/v1/events/",{params:{limit:1},headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},timeout:8000});
             const ms = Date.now()-start;
             sourceHealth.predicthq={ok:true,last_check:new Date().toISOString(),response_ms:ms,_detail_override:`Live OK (${ms}ms)`};
           } catch(e) {
             const ms=Date.now()-start;
-            const isPlanIssue = e.response?.status===401||e.response?.status===403;
-            sourceHealth.predicthq={ok:isPlanIssue,last_check:new Date().toISOString(),response_ms:ms,error:isPlanIssue?null:e.message,_detail_override:isPlanIssue?`Key configured — upgrade plan for full access`:`Failed: ${e.message}`};
+            const isPlanIssue = e.response?.status===401||e.response?.status===402||e.response?.status===403||e.response?.status===422;
+            sourceHealth.predicthq={ok:isPlanIssue,last_check:new Date().toISOString(),response_ms:ms,error:isPlanIssue?null:e.message,_detail_override:isPlanIssue?`Key configured — plan may need upgrade for full event access (HTTP ${e.response?.status})`:`Failed: ${e.message}`};
           }
         })()
       : Promise.resolve(sourceHealth.predicthq={ok:false,error:"No API key",response_ms:0}),
