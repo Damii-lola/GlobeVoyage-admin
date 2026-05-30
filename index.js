@@ -1647,17 +1647,50 @@ Output ONLY valid JSON — no markdown, no code fences, no preamble:
   "ai_overtourism_risk": "low|medium|high — reason"
 }`;
 
-  try {
-    const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
-      {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.2,max_tokens:4000},
-      {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:60000}
-    );
-    const text = r.data?.choices?.[0]?.message?.content||"";
-    return JSON.parse(text.replace(/```json|```/g,"").trim());
-  } catch(e) {
-    console.error("[MistralArea]", e.message?.slice(0,80));
+  // Helper: attempt to extract valid JSON even if response is truncated
+  function repairAndParse(text) {
+    const cleaned = text.replace(/```json|```/g,"").trim();
+    // Direct parse first
+    try { return JSON.parse(cleaned); } catch(e1) {}
+    // Try to close truncated JSON by finding last complete key-value pair
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (lastBrace > 0) {
+      const trimmed = cleaned.slice(0, lastBrace + 1);
+      // Count unclosed braces and close them
+      let depth = 0;
+      for (const ch of trimmed) { if (ch === '{') depth++; else if (ch === '}') depth--; }
+      const closed = trimmed + '}'.repeat(Math.max(0, depth));
+      try { return JSON.parse(closed); } catch(e2) {}
+    }
+    // Try regex extraction of the outermost object
+    const m = cleaned.match(/\{[\s\S]+/);
+    if (m) { try { return JSON.parse(m[0]); } catch(e3) {} }
     return null;
   }
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
+        {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.2,max_tokens:8000},
+        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:90000}
+      );
+      const text = r.data?.choices?.[0]?.message?.content||"";
+      const finish = r.data?.choices?.[0]?.finish_reason;
+      if (finish === 'length') {
+        console.warn(`[MistralArea] Response truncated (finish_reason=length) for ${areaName} — attempt ${attempt}`);
+      }
+      const parsed = repairAndParse(text);
+      if (parsed) {
+        console.log(`[MistralArea] ✓ ${areaName} parsed OK (attempt ${attempt}, finish=${finish})`);
+        return parsed;
+      }
+      console.error(`[MistralArea] JSON parse failed attempt ${attempt} for ${areaName}`);
+    } catch(e) {
+      console.error(`[MistralArea] attempt ${attempt} error:`, e.message?.slice(0,80));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1965,13 +1998,15 @@ async function getOrGenerateAreaIntel(areaName, stateName, countryName, countryI
     const { data } = await query.maybeSingle();
     if(data) {
       areaIntelMemCache[cacheKey] = data;
-      if(!areaIntelNeedsRefresh(data)) {
+      const hasAiData = !!(data.ai_briefing || data.ai_vibe || data.ai_recommendations?.length);
+      if(!areaIntelNeedsRefresh(data) && hasAiData) {
         return { data, fresh: true, source: 'db' };
       }
-      // Data exists but stale — return existing and refresh in background
-      console.log(`[AreaIntel] ${areaName} is stale, refreshing in background...`);
+      // Stale OR missing AI data (Mistral failed last time) — refresh in background
+      const reason = !hasAiData ? 'missing AI data' : 'stale';
+      console.log(`[AreaIntel] ${areaName} needs refresh (${reason}), regenerating...`);
       generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso).catch(console.error);
-      return { data, fresh: false, source: 'db_stale' };
+      return { data, fresh: false, source: hasAiData ? 'db_stale' : 'db_no_ai' };
     }
   } catch(e) { console.error(`[AreaIntel] DB lookup error:`, e.message); }
 
@@ -2288,15 +2323,15 @@ app.get("/api/intel/state/:stateId", async (req, res) => {
     } catch(e) {}
   }
 
-  // Not cached — get state info and start pipeline, return 202
+  // Not cached — auto-trigger generation and return 202
   const { data: state } = await supabase.from("states").select("name,country_iso").eq("id", stateId).single();
   if(!state) return res.status(404).json({ error:"State not found in database" });
-
+  // Immediately kick off background generation
+  runStatePipeline(stateId).catch(console.error);
   res.status(202).json({
     loading: true, state_id: stateId, state_name: state.name,
-    message: `Generating intel for ${state.name} — this takes about 30 seconds. Auto-refreshing...`
+    message: `Generating intel for ${state.name}…`
   });
-  runStatePipeline(stateId).catch(console.error);
 });
 
 app.post("/api/intel/state/:stateId/run", async (req, res) => {
