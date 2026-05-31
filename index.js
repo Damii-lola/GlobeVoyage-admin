@@ -953,17 +953,17 @@ async function fetchAndSaveStates(iso) {
     return saved;
   }
 
-  // SOURCE 2: Mistral AI
-  if (ENV.MISTRAL_API_KEY) {
+  // SOURCE 2: Mistral AI — skip if state gen is running (avoid Mistral 429 interference)
+  if (ENV.MISTRAL_API_KEY && !stateGenProgress.running) {
     try {
       const prompt = `List ALL official states, provinces, regions, or first-level administrative divisions of ${country.name} (ISO: ${iso}).
 Return ONLY a valid JSON array — no markdown, no explanation, nothing else:
 [{"name":"Full Official Division Name","state_code":"CODE_OR_NULL","type":"state"}]
 Be comprehensive and accurate — include every single first-level administrative division.`;
-      const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+      const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
         { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:2500 },
         { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:30000 }
-      );
+      ));
       const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -1001,17 +1001,17 @@ async function fetchAndSaveAreas(stateId, _unused, countryIso) {
     const hardcodedAreas = getHardcodedAreas(stateName, countryName);
     let cityNames = hardcodedAreas.length > 0 ? hardcodedAreas : [];
 
-    // SOURCE 2: Mistral AI (if hardcoded empty)
-    if (cityNames.length === 0 && ENV.MISTRAL_API_KEY) {
+    // SOURCE 2: Mistral AI — skip if state gen running to avoid 429 interference
+    if (cityNames.length === 0 && ENV.MISTRAL_API_KEY && !stateGenProgress.running) {
       try {
         const prompt = `List ALL cities, towns, districts, local government areas, and municipalities in ${stateName}, ${countryName}.
 Return ONLY a valid JSON array of names — no markdown, no explanation:
 ["City1","Town2","District3"]
 Be comprehensive — include at least 10-30 locations. Be accurate.`;
-        const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+        const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
           { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:800 },
           { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:20000 }
-        );
+        ));
         const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
         const parsed = JSON.parse(text);
         if (Array.isArray(parsed) && parsed.length > 0) cityNames = parsed.filter(Boolean);
@@ -1388,6 +1388,46 @@ async function fetchNationalNews(iso) {
 // ══════════════════════════════════════════════════════════════════
 // MISTRAL AI — COUNTRY SYNTHESIS
 // ══════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════
+// GLOBAL MISTRAL RATE LIMITER — all Mistral calls go through this
+// Ensures minimum gap between calls, handles 429 with backoff
+// ══════════════════════════════════════════════════════════════════
+const mistralQueue = {
+  _lastCallAt: 0,
+  _min_gap_ms: 6000,        // 6s minimum between any Mistral calls
+  _backoff_ms: 0,           // Extra backoff after 429
+  _consecutive429s: 0,
+
+  async call(fn) {
+    // Apply minimum gap
+    const now = Date.now();
+    const gap = this._min_gap_ms + this._backoff_ms;
+    const wait = Math.max(0, gap - (now - this._lastCallAt));
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    this._lastCallAt = Date.now();
+
+    try {
+      const result = await fn();
+      // Success — reset backoff
+      if (this._consecutive429s > 0) {
+        this._consecutive429s = 0;
+        this._backoff_ms = 0;
+        console.log("[MistralQueue] 429 backoff cleared — calls flowing normally");
+      }
+      return result;
+    } catch(e) {
+      if (e.response?.status === 429) {
+        this._consecutive429s++;
+        // Exponential backoff: 10s, 20s, 40s, max 120s
+        this._backoff_ms = Math.min(120000, 10000 * Math.pow(2, this._consecutive429s - 1));
+        console.log(`[MistralQueue] 429 — backing off ${this._backoff_ms/1000}s (${this._consecutive429s} consecutive)`);
+      }
+      throw e;
+    }
+  }
+};
+
 async function runMistral(countryName, continent, rawData) {
   if(!ENV.MISTRAL_API_KEY){ recordHealth("mistral",false,0,"No API key"); return null; }
   const prompt = `You are the AI brain of GlobeVoyage travel intelligence platform.
@@ -1420,10 +1460,10 @@ Output ONLY valid JSON, no markdown fences:
 Max: 6 recommendations, 14 calendar days, 4 trending items.`;
 
   return timed("mistral", async () => {
-    const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
+    const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
       {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.3,max_tokens:2000},
       {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:35000}
-    );
+    ));
     const text = r.data?.choices?.[0]?.message?.content||"";
     return JSON.parse(text.replace(/```json|```/g,"").trim());
   });
@@ -1480,10 +1520,10 @@ Return ONLY valid compact JSON — no markdown, no explanation, no trailing comm
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
+      const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
         {model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.2, max_tokens:3500},
         {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"}, timeout:50000}
-      );
+      ));
       const text  = r.data?.choices?.[0]?.message?.content || "";
       const finish = r.data?.choices?.[0]?.finish_reason;
       if (finish === "length") console.warn(`[MistralState] ${stateName} truncated (finish=length) attempt ${attempt}`);
@@ -1495,7 +1535,7 @@ Return ONLY valid compact JSON — no markdown, no explanation, no trailing comm
       console.error(`[MistralState] ${stateName} parse failed attempt ${attempt}, raw len=${text.length}`);
     } catch(e) {
       console.error(`[MistralState] ${stateName} attempt ${attempt}:`, e.message?.slice(0, 80));
-      if (attempt < 2) await new Promise(r => setTimeout(r, 5000));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 6000));
     }
   }
   return null;
@@ -1716,10 +1756,10 @@ Output ONLY valid JSON — no markdown, no code fences, no preamble:
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
+      const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
         {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.2,max_tokens:6000},
         {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:75000}
-      );
+      ));
       const text = r.data?.choices?.[0]?.message?.content||"";
       const finish = r.data?.choices?.[0]?.finish_reason;
       if (finish === 'length') {
@@ -1756,10 +1796,10 @@ async function runVerificationAI(countryName, continent, rawData) {
 Our pipeline collected: ${JSON.stringify(summary, null, 2)}
 Respond ONLY in valid JSON:
 {"verified":true,"confidence":0.95,"flags":[],"corrections":{},"current_alerts":[],"verification_notes":"Brief summary","data_freshness":"fresh","safety_level":"safe","safety_detail":"One current honest sentence","trending_topic":"Most notable current thing","missed_stories":[],"verified_at":"${new Date().toISOString()}"}`;
-    const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
+    const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
       { model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.1, max_tokens:1200 },
       { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:50000 }
-    );
+    ));
     const text = r.data?.choices?.[0]?.message?.content||"";
     try { return JSON.parse(text.replace(/```json|```/g,"").trim()); }
     catch(e) { const m = text.match(/\{[\s\S]*\}/); if(m) { try{return JSON.parse(m[0]);}catch(e2){} } return null; }
@@ -2077,7 +2117,7 @@ async function refreshStaleAreaIntel() {
       for(const s of stale) {
         await generateAndStoreAreaIntel(s.area_name, s.state_name, s.country_name, s.country_iso)
           .catch(e => console.error(`[AreaRefresh] ${s.area_name}:`, e.message));
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 6000));
       }
     }
   } catch(e) { console.error("[AreaRefresh] Error:", e.message); }
@@ -2530,6 +2570,80 @@ app.post("/api/pipeline/pregen-states/stop", (req,res) => {
   res.json({ message: "Stop signal sent" });
 });
 
+// ── RESET endpoints — wipe intel tables ─────────────────────────
+app.post("/api/pipeline/reset/state-intel", async (req, res) => {
+  try {
+    stateGenProgress.running = false; // Stop any running gen
+    const scope = req.query.scope || "all"; // all | country
+
+    if (scope === "country" && req.query.iso) {
+      const iso = req.query.iso.toUpperCase();
+      // Delete state_intel for this country's states
+      const { data: states } = await supabase
+        .from("states").select("id").eq("country_iso", iso);
+      const ids = (states || []).map(s => s.id);
+      if (ids.length > 0) {
+        await supabase.from("state_intel").delete().in("state_id", ids);
+      }
+      return res.json({ message: `State intel reset for ${iso} (${ids.length} states)`, count: ids.length });
+    }
+
+    // Wipe entire state_intel table using DELETE with always-true condition
+    const { error, count } = await supabase
+      .from("state_intel")
+      .delete()
+      .gte("id", 0);   // matches all rows
+
+    if (error) throw new Error(error.message);
+
+    // Reset progress tracker
+    stateGenProgress.done = 0;
+    stateGenProgress.failed = 0;
+    stateGenProgress.failedStates = [];
+    stateGenProgress.log = [];
+    stateGenProgress.current = null;
+    stateGenProgress.completedAt = null;
+
+    res.json({ message: "All state intel deleted", deleted: count });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/pipeline/reset/area-intel", async (req, res) => {
+  try {
+    const { error, count } = await supabase
+      .from("area_intel")
+      .delete()
+      .gte("id", 0);
+    if (error) throw new Error(error.message);
+    res.json({ message: "All area intel deleted", deleted: count });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/pipeline/reset/all-intel", async (req, res) => {
+  try {
+    stateGenProgress.running = false;
+    const [sr, ar] = await Promise.all([
+      supabase.from("state_intel").delete().gte("id", 0),
+      supabase.from("area_intel").delete().gte("id", 0),
+    ]);
+    if (sr.error) throw new Error("state_intel: " + sr.error.message);
+    if (ar.error) throw new Error("area_intel: " + ar.error.message);
+    stateGenProgress.done = 0;
+    stateGenProgress.failed = 0;
+    stateGenProgress.failedStates = [];
+    stateGenProgress.log = [];
+    stateGenProgress.current = null;
+    stateGenProgress.completedAt = null;
+    res.json({ message: "All intel (state + area) deleted" });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/api/pipeline/pregen-status", (req,res) => {
   // Get counts from DB in background for the response
   const resp = {
@@ -2777,10 +2891,10 @@ app.get("/api/geo/ai-states/:iso", async (req, res) => {
 Return ONLY a valid JSON array — no markdown, no explanation:
 [{"name":"Full Official Name","state_code":"CODE_OR_NULL","type":"state"}]
 Be comprehensive — include every single first-level division.`;
-    const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+    const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
       { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:2500 },
       { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:30000 }
-    );
+    ));
     const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
     const parsed = JSON.parse(text);
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -2829,10 +2943,10 @@ app.get("/api/geo/ai-cities/:stateId", async (req, res) => {
 Return ONLY a valid JSON array of names — no markdown:
 ["City1","Town2","District3"]
 Be comprehensive — include at least 15-30 locations.`;
-    const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+    const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
       { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:1000 },
       { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:20000 }
-    );
+    ));
     const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
     const cities = JSON.parse(text);
     if (Array.isArray(cities) && cities.length > 0) {
@@ -3337,14 +3451,19 @@ async function generateAllStateIntel({ force = false } = {}) {
             success = true;
             break;
           } else if (attempt < 3) {
-            sgLog(`⚠ ${state.name} attempt ${attempt}: no AI data — retrying in 12s`);
-            await new Promise(r => setTimeout(r, 12000));
+            // If Mistral queue has backoff pending, wait for it
+            const qBackoff = mistralQueue._backoff_ms;
+            const waitMs = qBackoff > 0 ? qBackoff + 6000 : 6000;
+            sgLog(`⚠ ${state.name} attempt ${attempt}: no AI data — waiting ${Math.round(waitMs/1000)}s`);
+            await new Promise(r => setTimeout(r, waitMs));
           }
         } catch(e) {
           const msg = e.message?.slice(0,80) || 'unknown error';
           if (attempt < 3) {
-            sgLog(`⚠ ${state.name} attempt ${attempt} error: ${msg} — retrying in 15s`);
-            await new Promise(r => setTimeout(r, 15000));
+            const qBackoff = mistralQueue._backoff_ms;
+            const waitMs = qBackoff > 0 ? qBackoff + 6000 : 6000;
+            sgLog(`⚠ ${state.name} attempt ${attempt} error: ${msg} — waiting ${Math.round(waitMs/1000)}s`);
+            await new Promise(r => setTimeout(r, waitMs));
           } else {
             sgLog(`❌ ${state.name} failed after 3 attempts: ${msg}`);
           }
@@ -3373,7 +3492,7 @@ async function generateAllStateIntel({ force = false } = {}) {
       for (const state of retryList) {
         if (!stateGenProgress.running) break;
         stateGenProgress.current = `RETRY: ${state.name}`;
-        await new Promise(r => setTimeout(r, 20000)); // longer gap on retry
+        await new Promise(r => setTimeout(r, 30000)); // longer gap on retry
         try {
           const result = await runStatePipeline(state.id);
           if (result?.ai_briefing) {
