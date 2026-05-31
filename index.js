@@ -1432,55 +1432,73 @@ Max: 6 recommendations, 14 calendar days, 4 trending items.`;
 // ══════════════════════════════════════════════════════════════════
 // MISTRAL AI — STATE-LEVEL INTEL (expanded)
 // ══════════════════════════════════════════════════════════════════
+// Shared JSON repair — close truncated JSON from Mistral
+function repairJson(text) {
+  const s = text.replace(/```json|```/g, "").trim();
+  try { return JSON.parse(s); } catch(e) {}
+  // Find last complete property and close open braces/brackets
+  let depth = 0; let lastGood = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") { depth--; if (depth === 0) lastGood = i + 1; }
+  }
+  // Try closing from the last known good position
+  const candidates = [
+    s.slice(0, lastGood),
+    s + "}".repeat(Math.max(0, depth)),
+    s.replace(/,\s*$/, "") + "}".repeat(Math.max(0, depth)),
+  ];
+  for (const c of candidates) {
+    try { return JSON.parse(c); } catch(e) {}
+  }
+  // Extract just the outer object
+  const m = s.match(/^\s*\{[\s\S]+/);
+  if (m) {
+    let d = 0; let end = 0;
+    for (let i = 0; i < m[0].length; i++) {
+      if (m[0][i] === "{") d++;
+      else if (m[0][i] === "}") { d--; if (d === 0) { end = i + 1; break; } }
+    }
+    if (end > 0) { try { return JSON.parse(m[0].slice(0, end)); } catch(e) {} }
+  }
+  return null;
+}
+
 async function runMistralForState(stateName, countryName, continent, rawData) {
   if(!ENV.MISTRAL_API_KEY) return null;
-  const prompt = `You are the AI travel intelligence brain of GlobeVoyage.
-Generate comprehensive state/province-level travel intel for: ${stateName}, ${countryName} (${continent}).
 
-WEATHER NOW: ${JSON.stringify(rawData.weather?.now||{})}
-TOP PLACES: ${JSON.stringify((rawData.places||[]).slice(0,5))}
-NEWS: ${(rawData.news||[]).map(n=>`[${n.risk_level}] ${n.title}`).join(" | ").slice(0,400)}
-EVENTS: ${(rawData.events||[]).map(e=>e.name||e.title||"").join(", ").slice(0,200)}
-AIR QUALITY: ${rawData.airQuality ? "AQI "+rawData.airQuality.aqi+" ("+rawData.airQuality.aqi_label+")" : "N/A"}
-AREAS/CITIES: ${(rawData.areas||[]).slice(0,20).map(a=>a.name).join(", ")}
+  // Compact prompt — fewer fields, shorter instructions
+  // Each field kept to 1 sentence to stay well under token limit
+  const wx  = rawData.weather?.now;
+  const aqi = rawData.airQuality;
+  const prompt = `Travel intel for ${stateName}, ${countryName} (${continent}).
+Context: Weather=${wx ? wx.temp+"°C "+wx.condition : "N/A"} | AQI=${aqi ? aqi.aqi+" "+aqi.aqi_label : "N/A"} | Top news: ${(rawData.news||[]).slice(0,3).map(n=>n.title).join(" / ").slice(0,300)} | Cities: ${(rawData.areas||[]).slice(0,15).map(a=>a.name).join(", ")}
 
-Output ONLY valid JSON:
-{
-  "briefing": "3-4 sentences about ${stateName} for travellers — history, character, what makes it unique, current state",
-  "vibe": "One evocative sentence about ${stateName}'s energy and character",
-  "recommendations": [{"title":"","type":"cultural|food|adventure|nature|nightlife|family","when":"","why":"2-3 sentences","rating":5,"risk":"low|medium|high"}],
-  "safety_summary": "Current honest safety situation in ${stateName}",
-  "best_months": ["Jan","Feb"],
-  "avoid_if": "Who should not visit ${stateName} right now",
-  "hidden_gem": "One very specific hidden spot in ${stateName} with exact name",
-  "trending_now": [{"name":"","why_trending":""}],
-  "local_tips": ["Specific tip 1 only locals know","Practical tip 2","Cultural etiquette tip 3","Safety tip 4"],
-  "cost_estimate": {"budget_per_day_usd":"$20-40","mid_range_per_day_usd":"$60-100","luxury_per_day_usd":"$150+","cheap_meal":"$","coffee":"$"},
-  "transport_overview": "How to get to and around ${stateName}",
-  "food_scene": "What to eat in ${stateName} — signature dishes and where to find them",
-  "climate_summary": "Weather patterns in ${stateName} across the year",
-  "history_brief": "Key historical facts about ${stateName} in 2-3 sentences",
-  "culture_brief": "Cultural highlights, festivals, and traditions of ${stateName}",
-  "safety_detail": {"overall_rating":"safe|moderate|caution|dangerous","night_safety":"","solo_female":"","main_risks":"","emergency_number":""},
-  "accommodation_overview": "Types of accommodation available in ${stateName} and price ranges",
-  "shopping_overview": "What to buy in ${stateName} and where",
-  "nightlife_overview": "Nightlife and entertainment scene in ${stateName}",
-  "health_overview": "Health considerations for visiting ${stateName}",
-  "connectivity_overview": "Internet, mobile coverage, and tech infrastructure in ${stateName}",
-  "traveler_scores": {"solo":0,"couples":0,"families":0,"backpackers":0,"luxury":0,"digital_nomad":0,"adventure":0,"culture":0,"foodie":0},
-  "day_itinerary": "Suggested full day in ${stateName}: morning → afternoon → evening",
-  "sensory_description": "What you see, hear, smell walking the main street of ${stateName}"
-}
-Max 6 recommendations, 4 trending items.`;
+Return ONLY valid compact JSON — no markdown, no explanation, no trailing commas:
+{"briefing":"2-3 sentences on character/history/vibe of ${stateName}","vibe":"One evocative sentence","best_months":["Jan","Feb","Mar"],"avoid_if":"Who/when to avoid","hidden_gem":"Specific hidden spot with name","safety_summary":"Current safety in one sentence","food_scene":"Signature dishes and where","transport_overview":"Getting here and around","climate_summary":"Weather across the year","history_brief":"Key history in 2 sentences","culture_brief":"Culture and traditions","health_overview":"Health tips","connectivity_overview":"Internet and mobile","accommodation_overview":"Where to stay and prices","shopping_overview":"What to buy and where","nightlife_overview":"Nightlife scene","cost_estimate":{"budget":"$X-Y/day","mid":"$Y-Z/day","luxury":"$Z+/day"},"safety_detail":{"rating":"safe|moderate|caution|dangerous","night":"","solo_female":"","risks":"","emergency":""},"traveler_scores":{"solo":7,"couples":7,"families":6,"backpackers":7,"luxury":5,"digital_nomad":6,"adventure":7,"culture":8,"foodie":7},"recommendations":[{"title":"","type":"","why":"","rating":4.5},{"title":"","type":"","why":"","rating":4},{"title":"","type":"","why":"","rating":4.5}],"local_tips":["Tip 1","Tip 2","Tip 3"],"day_itinerary":"Morning: ... | Afternoon: ... | Evening: ...","sensory_description":"Walking the main street: you see..., hear..., smell..."}`;
 
-  try {
-    const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
-      {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.3,max_tokens:2500},
-      {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:45000}
-    );
-    const text = r.data?.choices?.[0]?.message?.content||"";
-    return JSON.parse(text.replace(/```json|```/g,"").trim());
-  } catch(e) { console.error("[MistralState]", e.message); return null; }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const r = await axios.post("https://api.mistral.ai/v1/chat/completions",
+        {model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.2, max_tokens:3500},
+        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"}, timeout:50000}
+      );
+      const text  = r.data?.choices?.[0]?.message?.content || "";
+      const finish = r.data?.choices?.[0]?.finish_reason;
+      if (finish === "length") console.warn(`[MistralState] ${stateName} truncated (finish=length) attempt ${attempt}`);
+      const parsed = repairJson(text);
+      if (parsed) {
+        console.log(`[MistralState] ✓ ${stateName} parsed OK (attempt ${attempt}, finish=${finish})`);
+        return parsed;
+      }
+      console.error(`[MistralState] ${stateName} parse failed attempt ${attempt}, raw len=${text.length}`);
+    } catch(e) {
+      console.error(`[MistralState] ${stateName} attempt ${attempt}:`, e.message?.slice(0, 80));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2192,10 +2210,13 @@ async function runFullPipeline(triggerName) {
 }
 
 cron.schedule("0 6  * * *", () => runFullPipeline("06:00"), { timezone:"UTC" });
-// Every 2 hours: fill in any states/areas that are still missing intel
+// Every 2 hours: fill in any states that are missing intel (skip if already running)
 cron.schedule("0 */2 * * *", () => {
-  preGenerateAllStateIntel().catch(console.error);
-  setTimeout(() => preGenerateMissingAreaIntel().catch(console.error), 5*60*1000);
+  if (!stateGenProgress.running) {
+    generateAllStateIntel({ force: false }).catch(console.error);
+  } else {
+    console.log("[Cron] State gen already running — skipping 2hr trigger");
+  }
 }, { timezone:"UTC" });
 cron.schedule("0 14 * * *", () => runFullPipeline("14:00"), { timezone:"UTC" });
 cron.schedule("0 22 * * *", () => runFullPipeline("22:00"), { timezone:"UTC" });
@@ -3249,11 +3270,22 @@ async function generateAllStateIntel({ force = false } = {}) {
   stateGenProgress.log        = [];
 
   try {
-    // Load ALL states from DB
-    const { data: allStates } = await supabase
-      .from('states')
-      .select('id, name, country_iso')
-      .order('country_iso');
+    // Load ALL states — paginate because Supabase defaults to 1000 rows
+    let allStates = [];
+    let page = 0;
+    const PAGE_SIZE = 1000;
+    while (true) {
+      const { data: batch, error } = await supabase
+        .from('states')
+        .select('id, name, country_iso')
+        .order('country_iso')
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+      if (error || !batch || batch.length === 0) break;
+      allStates = allStates.concat(batch);
+      if (batch.length < PAGE_SIZE) break;
+      page++;
+    }
+    sgLog(`Loaded ${allStates.length} total states from DB`);
 
     if (!allStates || allStates.length === 0) {
       sgLog('No states in DB — run geo pipeline first');
@@ -3264,10 +3296,21 @@ async function generateAllStateIntel({ force = false } = {}) {
     // Get which states already have AI intel (unless force=true)
     let toProcess = allStates;
     if (!force) {
-      const { data: hasIntel } = await supabase
-        .from('state_intel')
-        .select('state_id')
-        .not('ai_briefing', 'is', null);
+      // Paginate existing intel check too
+      let hasIntelAll = [];
+      let iPage = 0;
+      while (true) {
+        const { data: iBatch } = await supabase
+          .from('state_intel')
+          .select('state_id')
+          .not('ai_briefing', 'is', null)
+          .range(iPage * 1000, (iPage + 1) * 1000 - 1);
+        if (!iBatch || iBatch.length === 0) break;
+        hasIntelAll = hasIntelAll.concat(iBatch);
+        if (iBatch.length < 1000) break;
+        iPage++;
+      }
+      const hasIntel = hasIntelAll;
       const doneIds = new Set((hasIntel || []).map(r => r.state_id));
       toProcess = allStates.filter(s => !doneIds.has(s.id));
     }
@@ -3314,9 +3357,9 @@ async function generateAllStateIntel({ force = false } = {}) {
       }
       stateGenProgress.done++;
 
-      // 8 second gap between states — Mistral + Nominatim rate limits
+      // 5 second gap between states — enough for Mistral rate limits
       if (i < toProcess.length - 1) {
-        await new Promise(r => setTimeout(r, 8000));
+        await new Promise(r => setTimeout(r, 5000));
       }
     }
 
@@ -3398,9 +3441,15 @@ app.listen(PORT, async()=>{
   setTimeout(runStartupPipeline, 15000);
   setTimeout(resumeGeoPipelineIfIncomplete, 30000);
   // Pre-generate state intel for states that don't have it yet (runs 90s after boot)
-  setTimeout(() => preGenerateAllStateIntel().catch(console.error), 90000);
-  // Fix any area intel records with null AI fields (runs 3min after boot)
-  setTimeout(() => preGenerateMissingAreaIntel().catch(console.error), 3*60*1000);
+  setTimeout(() => generateAllStateIntel({ force: false }).catch(console.error), 90000);
+  // Area pregen runs only after state gen finishes (check every 10 min)
+  setTimeout(function checkAndRunAreaPregen() {
+    if (!stateGenProgress.running) {
+      preGenerateMissingAreaIntel().catch(console.error);
+    } else {
+      setTimeout(checkAndRunAreaPregen, 10 * 60 * 1000);
+    }
+  }, 10 * 60 * 1000);
 
   // Start background area intel refresh after 5 minutes
   setTimeout(() => {
