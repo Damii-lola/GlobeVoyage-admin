@@ -2496,11 +2496,44 @@ app.post("/api/pipeline/run-all", async (req,res) => {
   runStartupPipeline();
 });
 app.post("/api/pipeline/pregen-states", async (req,res) => {
-  res.json({message:"State intel pre-generation started in background"});
-  preGenerateAllStateIntel().catch(console.error);
+  if (stateGenProgress.running) {
+    return res.json({ message:"Already running", progress: stateGenProgress });
+  }
+  const force = req.query.force === "true";
+  res.json({ message: force ? "Force-regenerating ALL state intel" : "Generating missing state intel", started: true });
+  generateAllStateIntel({ force }).catch(console.error);
 });
+
+app.post("/api/pipeline/pregen-states/stop", (req,res) => {
+  stateGenProgress.running = false;
+  res.json({ message: "Stop signal sent" });
+});
+
 app.get("/api/pipeline/pregen-status", (req,res) => {
-  res.json({ state_pregen_running: statePreGenRunning, area_intel_refresh_running: areaIntelRefreshRunning });
+  // Get counts from DB in background for the response
+  const resp = {
+    ...stateGenProgress,
+    log: stateGenProgress.log.slice(0, 30),
+    area_intel_refresh_running: areaIntelRefreshRunning,
+  };
+  res.json(resp);
+});
+
+app.get("/api/pipeline/intel-coverage", async (req,res) => {
+  try {
+    const [statesRes, intelRes] = await Promise.all([
+      supabase.from("states").select("*", { count:"exact", head:true }),
+      supabase.from("state_intel").select("*", { count:"exact", head:true }).not("ai_briefing","is",null),
+    ]);
+    const totalStates = statesRes.count || 0;
+    const statesWithIntel = intelRes.count || 0;
+    res.json({
+      total_states: totalStates,
+      states_with_intel: statesWithIntel,
+      states_missing_intel: totalStates - statesWithIntel,
+      coverage_pct: totalStates > 0 ? Math.round(statesWithIntel / totalStates * 100) : 0,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 app.get("/api/pipeline/status", async (req,res) => {
   const {data:runs}  = await supabase.from("pipeline_runs").select("iso,status,duration_ms,ran_at,error").order("ran_at",{ascending:false}).limit(100);
@@ -3177,84 +3210,175 @@ var GEODATA='${SELF}/geodata';
 // ══════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════
-// BACKGROUND PRE-GENERATION — State + Area Intel for all countries
+// FULL STATE INTEL PIPELINE — Sequential, retrying, persistent
 // ══════════════════════════════════════════════════════════════════
-let statePreGenRunning = false;
+const stateGenProgress = {
+  running: false,
+  total: 0,
+  done: 0,
+  failed: 0,
+  current: null,
+  startedAt: null,
+  completedAt: null,
+  failedStates: [],
+  log: [],
+};
 
-async function preGenerateAllStateIntel() {
-  if (statePreGenRunning) { console.log("[StatePreGen] Already running"); return; }
-  if (!stateIntelTableExists) { console.log("[StatePreGen] state_intel table missing — skipping"); return; }
-  statePreGenRunning = true;
-  console.log("[StatePreGen] Starting background state intel pre-generation...");
+function sgLog(msg) {
+  const line = `[${new Date().toISOString().slice(11,19)}] ${msg}`;
+  console.log('[StateGen]', msg);
+  stateGenProgress.log = [line, ...stateGenProgress.log].slice(0, 100);
+}
+
+async function generateAllStateIntel({ force = false } = {}) {
+  if (stateGenProgress.running) {
+    sgLog('Already running — ignoring duplicate call');
+    return { skipped: true };
+  }
+  if (!stateIntelTableExists) {
+    sgLog('state_intel table missing — run geo_migration_v3.sql first');
+    return { error: 'table_missing' };
+  }
+
+  stateGenProgress.running    = true;
+  stateGenProgress.done       = 0;
+  stateGenProgress.failed     = 0;
+  stateGenProgress.failedStates = [];
+  stateGenProgress.startedAt  = new Date().toISOString();
+  stateGenProgress.completedAt = null;
+  stateGenProgress.log        = [];
 
   try {
-    // Get all state IDs
+    // Load ALL states from DB
     const { data: allStates } = await supabase
-      .from("states")
-      .select("id, name, country_iso")
-      .order("country_iso");
+      .from('states')
+      .select('id, name, country_iso')
+      .order('country_iso');
 
     if (!allStates || allStates.length === 0) {
-      console.log("[StatePreGen] No states in DB yet");
-      statePreGenRunning = false;
-      return;
+      sgLog('No states in DB — run geo pipeline first');
+      stateGenProgress.running = false;
+      return { error: 'no_states' };
     }
 
-    // Get state IDs that already have intel WITH actual AI content
-    const { data: existingIntel } = await supabase
-      .from("state_intel")
-      .select("state_id")
-      .not("ai_briefing", "is", null);
+    // Get which states already have AI intel (unless force=true)
+    let toProcess = allStates;
+    if (!force) {
+      const { data: hasIntel } = await supabase
+        .from('state_intel')
+        .select('state_id')
+        .not('ai_briefing', 'is', null);
+      const doneIds = new Set((hasIntel || []).map(r => r.state_id));
+      toProcess = allStates.filter(s => !doneIds.has(s.id));
+    }
 
-    const existingIds = new Set((existingIntel || []).map(r => r.state_id));
-    const missing = allStates.filter(s => !existingIds.has(s.id));
-    console.log(`[StatePreGen] ${allStates.length} total states — ${existingIds.size} have intel — ${missing.length} need generation`);
+    stateGenProgress.total = toProcess.length;
+    sgLog(`Starting: ${toProcess.length}/${allStates.length} states need intel`);
 
-    // Process in batches of 2 to avoid Mistral rate limits
-    const BATCH = 2;
-    const DELAY = 15000; // 15s between batches
+    // Process ONE AT A TIME — sequential, no parallel, to respect Mistral limits
+    for (let i = 0; i < toProcess.length; i++) {
+      if (!stateGenProgress.running) { sgLog('Stopped by user'); break; }
 
-    for (let i = 0; i < missing.length; i += BATCH) {
-      if (!statePreGenRunning) break;
-      const batch = missing.slice(i, i + BATCH);
-      console.log(`[StatePreGen] Batch ${Math.floor(i/BATCH)+1}/${Math.ceil(missing.length/BATCH)} — ${batch.map(s=>s.name).join(', ')}`);
+      const state = toProcess[i];
+      stateGenProgress.current = `${state.name} (${i+1}/${toProcess.length})`;
+      sgLog(`Processing ${state.name} [${state.country_iso}]`);
 
-      await Promise.allSettled(batch.map(s => runStatePipeline(s.id)));
-      
-      if (i + BATCH < missing.length) {
-        await new Promise(r => setTimeout(r, DELAY));
+      let success = false;
+
+      // Try up to 3 times per state
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const result = await runStatePipeline(state.id);
+          if (result && result.ai_briefing) {
+            sgLog(`✅ ${state.name} — intel saved`);
+            success = true;
+            break;
+          } else if (attempt < 3) {
+            sgLog(`⚠ ${state.name} attempt ${attempt}: no AI data — retrying in 12s`);
+            await new Promise(r => setTimeout(r, 12000));
+          }
+        } catch(e) {
+          const msg = e.message?.slice(0,80) || 'unknown error';
+          if (attempt < 3) {
+            sgLog(`⚠ ${state.name} attempt ${attempt} error: ${msg} — retrying in 15s`);
+            await new Promise(r => setTimeout(r, 15000));
+          } else {
+            sgLog(`❌ ${state.name} failed after 3 attempts: ${msg}`);
+          }
+        }
+      }
+
+      if (!success) {
+        stateGenProgress.failed++;
+        stateGenProgress.failedStates.push(state.name);
+      }
+      stateGenProgress.done++;
+
+      // 8 second gap between states — Mistral + Nominatim rate limits
+      if (i < toProcess.length - 1) {
+        await new Promise(r => setTimeout(r, 8000));
       }
     }
-    console.log(`[StatePreGen] ✅ Complete — processed ${missing.length} states`);
+
+    // Retry all failed states one more time
+    if (stateGenProgress.failedStates.length > 0 && stateGenProgress.running) {
+      sgLog(`🔄 Retrying ${stateGenProgress.failedStates.length} failed states…`);
+      const failedNames = new Set(stateGenProgress.failedStates);
+      const retryList = allStates.filter(s => failedNames.has(s.name));
+      stateGenProgress.failedStates = [];
+
+      for (const state of retryList) {
+        if (!stateGenProgress.running) break;
+        stateGenProgress.current = `RETRY: ${state.name}`;
+        await new Promise(r => setTimeout(r, 20000)); // longer gap on retry
+        try {
+          const result = await runStatePipeline(state.id);
+          if (result?.ai_briefing) {
+            sgLog(`✅ RETRY OK: ${state.name}`);
+          } else {
+            stateGenProgress.failedStates.push(state.name);
+            sgLog(`❌ RETRY FAILED: ${state.name}`);
+          }
+        } catch(e) {
+          stateGenProgress.failedStates.push(state.name);
+          sgLog(`❌ RETRY ERROR: ${state.name}: ${e.message?.slice(0,60)}`);
+        }
+      }
+    }
+
+    const summary = `Complete — ${stateGenProgress.done} processed, ${stateGenProgress.failedStates.length} still failed`;
+    sgLog(summary);
+    stateGenProgress.completedAt = new Date().toISOString();
   } catch(e) {
-    console.error("[StatePreGen] Error:", e.message);
+    sgLog(`Fatal error: ${e.message}`);
   }
-  statePreGenRunning = false;
+
+  stateGenProgress.running = false;
+  stateGenProgress.current = null;
+  return { done: stateGenProgress.done, failed: stateGenProgress.failedStates.length };
+}
+
+// Thin wrapper kept for cron + boot calls
+async function preGenerateAllStateIntel() {
+  return generateAllStateIntel({ force: false });
 }
 
 async function preGenerateMissingAreaIntel() {
   if (!areaIntelTableExists) return;
-  console.log("[AreaPreGen] Checking for areas missing intel...");
   try {
-    // Get top-priority areas (capitals and large states) that have no AI data
     const { data: areasNeedingIntel } = await supabase
-      .from("area_intel")
-      .select("id, area_name, state_name, country_name, country_iso")
-      .is("ai_briefing", null)
-      .limit(20);
-
-    if (!areasNeedingIntel || areasNeedingIntel.length === 0) {
-      console.log("[AreaPreGen] All cached areas have intel");
-      return;
-    }
-
-    console.log(`[AreaPreGen] ${areasNeedingIntel.length} areas need intel regeneration`);
+      .from('area_intel')
+      .select('id, area_name, state_name, country_name, country_iso')
+      .is('ai_briefing', null)
+      .limit(10);
+    if (!areasNeedingIntel?.length) return;
+    sgLog(`AreaPreGen: ${areasNeedingIntel.length} areas missing AI intel`);
     for (const area of areasNeedingIntel) {
       await generateAndStoreAreaIntel(area.area_name, area.state_name, area.country_name, area.country_iso)
-        .catch(e => console.error(`[AreaPreGen] ${area.area_name}:`, e.message));
-      await new Promise(r => setTimeout(r, 8000)); // 8s between areas
+        .catch(e => sgLog(`AreaPreGen fail ${area.area_name}: ${e.message?.slice(0,50)}`));
+      await new Promise(r => setTimeout(r, 10000));
     }
-  } catch(e) { console.error("[AreaPreGen] Error:", e.message); }
+  } catch(e) { sgLog(`AreaPreGen error: ${e.message}`); }
 }
 
 const PORT = process.env.PORT||3000;
