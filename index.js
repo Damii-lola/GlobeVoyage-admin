@@ -2570,36 +2570,57 @@ app.post("/api/pipeline/pregen-states/stop", (req,res) => {
   res.json({ message: "Stop signal sent" });
 });
 
+// ── Table primary key map ────────────────────────────────────────
+// state_intel uses state_id (INTEGER), area_intel uses id (BIGSERIAL)
+const TABLE_PK = {
+  "state_intel": "state_id",
+  "area_intel":  "id",
+};
+
 // ── Helper: delete all rows from a table reliably ───────────────
 async function deleteAllRows(tableName) {
-  // Strategy 1: delete where id > 0 (BIGSERIAL starts at 1)
+  const pk = TABLE_PK[tableName] || "id";
+  console.log(`[Reset] Deleting all from ${tableName} using pk=${pk}`);
+
+  // Strategy 1: NOT NULL on primary key (works regardless of value range)
   const { error: e1, count: c1 } = await supabase
-    .from(tableName).delete().gt("id", 0);
-  if (!e1) return { deleted: c1 || 0 };
+    .from(tableName).delete().not(pk, "is", null);
+  if (!e1) {
+    console.log(`[Reset] ✓ ${tableName} deleted ${c1 || 0} rows via NOT NULL`);
+    return { deleted: c1 || 0 };
+  }
+  console.log(`[Reset] NOT NULL failed for ${tableName}: ${e1.message} — trying gt`);
 
-  console.log(`[Reset] gt(id,0) failed for ${tableName}: ${e1.message} — trying neq`);
-
-  // Strategy 2: neq id from impossible value
+  // Strategy 2: gt primary key > 0
   const { error: e2, count: c2 } = await supabase
-    .from(tableName).delete().neq("id", -1);
-  if (!e2) return { deleted: c2 || 0 };
+    .from(tableName).delete().gt(pk, 0);
+  if (!e2) {
+    console.log(`[Reset] ✓ ${tableName} deleted ${c2 || 0} rows via gt`);
+    return { deleted: c2 || 0 };
+  }
+  console.log(`[Reset] gt failed for ${tableName}: ${e2.message} — trying batch delete`);
 
-  console.log(`[Reset] neq failed for ${tableName}: ${e2.message} — trying batch delete`);
-
-  // Strategy 3: fetch all IDs then delete in batches
+  // Strategy 3: fetch PKs then delete in batches of 500
   let totalDeleted = 0;
   let page = 0;
   while (true) {
     const { data: rows, error: fetchErr } = await supabase
-      .from(tableName).select("id").range(page * 500, (page + 1) * 500 - 1);
-    if (fetchErr || !rows || rows.length === 0) break;
-    const ids = rows.map(r => r.id);
-    const { error: delErr } = await supabase.from(tableName).delete().in("id", ids);
+      .from(tableName).select(pk).range(page * 500, (page + 1) * 500 - 1);
+    if (fetchErr) {
+      console.log(`[Reset] Batch fetch failed: ${fetchErr.message}`);
+      break;
+    }
+    if (!rows || rows.length === 0) break;
+    const pkValues = rows.map(r => r[pk]);
+    const { error: delErr, count: dc } = await supabase
+      .from(tableName).delete().in(pk, pkValues);
     if (delErr) throw new Error(`Batch delete failed on ${tableName}: ${delErr.message}`);
-    totalDeleted += ids.length;
-    if (ids.length < 500) break;
+    totalDeleted += dc || pkValues.length;
+    console.log(`[Reset] Batch ${page + 1}: deleted ${dc || pkValues.length} from ${tableName}`);
+    if (rows.length < 500) break;
     page++;
   }
+  console.log(`[Reset] ✓ ${tableName} batch total: ${totalDeleted} rows`);
   return { deleted: totalDeleted };
 }
 
