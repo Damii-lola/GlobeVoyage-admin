@@ -2570,76 +2570,88 @@ app.post("/api/pipeline/pregen-states/stop", (req,res) => {
   res.json({ message: "Stop signal sent" });
 });
 
-// ── RESET endpoints — wipe intel tables ─────────────────────────
+// ── Helper: delete all rows from a table reliably ───────────────
+async function deleteAllRows(tableName) {
+  // Strategy 1: delete where id > 0 (BIGSERIAL starts at 1)
+  const { error: e1, count: c1 } = await supabase
+    .from(tableName).delete().gt("id", 0);
+  if (!e1) return { deleted: c1 || 0 };
+
+  console.log(`[Reset] gt(id,0) failed for ${tableName}: ${e1.message} — trying neq`);
+
+  // Strategy 2: neq id from impossible value
+  const { error: e2, count: c2 } = await supabase
+    .from(tableName).delete().neq("id", -1);
+  if (!e2) return { deleted: c2 || 0 };
+
+  console.log(`[Reset] neq failed for ${tableName}: ${e2.message} — trying batch delete`);
+
+  // Strategy 3: fetch all IDs then delete in batches
+  let totalDeleted = 0;
+  let page = 0;
+  while (true) {
+    const { data: rows, error: fetchErr } = await supabase
+      .from(tableName).select("id").range(page * 500, (page + 1) * 500 - 1);
+    if (fetchErr || !rows || rows.length === 0) break;
+    const ids = rows.map(r => r.id);
+    const { error: delErr } = await supabase.from(tableName).delete().in("id", ids);
+    if (delErr) throw new Error(`Batch delete failed on ${tableName}: ${delErr.message}`);
+    totalDeleted += ids.length;
+    if (ids.length < 500) break;
+    page++;
+  }
+  return { deleted: totalDeleted };
+}
+
+function resetGenProgress() {
+  stateGenProgress.running     = false;
+  stateGenProgress.done        = 0;
+  stateGenProgress.failed      = 0;
+  stateGenProgress.failedStates = [];
+  stateGenProgress.log         = [];
+  stateGenProgress.current     = null;
+  stateGenProgress.completedAt = null;
+}
+
+// ── RESET endpoints ──────────────────────────────────────────────
 app.post("/api/pipeline/reset/state-intel", async (req, res) => {
   try {
-    stateGenProgress.running = false; // Stop any running gen
-    const scope = req.query.scope || "all"; // all | country
-
-    if (scope === "country" && req.query.iso) {
-      const iso = req.query.iso.toUpperCase();
-      // Delete state_intel for this country's states
-      const { data: states } = await supabase
-        .from("states").select("id").eq("country_iso", iso);
-      const ids = (states || []).map(s => s.id);
-      if (ids.length > 0) {
-        await supabase.from("state_intel").delete().in("state_id", ids);
-      }
-      return res.json({ message: `State intel reset for ${iso} (${ids.length} states)`, count: ids.length });
-    }
-
-    // Wipe entire state_intel table using DELETE with always-true condition
-    const { error, count } = await supabase
-      .from("state_intel")
-      .delete()
-      .gte("id", 0);   // matches all rows
-
-    if (error) throw new Error(error.message);
-
-    // Reset progress tracker
-    stateGenProgress.done = 0;
-    stateGenProgress.failed = 0;
-    stateGenProgress.failedStates = [];
-    stateGenProgress.log = [];
-    stateGenProgress.current = null;
-    stateGenProgress.completedAt = null;
-
-    res.json({ message: "All state intel deleted", deleted: count });
+    resetGenProgress(); // Stop gen + clear tracker
+    // Give the gen loop one tick to see the stop signal
+    await new Promise(r => setTimeout(r, 500));
+    const result = await deleteAllRows("state_intel");
+    res.json({ message: `State intel deleted (${result.deleted} rows)`, ...result });
   } catch(e) {
+    console.error("[Reset] state-intel error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post("/api/pipeline/reset/area-intel", async (req, res) => {
   try {
-    const { error, count } = await supabase
-      .from("area_intel")
-      .delete()
-      .gte("id", 0);
-    if (error) throw new Error(error.message);
-    res.json({ message: "All area intel deleted", deleted: count });
+    const result = await deleteAllRows("area_intel");
+    res.json({ message: `Area intel deleted (${result.deleted} rows)`, ...result });
   } catch(e) {
+    console.error("[Reset] area-intel error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
 app.post("/api/pipeline/reset/all-intel", async (req, res) => {
   try {
-    stateGenProgress.running = false;
+    resetGenProgress();
+    await new Promise(r => setTimeout(r, 500));
     const [sr, ar] = await Promise.all([
-      supabase.from("state_intel").delete().gte("id", 0),
-      supabase.from("area_intel").delete().gte("id", 0),
+      deleteAllRows("state_intel"),
+      deleteAllRows("area_intel"),
     ]);
-    if (sr.error) throw new Error("state_intel: " + sr.error.message);
-    if (ar.error) throw new Error("area_intel: " + ar.error.message);
-    stateGenProgress.done = 0;
-    stateGenProgress.failed = 0;
-    stateGenProgress.failedStates = [];
-    stateGenProgress.log = [];
-    stateGenProgress.current = null;
-    stateGenProgress.completedAt = null;
-    res.json({ message: "All intel (state + area) deleted" });
+    res.json({
+      message: `All intel deleted — state: ${sr.deleted} rows, area: ${ar.deleted} rows`,
+      state_deleted: sr.deleted,
+      area_deleted: ar.deleted,
+    });
   } catch(e) {
+    console.error("[Reset] all-intel error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
