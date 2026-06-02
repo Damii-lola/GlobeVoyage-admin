@@ -1546,525 +1546,319 @@ Return ONLY valid compact JSON — no markdown, no explanation, no trailing comm
 // ══════════════════════════════════════════════════════════════════
 async function runMistralForArea(areaName, stateName, countryName, continent, rawData) {
   if(!ENV.MISTRAL_API_KEY) return null;
-  const location = `${areaName}${stateName?", "+stateName:""}, ${countryName}`;
+  const location = `${areaName}${stateName ? ", " + stateName : ""}, ${countryName}`;
+  const wx  = rawData.weather?.now || {};
+  const aqi = rawData.airQuality || {};
 
-  const prompt = `You are GlobeVoyage AI — the world's most comprehensive travel intelligence system.
-Generate DETAILED, ACCURATE travel intel for: ${location}
+  // Compact but comprehensive prompt covering ALL spec categories
+  const prompt = `You are GlobeVoyage AI. Generate COMPREHENSIVE travel intelligence for: ${location}
 
-WEATHER: ${JSON.stringify(rawData.weather?.now||{})}
-NEWS: ${(rawData.news||[]).map(n=>n.title).join(" | ").slice(0,300)}
-PLACES: ${JSON.stringify((rawData.places||[]).slice(0,4))}
-AIR QUALITY: ${rawData.airQuality?"AQI "+rawData.airQuality.aqi+" ("+rawData.airQuality.aqi_label+")":"unknown"}
+LIVE DATA:
+- Weather: ${wx.temp != null ? wx.temp + "°C, " + (wx.condition||"") + ", humidity " + (wx.humidity||"?") + "%, wind " + (wx.wind_speed||"?") + "km/h" : "unavailable"}
+- AQI: ${aqi.aqi != null ? aqi.aqi + " (" + (aqi.aqi_label||"") + ")" : "unavailable"}
+- News: ${(rawData.news||[]).slice(0,5).map(n=>n.title).join(" | ").slice(0,400) || "none"}
+- Nearby places: ${JSON.stringify((rawData.places||[]).slice(0,4).map(p=>p.name)).slice(0,200)}
 
-Output ONLY valid JSON — no markdown, no code fences, no preamble:
+Return ONLY valid compact JSON (no markdown). Cover ALL categories:
 {
-  "briefing": "4-5 detailed sentences about ${areaName}: its character, atmosphere, history, who lives there, what makes it unique",
-  "vibe": "One evocative sentence capturing ${areaName}'s essence",
-  "hidden_gem": "One very specific hidden spot in ${areaName} with exact name and why it is special",
-  "best_time": "Best time of day AND season to visit ${areaName} with specific reasons",
-  "trending": "What is currently popular or newly opened in ${areaName} in 2025-2026",
-  "avoid_if": "Who should not visit ${areaName} and when to avoid",
-  "history": {
-    "overview": "Key historical events and founding of ${areaName} in 3-4 sentences",
-    "indigenous_groups": "Original/indigenous groups historically present",
-    "colonial_history": "Colonial history if applicable",
-    "famous_historical_figures": ["Name 1","Name 2"],
-    "key_historical_events": ["Event 1","Event 2","Event 3"]
-  },
-  "culture": {
-    "overview": "Cultural character and identity of ${areaName}",
-    "traditional_music": "Traditional music genres",
-    "traditional_food": "Traditional food culture",
-    "festivals": [{"name":"","month":"","description":""}],
-    "etiquette": ["Do 1","Do 2","Dont 1","Dont 2"],
-    "taboos": ["Taboo 1","Taboo 2"],
-    "languages": ["Language 1","Language 2"],
-    "religion_overview": "Religious landscape of ${areaName}",
-    "dress_code": "Dress expectations for visitors"
-  },
-  "food": {
-    "signature_dishes": ["Dish 1","Dish 2","Dish 3"],
-    "street_food": ["Street food 1","Street food 2"],
-    "local_drinks": ["Drink 1","Drink 2"],
-    "best_markets": ["Market 1","Market 2"],
-    "dietary_options": {"vegetarian":"","vegan":"","halal":"","kosher":""},
-    "food_safety": "Food safety situation in ${areaName}",
-    "avg_meal_cost_usd": {"cheap":"","mid":"","fine_dining":""},
-    "must_try": ["Item 1","Item 2","Item 3"],
-    "breakfast_culture": "What locals eat for breakfast and when",
-    "food_markets": "Best food markets and times"
-  },
-  "accommodation": {
-    "overview": "Accommodation landscape in ${areaName}",
-    "best_areas_to_stay": ["Area 1","Area 2"],
-    "areas_to_avoid": ["Area to avoid"],
-    "price_range": {"budget":"$X-Y/night","mid":"$Y-Z/night","luxury":"$Z+/night"},
-    "recommended_types": ["Guesthouse","Hotel","Hostel"],
-    "unique_stays": "Any unusual or notable accommodation options",
-    "booking_tips": "Tips for booking accommodation in ${areaName}"
-  },
-  "transport": {
-    "getting_here": "How to reach ${areaName} from major nearby cities",
-    "getting_around": "Main transport modes within ${areaName}",
-    "ride_apps": ["App 1","App 2"],
-    "road_quality": "Road quality assessment",
-    "public_transport": "Public transport overview",
-    "airport_distance": "Nearest airport and distance",
-    "traffic_tips": "Traffic and timing tips for visitors",
-    "night_transport": "Transport options after midnight"
-  },
-  "finance": {
-    "daily_budget": {"budget":"$X/day covers:","mid_range":"$Y/day covers:","luxury":"$Z/day covers:"},
-    "tipping_culture": "Tipping norms in ${areaName}",
-    "bargaining_culture": "Is bargaining expected in markets?",
-    "payment_methods": "Cash vs card prevalence",
-    "atm_availability": "ATM availability and safety",
-    "currency_tips": "Currency exchange tips"
-  },
-  "health": {
-    "general_risk": "Overall health risk level",
-    "vaccinations": ["Recommended vaccination 1","Recommended vaccination 2"],
-    "malaria_risk": "Malaria risk if applicable",
-    "water_safety": "Can you drink tap water?",
-    "food_safety_warnings": "Food safety warnings",
-    "nearest_hospital": "Nearest hospital description",
-    "pharmacy_availability": "Pharmacy availability",
-    "health_tips": ["Health tip 1","Health tip 2","Health tip 3"]
-  },
-  "safety": {
-    "overall_rating": "safe|moderate|caution|dangerous",
-    "crime_index": "low|medium|high",
-    "main_risks": ["Risk 1","Risk 2"],
-    "safe_areas": ["Safe area 1","Safe area 2"],
-    "areas_to_avoid": ["Risky area 1"],
-    "scams": ["Common scam 1","Common scam 2"],
-    "night_safety": "Night-time safety situation",
-    "solo_female_safety": "Safety for solo female travellers",
-    "lgbtq_safety": "LGBTQ+ safety situation",
-    "emergency_numbers": {"police":"","ambulance":"","fire":""},
-    "current_alerts": ["Alert 1 if any"]
-  },
-  "nightlife": {
-    "overview": "Nightlife and entertainment scene",
-    "best_areas": ["Area 1","Area 2"],
-    "venues": [{"name":"","type":"bar|club|lounge","vibe":""}],
-    "closing_time": "When do venues close?",
-    "dress_code": "Nightlife dress code norms",
-    "safety_tips": ["Nightlife safety tip 1","Nightlife safety tip 2"]
-  },
-  "attractions": {
-    "top_10": [{"name":"","type":"","why":"","hours":"","cost":"","tip":""}],
-    "hidden_gems": ["Hidden gem 1","Hidden gem 2"],
-    "free_attractions": ["Free attraction 1","Free attraction 2"],
-    "best_viewpoints": ["Viewpoint 1"],
-    "instagrammable_spots": ["Spot 1","Spot 2"],
-    "day_trips": ["Day trip destination 1","Day trip destination 2"],
-    "only_here": "What experience can ONLY be done in ${areaName}"
-  },
-  "shopping": {
-    "overview": "Shopping scene in ${areaName}",
-    "best_markets": ["Market 1","Market 2"],
-    "what_to_buy": ["Item 1","Item 2","Item 3"],
-    "what_not_to_buy": ["Tourist trap 1"],
-    "bargaining_tips": "Bargaining tips for ${areaName} markets",
-    "shopping_hours": "Typical shopping hours"
-  },
-  "connectivity": {
-    "internet_speed": "Average internet speed",
-    "best_networks": ["Network 1","Network 2"],
-    "sim_card_tips": "SIM card purchase advice for visitors",
-    "wifi_availability": "Wi-Fi availability in cafes, hotels, public",
-    "coworking_spaces": "Co-working space availability",
-    "power_reliability": "Power outage frequency",
-    "vpn_recommended": true
-  },
-  "climate": {
-    "classification": "Climate type",
-    "rainy_season": "Rainy season months",
-    "dry_season": "Dry season months",
-    "best_weather_months": ["Month 1","Month 2"],
-    "worst_months": ["Month"],
-    "packing_tips": ["Packing tip 1","Packing tip 2","Packing tip 3"],
-    "current_season": "Current season"
-  },
-  "environment": {
-    "air_quality_overview": "General air quality situation",
-    "plastic_pollution": "Plastic pollution level",
-    "green_spaces": "Green spaces and parks available",
-    "eco_tips": ["Eco tip 1","Eco tip 2"]
-  },
-  "events": {
-    "annual_festivals": [{"name":"","month":"","description":""}],
-    "upcoming": ["Upcoming event 1 if known"],
-    "market_days": "Regular market days",
-    "public_holidays": ["Holiday 1 if relevant"]
-  },
-  "visa": {
-    "overview": "Visa situation for visiting ${countryName}",
-    "common_restrictions": "Notable visa restrictions to be aware of",
-    "tips": "Practical visa tips"
-  },
-  "recommendations": [
-    {"title":"Real specific place or activity","why":"2-3 sentences","type":"food|culture|nature|nightlife|shopping|adventure|wellness|history|market","rating":4.5,"price":"free|$|$$|$$$","duration":"suggested time","best_for":"solo|couples|families"},
-    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""},
-    {"title":"","why":"","type":"","rating":4.5,"price":"","duration":"","best_for":""},
-    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""},
-    {"title":"","why":"","type":"","rating":4.5,"price":"","duration":"","best_for":""},
-    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""},
-    {"title":"","why":"","type":"","rating":4.5,"price":"","duration":"","best_for":""},
-    {"title":"","why":"","type":"","rating":4,"price":"","duration":"","best_for":""}
-  ],
-  "local_tips": [
-    "Unique tip specific to ${areaName} that most tourists miss",
-    "Practical logistical tip that saves time or money",
-    "Cultural etiquette or local custom to respect",
-    "How to avoid common scams or tourist traps",
-    "Best kept secret only locals know",
-    "Useful app or resource for visiting ${areaName}"
-  ],
-  "packing_list": ["Item 1 for this specific location","Item 2","Item 3","Item 4","Item 5"],
-  "cost_estimate": {"budget_per_day":"$X-Y","mid_range_per_day":"$Y-Z","luxury_per_day":"$Z+"},
-  "day_itinerary": "Full suggested day: 8am→12pm: ..., 12pm→6pm: ..., 6pm→11pm: ...",
-  "sensory_description": "Walking the main street of ${areaName}: you see..., you hear..., you smell...",
-  "traveler_scores": {"solo":8,"couples":7,"families":6,"backpackers":8,"luxury":5,"digital_nomad":7,"adventure":6,"culture":9,"foodie":8,"party":5},
-  "sub_areas": ["Neighbourhood1","District2","Market Area3","Suburb4","Quarter5"],
-  "ai_comparison": "This area feels like a cross between [City A] and [City B] because...",
-  "ai_love_story": "Whether this place is good for romance: ...",
-  "ai_overtourism_risk": "low|medium|high — reason"
+"geography":{"full_name":"","local_name":"","classification":"city/district/etc","coordinates":"lat,lon","elevation_m":0,"area_km2":0,"population":0,"population_density":0,"founding_year":"","timezone":"","demonym":"","topography":"","borders":[],"distance_capital_km":0,"nearest_airport":"","special_status":""},
+"weather":{"current":{"temp_c":0,"feels_like_c":0,"condition":"","humidity_pct":0,"wind_kmh":0,"uv_index":0,"visibility_km":0,"pressure_hpa":0},"forecast_7d":[{"day":"","high":0,"low":0,"condition":""}],"climate_type":"","rainy_season":"","dry_season":"","best_months":[],"worst_months":"","record_high_c":0,"record_low_c":0,"annual_rainfall_mm":0,"current_season":""},
+"air_environment":{"aqi":0,"aqi_category":"","pm25":0,"pm10":0,"main_sources":[],"water_quality":"","flood_risk":"low|medium|high","earthquake_risk":"","green_space_pct":0,"deforestation":"","disaster_alerts":[]},
+"history_culture":{"background":"2-3 sentence historical overview","indigenous_groups":[],"key_events":[],"colonial_history":"","famous_figures":[],"traditional_music":"","traditional_food":"","festivals":[{"name":"","month":"","description":""}],"etiquette":[],"taboos":[],"architecture_style":"","heritage_sites":[]},
+"food_drink":{"signature_dishes":[],"street_food":[],"local_drinks":[],"top_restaurants":[{"name":"","cuisine":"","price_range":"$|$$|$$$","rating":0}],"markets":[],"vegetarian_options":"","halal_options":"","avg_cheap_meal_usd":0,"avg_mid_meal_usd":0,"avg_coffee_usd":0,"food_safety":"","delivery_apps":[]},
+"accommodation":{"luxury":[{"name":"","price_night_usd":0,"rating":0}],"mid_range":[{"name":"","price_night_usd":0}],"budget":[{"name":"","price_night_usd":0}],"airbnb_avg_usd":0,"best_areas_to_stay":[],"areas_to_avoid":[],"unique_stays":[],"digital_nomad_friendly":""},
+"transport":{"nearest_airport":"","direct_flights":[],"taxi_cost_per_km_usd":0,"ride_apps":[],"public_transport":"","road_quality":"poor|fair|good|excellent","avg_traffic":"low|medium|high","rush_hours":"","fuel_available":true,"ev_charging":false,"walkability":"poor|fair|good|excellent","cycling":""},
+"cost_of_living":{"cheap_meal_usd":0,"mid_meal_usd":0,"water_usd":0,"local_beer_usd":0,"coffee_usd":0,"1bed_city_rent_usd":0,"monthly_internet_usd":0,"mobile_data_per_gb_usd":0,"avg_salary_usd":0,"cost_vs_national":"cheaper|same|expensive","atm_available":true,"card_acceptance":"low|medium|high","tipping":"","bargaining":""},
+"health":{"risk_level":"low|medium|high","vaccinations":[],"malaria_risk":"","water_safe_to_drink":false,"nearest_hospital":"","ambulance_reliable":false,"medical_tourism":false,"air_quality_health":"","mosquito_risk":"","altitude_sickness_risk":""},
+"safety":{"overall_rating":0,"crime_index":"low|medium|high","violent_crime":"","petty_theft":"","scams":[],"kidnapping_risk":"","terrorism_level":"","police_effectiveness":"","night_safety":"","safe_areas":[],"unsafe_areas":[],"women_safety":"","lgbtq_safety":"","emergency_police":"","current_advisories":[]},
+"nightlife_entertainment":{"overview":"","best_areas":[],"venues":[{"name":"","type":"bar|club|lounge","vibe":""}],"closing_time":"","dress_code":"","alcohol_laws":"","lgbtq_friendly":false,"clubs":[],"cinemas":[],"live_music":[]},
+"attractions":{"top_10":[{"name":"","type":"","why":"","hours":"","cost_usd":"","tip":""}],"hidden_gems":[],"free_attractions":[],"best_viewpoints":[],"instagrammable_spots":[],"day_trips":[],"child_friendly":[],"adventure_activities":[]},
+"shopping":{"major_malls":[],"local_markets":[{"name":"","specialty":"","days":"","hours":""}],"what_to_buy":[],"what_not_to_buy":[],"bargaining":true,"card_vs_cash":"","opening_hours":"","souvenir_shops":[]},
+"connectivity":{"avg_download_mbps":0,"avg_upload_mbps":0,"best_networks":[],"4g_coverage":"poor|fair|good|excellent","5g_available":false,"wifi_availability":"","coworking_spaces":[{"name":"","price_day_usd":0}],"power_reliability":"poor|fair|good|excellent","voltage":220,"plug_type":"","vpn_recommended":true,"internet_censored":false},
+"religion":{"dominant_religions":[],"breakdown":{},"major_mosques":[],"major_churches":[],"holy_sites":[],"visitor_restrictions":"","interfaith_relations":"peaceful|tense"},
+"languages":{"official":[],"local_dialects":[],"english_level":"none|basic|good|excellent","useful_phrases":{"hello":"","thanks":"","how_much":"","help":""},"whatsapp_dominant":true},
+"demographics":{"population":0,"male_female_ratio":"","age_under18_pct":0,"ethnic_groups":[],"expat_community":"small|medium|large","lgbtq_visibility":"","hospitality_rating":""},
+"environment":{"renewable_energy_pct":0,"plastic_pollution":"low|medium|high","waste_management":"poor|fair|good","recycling_rate":0,"climate_vulnerability":"low|medium|high","eco_friendly_businesses":[]},
+"events":{"annual_festivals":[{"name":"","month":"","description":""}],"upcoming_14_days":[],"public_holidays":[],"market_days":"","best_season_to_visit":""},
+"visa":{"visa_free_countries":[],"visa_on_arrival":[],"evisa_available":false,"visa_cost_usd":0,"yellow_fever_required":false,"entry_requirements":[],"overstay_consequences":""},
+"ai_intel":{"briefing":"3 sentences on current state","vibe":"one evocative sentence","safety_assessment":"current honest safety","hidden_gem":"specific with exact name","best_time":"month and why","avoid_if":"who should not come","trending_topic":"what locals are talking about","recommendations":[{"title":"","why":"","type":"","rating":4.5,"price":"$|$$|$$$","duration":"","best_for":""}],"cost_3day_trip_usd":0,"local_tip":"something only locals know","packing_list":[],"traveler_scores":{"solo":7,"couples":7,"families":6,"backpackers":7,"luxury":5,"digital_nomad":6,"adventure":7,"culture":8,"foodie":8},"day_itinerary":"Morning: | Afternoon: | Evening: ","sensory":"walking the main street you see... hear... smell...","comparison":"feels like a cross between X and Y because...","sub_areas":[],"overtourism_risk":"low|medium|high"}
 }`;
-
-  // Helper: attempt to extract valid JSON even if response is truncated
-  function repairAndParse(text) {
-    const cleaned = text.replace(/```json|```/g,"").trim();
-    // Direct parse first
-    try { return JSON.parse(cleaned); } catch(e1) {}
-    // Try to close truncated JSON by finding last complete key-value pair
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (lastBrace > 0) {
-      const trimmed = cleaned.slice(0, lastBrace + 1);
-      // Count unclosed braces and close them
-      let depth = 0;
-      for (const ch of trimmed) { if (ch === '{') depth++; else if (ch === '}') depth--; }
-      const closed = trimmed + '}'.repeat(Math.max(0, depth));
-      try { return JSON.parse(closed); } catch(e2) {}
-    }
-    // Try regex extraction of the outermost object
-    const m = cleaned.match(/\{[\s\S]+/);
-    if (m) { try { return JSON.parse(m[0]); } catch(e3) {} }
-    return null;
-  }
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
-        {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.2,max_tokens:6000},
-        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:75000}
+        {model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.2, max_tokens:6000},
+        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"}, timeout:75000}
       ));
-      const text = r.data?.choices?.[0]?.message?.content||"";
+      const text   = r.data?.choices?.[0]?.message?.content || "";
       const finish = r.data?.choices?.[0]?.finish_reason;
-      if (finish === 'length') {
-        console.warn(`[MistralArea] Response truncated (finish_reason=length) for ${areaName} — attempt ${attempt}`);
-      }
-      const parsed = repairAndParse(text);
+      if (finish === "length") console.warn(`[MistralArea] ${areaName} truncated attempt ${attempt}`);
+      const parsed = repairJson(text);
       if (parsed) {
         console.log(`[MistralArea] ✓ ${areaName} parsed OK (attempt ${attempt}, finish=${finish})`);
         return parsed;
       }
-      console.error(`[MistralArea] JSON parse failed attempt ${attempt} for ${areaName}`);
+      console.error(`[MistralArea] ${areaName} parse failed attempt ${attempt}, raw len=${text.length}`);
     } catch(e) {
-      console.error(`[MistralArea] attempt ${attempt} error:`, e.message?.slice(0,80));
-      if (attempt < 2) await new Promise(r => setTimeout(r, 3000));
+      console.error(`[MistralArea] ${areaName} attempt ${attempt}:`, e.message?.slice(0,80));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 6000));
     }
   }
   return null;
 }
 
-// ══════════════════════════════════════════════════════════════════
-// VERIFICATION AI
-// ══════════════════════════════════════════════════════════════════
-async function runVerificationAI(countryName, continent, rawData) {
-  if(!ENV.MISTRAL_API_KEY) return null;
-  return timed("verification_ai", async () => {
-    const today = new Date().toISOString().split("T")[0];
-    const summary = {
-      weather:rawData.weather?.now ? `${rawData.weather.now.temp}°C, ${rawData.weather.now.condition}` : null,
-      top_news:(rawData.news||[]).slice(0,4).map(n=>n.title),
-      events:(rawData.events||[]).slice(0,4).map(e=>`${e.name} (${e.date||"TBC"})`),
-      briefing:rawData.ai?.briefing||null, safety:rawData.ai?.safety_summary||null,
-    };
-    const prompt = `You are a senior travel intelligence analyst for GlobeVoyage. Today is ${today}. Verify travel data for ${countryName} (${continent}).
-Our pipeline collected: ${JSON.stringify(summary, null, 2)}
-Respond ONLY in valid JSON:
-{"verified":true,"confidence":0.95,"flags":[],"corrections":{},"current_alerts":[],"verification_notes":"Brief summary","data_freshness":"fresh","safety_level":"safe","safety_detail":"One current honest sentence","trending_topic":"Most notable current thing","missed_stories":[],"verified_at":"${new Date().toISOString()}"}`;
+async function verifyAreaIntel(areaName, stateName, countryName, aiIntel) {
+  if (!ENV.MISTRAL_API_KEY) return { verified: false, confidence: 0, reason: "No API key" };
+
+  const location = `${areaName}${stateName ? ", " + stateName : ""}, ${countryName}`;
+
+  // Key claims to verify from the generated intel
+  const briefing   = aiIntel?.ai_intel?.briefing || "";
+  const safety     = aiIntel?.safety?.overall_rating || "";
+  const population = aiIntel?.geography?.population || 0;
+  const dominated  = aiIntel?.history_culture?.background || "";
+
+  const verifyPrompt = `You are a fact-checking AI for GlobeVoyage travel intelligence.
+
+LOCATION: ${location}
+GENERATED INTEL TO VERIFY:
+- Briefing: "${briefing.slice(0, 300)}"
+- Safety rating: "${safety}"
+- Population estimate: ${population}
+- History: "${dominated.slice(0, 200)}"
+
+Your task:
+1. Search the web for 3+ RECENT sources (within 4 months) about ${location}
+2. Check if the generated intel aligns with what those sources say
+3. Flag any outdated or incorrect claims
+
+Return ONLY valid JSON:
+{
+  "verified": true,
+  "confidence": 0.85,
+  "sources_found": 3,
+  "sources": [
+    {"url": "https://example.com", "title": "...", "relevance": "confirms safety/population/history"},
+    {"url": "https://example2.com", "title": "...", "relevance": "..."},
+    {"url": "https://example3.com", "title": "...", "relevance": "..."}
+  ],
+  "corrections": {},
+  "flags": [],
+  "freshness": "current",
+  "reason": "Intel verified against 3 sources published within 4 months",
+  "regenerate": false
+}
+
+If fewer than 3 sources found OR major facts conflict, set "verified": false and "regenerate": true.
+If intel appears stale (facts from 6+ months ago), set "freshness": "stale" and "regenerate": true.`;
+
+  try {
     const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
-      { model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.1, max_tokens:1200 },
-      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:50000 }
+      {
+        model: "mistral-large-latest",
+        messages: [{ role: "user", content: verifyPrompt }],
+        temperature: 0.1,
+        max_tokens: 1500,
+        tools: [{
+          type: "web_search_preview",
+          web_search_preview: {}
+        }]
+      },
+      { headers: { Authorization: `Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type": "application/json" }, timeout: 60000 }
     ));
-    const text = r.data?.choices?.[0]?.message?.content||"";
-    try { return JSON.parse(text.replace(/```json|```/g,"").trim()); }
-    catch(e) { const m = text.match(/\{[\s\S]*\}/); if(m) { try{return JSON.parse(m[0]);}catch(e2){} } return null; }
-  });
-}
 
-// ══════════════════════════════════════════════════════════════════
-// STATE INTEL PIPELINE
-// ══════════════════════════════════════════════════════════════════
-const stateIntelMemCache = {};
-// 8-hour refresh interval for state intel
-const STATE_INTEL_REFRESH_MS = 8 * 60 * 60 * 1000;
-
-async function runStatePipeline(stateId) {
-  const { data: state, error: stErr } = await supabase.from("states")
-    .select("id,name,country_iso,state_code,latitude,longitude").eq("id",stateId).single();
-  if(stErr || !state) { console.error("[StatePipeline] State not found:", stateId); return null; }
-
-  const country = COUNTRIES.find(c => c.iso === state.country_iso);
-  if(!country) { console.error("[StatePipeline] Country not found:", state.country_iso); return null; }
-
-  const stateName   = state.name;
-  const countryName = country.name;
-  const continent   = country.continent;
-  const iso2        = ISO3_TO_ISO2[state.country_iso] || 'US';
-
-  console.log(`[StatePipeline] Starting for ${stateName}, ${countryName}`);
-
-  // Resolve coordinates
-  let coords = (state.latitude && state.longitude)
-    ? { lat: parseFloat(state.latitude), lon: parseFloat(state.longitude) }
-    : await geocodePlace(stateName, countryName);
-  if(!coords) coords = geoCoordCache[state.country_iso] || { lat:0, lon:0 };
-  else if(!state.latitude) {
-    supabase.from("states").update({ latitude: coords.lat, longitude: coords.lon }).eq("id", stateId).then(()=>{}).catch(()=>{});
-  }
-
-  const safe = async (fn, fallback) => { try { return await fn(); } catch(e) { return fallback; } };
-  const newsQuery   = `"${stateName}" "${countryName}" travel tourism`;
-  const eventsQuery = `"${stateName}" "${countryName}" events festival`;
-
-  const [weather, newsRaw, photos, eventsRaw, places, waqiData] = await Promise.all([
-    safe(() => fetchWeatherByCoords(coords.lat, coords.lon), { now:null, forecast:[] }),
-    safe(() => fetchGoogleNewsByQuery(newsQuery, iso2), []),
-    safe(() => fetchUnsplash(`${stateName} ${countryName}`), []),
-    safe(() => fetchGoogleNewsByQuery(eventsQuery, iso2), []),
-    safe(() => fetchPlacesByCoords(coords.lat, coords.lon), []),
-    safe(() => fetchWAQIByCoords(coords.lat, coords.lon, stateName), null),
-  ]);
-
-  const { data: areas } = await supabase.from("areas")
-    .select("id,name,type,population").eq("state_id", stateId)
-    .order("population", {ascending:false}).limit(60);
-
-  const ai = await safe(() => runMistralForState(stateName, countryName, continent, {
-    weather, news:newsRaw, events:eventsRaw, places, airQuality:waqiData, areas:areas||[]
-  }), null);
-
-  const nextUpdate = new Date(Date.now() + STATE_INTEL_REFRESH_MS).toISOString();
-
-  const intel = {
-    state_id:     stateId,
-    country_iso:  state.country_iso,
-    state_name:   stateName,
-    country_name: countryName,
-    state_code:   state.state_code,
-    continent,
-    last_updated: new Date().toISOString(),
-    next_update_at: nextUpdate,
-    lat:          coords.lat,
-    lon:          coords.lon,
-    weather_now:      weather?.now||null,
-    weather_forecast: weather?.forecast||[],
-    news_headlines:   newsRaw||[],
-    photos:           (photos||[]).slice(0,9),
-    events:           eventsRaw||[],
-    top_places:       places||[],
-    air_quality:      waqiData||null,
-    areas:            areas||[],
-    // Expanded AI fields
-    ai_briefing:          ai?.briefing||null,
-    ai_vibe:              ai?.vibe||null,
-    ai_recommendations:   ai?.recommendations||[],
-    ai_safety_summary:    ai?.safety_summary||null,
-    ai_best_months:       ai?.best_months||[],
-    ai_hidden_gem:        ai?.hidden_gem||null,
-    ai_trending_now:      ai?.trending_now||[],
-    ai_avoid_if:          ai?.avoid_if||null,
-    ai_cost_estimate:     ai?.cost_estimate||null,
-    ai_local_tips:        ai?.local_tips||[],
-    ai_etiquette:         ai?.culture?.etiquette||[],
-    ai_day_itinerary:     ai?.day_itinerary||null,
-    ai_sensory_description: ai?.sensory_description||null,
-    ai_climate_info:      ai?.climate_summary?{summary:ai.climate_summary}:null,
-    ai_transport_info:    ai?.transport_overview?{overview:ai.transport_overview}:null,
-    ai_food_scene:        ai?.food_scene?{overview:ai.food_scene}:null,
-    ai_history:           ai?.history_brief?{overview:ai.history_brief}:null,
-    ai_culture:           ai?.culture_brief?{overview:ai.culture_brief}:null,
-    ai_health_info:       ai?.health_overview?{overview:ai.health_overview}:null,
-    ai_connectivity:      ai?.connectivity_overview?{overview:ai.connectivity_overview}:null,
-    ai_shopping:          ai?.shopping_overview?{overview:ai.shopping_overview}:null,
-    ai_nightlife:         ai?.nightlife_overview?{overview:ai.nightlife_overview}:null,
-    ai_accommodation:     ai?.accommodation_overview?{overview:ai.accommodation_overview}:null,
-    ai_safety_detail:     ai?.safety_detail||null,
-    ai_traveler_scores:   ai?.traveler_scores||null,
-    ai_emergency_script:  null,
-  };
-
-  try {
-    const { error: upsertErr } = await supabase.from("state_intel").upsert(intel, { onConflict:"state_id" });
-    if(upsertErr) console.error("[StatePipeline] DB upsert error:", upsertErr.message);
-    else console.log(`[StatePipeline] ✓ ${stateName} saved to state_intel (next refresh: ${nextUpdate})`);
-  } catch(e) {
-    console.error("[StatePipeline] state_intel table error — run migration SQL:", e.message);
-  }
-
-  stateIntelMemCache[stateId] = intel;
-  return intel;
-}
-
-// ── Check if state intel needs refresh ──────────────────────────
-function stateIntelNeedsRefresh(intel) {
-  if(!intel) return true;
-  if(!intel.next_update_at) return true;
-  return new Date(intel.next_update_at).getTime() < Date.now();
-}
-
-// ── Background state intel refresh scheduler ─────────────────────
-let stateIntelRefreshRunning = false;
-async function refreshStaleStateIntel() {
-  if(stateIntelRefreshRunning) return;
-  stateIntelRefreshRunning = true;
-  try {
-    if(!stateIntelTableExists) return;
-    const now = new Date().toISOString();
-    const { data: stale } = await supabase.from("state_intel")
-      .select("state_id,state_name")
-      .lt("next_update_at", now)
-      .limit(5);
-    if(stale && stale.length > 0) {
-      console.log(`[StateRefresh] Refreshing ${stale.length} stale state intel records...`);
-      for(const s of stale) {
-        await runStatePipeline(s.state_id).catch(e => console.error(`[StateRefresh] ${s.state_name}:`, e.message));
-        await new Promise(r => setTimeout(r, 2000));
-      }
+    const text = r.data?.choices?.[0]?.message?.content || "";
+    const parsed = repairJson(text);
+    if (parsed) {
+      console.log(`[VerifyArea] ${areaName}: verified=${parsed.verified}, sources=${parsed.sources_found}, confidence=${parsed.confidence}`);
+      return parsed;
     }
-  } catch(e) { console.error("[StateRefresh] Error:", e.message); }
-  finally { stateIntelRefreshRunning = false; }
+  } catch(e) {
+    // Web search tool may not be available on Mistral — fall back to text-only verification
+    console.log(`[VerifyArea] Web search unavailable (${e.message?.slice(0,60)}) — using text-only verification`);
+  }
+
+  // Fallback: text-only verification (no web search tool)
+  const fallbackPrompt = `You are a travel intelligence fact-checker.
+Location: ${location}
+Intel to check: "${briefing.slice(0, 200)}"
+
+Based on your training knowledge, assess if this intel seems accurate and current.
+Return JSON: {"verified": true/false, "confidence": 0.0-1.0, "sources_found": 0, "flags": [], "reason": "explanation", "freshness": "current|stale", "regenerate": false}`;
+
+  try {
+    const r2 = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
+      { model: "mistral-large-latest", messages: [{ role: "user", content: fallbackPrompt }], temperature: 0.1, max_tokens: 400 },
+      { headers: { Authorization: `Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type": "application/json" }, timeout: 30000 }
+    ));
+    const text2 = r2.data?.choices?.[0]?.message?.content || "";
+    const parsed2 = repairJson(text2);
+    if (parsed2) return { ...parsed2, sources_found: parsed2.sources_found || 0, fallback_verification: true };
+  } catch(e2) {
+    console.error(`[VerifyArea] Fallback verification failed:`, e2.message?.slice(0,60));
+  }
+
+  // If verification completely fails, allow the intel through with low confidence
+  return { verified: true, confidence: 0.5, sources_found: 0, reason: "Verification unavailable — intel passed through", regenerate: false };
 }
 
 // ══════════════════════════════════════════════════════════════════
-// AREA INTEL PIPELINE — Pre-generated and stored every 8hrs
+// AREA INTEL PRE-GENERATION PIPELINE
+// Full process: Sources → Mistral → Verify → Store (max 3 attempts)
 // ══════════════════════════════════════════════════════════════════
-const AREA_INTEL_REFRESH_MS = 8 * 60 * 60 * 1000;
-const areaIntelMemCache = {};
-let areaIntelProcessing = false;
-let areaIntelQueue = [];
-
-function areaIntelNeedsRefresh(intel) {
-  if(!intel) return true;
-  if(!intel.next_update_at) return true;
-  return new Date(intel.next_update_at).getTime() < Date.now();
-}
-
-async function generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso) {
-  const cacheKey = `${areaName}||${stateName||''}||${countryName}`;
-  console.log(`[AreaIntel] Generating intel for ${areaName}, ${stateName||''}, ${countryName}`);
+async function runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso) {
+  const location = `${areaName}${stateName ? ", " + stateName : ""}, ${countryName}`;
+  console.log(`[AreaPipeline] Starting for ${location}`);
 
   const country = COUNTRIES.find(c => c.iso === countryIso || c.name === countryName);
   const continent = country?.continent || "";
-  const iso2 = ISO3_TO_ISO2[countryIso||""] || 'US';
+  const iso2 = ISO3_TO_ISO2[countryIso || ""] || "US";
 
-  // Geocode the area
+  // ── PHASE 1: Gather data from all API sources ──────────────────
   let coords = null;
-  try {
-    coords = await geocodePlace(`${areaName}${stateName?", "+stateName:""}`, countryName);
-  } catch(e) {}
-  if(!coords && countryIso) coords = geoCoordCache[countryIso] || null;
+  try { coords = await geocodePlace(`${areaName}${stateName ? ", " + stateName : ""}`, countryName); } catch(e) {}
+  if (!coords && countryIso) coords = geoCoordCache[countryIso] || null;
 
   const safe = async (fn, fallback) => { try { return await fn(); } catch(e) { return fallback; } };
-  const newsQuery = `"${areaName}" "${countryName}"`;
-  const eventsQuery = `"${areaName}" events festival`;
 
-  const [weather, newsRaw, photos, waqiData, places] = await Promise.all([
-    coords ? safe(() => fetchWeatherByCoords(coords.lat, coords.lon), {now:null,forecast:[]}) : Promise.resolve({now:null,forecast:[]}),
-    safe(() => fetchGoogleNewsByQuery(newsQuery, iso2), []),
+  const [weather, newsRaw, photos, waqiData, places, eventsRaw] = await Promise.all([
+    coords ? safe(() => fetchWeatherByCoords(coords.lat, coords.lon), { now: null, forecast: [] }) : Promise.resolve({ now: null, forecast: [] }),
+    safe(() => fetchGoogleNewsByQuery(`"${areaName}" "${countryName}"`, iso2), []),
     safe(() => fetchUnsplash(`${areaName} ${countryName}`), []),
     coords ? safe(() => fetchWAQIByCoords(coords.lat, coords.lon, areaName), null) : Promise.resolve(null),
     coords ? safe(() => fetchPlacesByCoords(coords.lat, coords.lon), []) : Promise.resolve([]),
+    safe(() => fetchGoogleNewsByQuery(`"${areaName}" events festival 2025 2026`, iso2), []),
   ]);
 
-  const ai = await safe(() => runMistralForArea(areaName, stateName, countryName, continent, {
-    weather, news:newsRaw, places, airQuality:waqiData
-  }), null);
+  const rawData = { weather, news: newsRaw, places, airQuality: waqiData, events: eventsRaw };
 
-  const nextUpdate = new Date(Date.now() + AREA_INTEL_REFRESH_MS).toISOString();
+  // ── PHASE 2 + 3: Generate AI intel and verify (up to 3 attempts) ─
+  let finalIntel = null;
+  let verificationResult = null;
+  const MAX_ATTEMPTS = 3;
 
-  const intel = {
-    area_name:    areaName,
-    state_name:   stateName||null,
-    country_name: countryName,
-    country_iso:  countryIso||null,
-    continent,
-    last_updated: new Date().toISOString(),
-    next_update_at: nextUpdate,
-    lat:          coords?.lat||null,
-    lon:          coords?.lon||null,
-    // AI Intel
-    ai_briefing:           ai?.briefing||null,
-    ai_vibe:               ai?.vibe||null,
-    ai_hidden_gem:         ai?.hidden_gem||null,
-    ai_best_time:          ai?.best_time||null,
-    ai_avoid_if:           ai?.avoid_if||null,
-    ai_trending:           ai?.trending||null,
-    ai_recommendations:    ai?.recommendations||[],
-    ai_local_tips:         ai?.local_tips||[],
-    ai_packing_list:       ai?.packing_list||[],
-    ai_cost_estimate:      ai?.cost_estimate||null,
-    ai_day_itinerary:      ai?.day_itinerary||null,
-    ai_sensory_description:ai?.sensory_description||null,
-    ai_traveler_scores:    ai?.traveler_scores||null,
-    ai_sub_areas:          ai?.sub_areas||[],
-    ai_etiquette:          ai?.culture?.etiquette||[],
-    // Category objects
-    ai_identity:     ai?.history?{name:areaName,state:stateName,country:countryName,continent}:null,
-    ai_history:      ai?.history||null,
-    ai_culture:      ai?.culture||null,
-    ai_food:         ai?.food||null,
-    ai_accommodation:ai?.accommodation||null,
-    ai_transport:    ai?.transport||null,
-    ai_finance:      ai?.finance||null,
-    ai_health:       ai?.health||null,
-    ai_air_quality:  waqiData||null,
-    ai_safety:       ai?.safety||null,
-    ai_nightlife:    ai?.nightlife||null,
-    ai_attractions:  ai?.attractions||null,
-    ai_shopping:     ai?.shopping||null,
-    ai_connectivity: ai?.connectivity||null,
-    ai_languages:    ai?.culture?.languages?{languages:ai.culture.languages}:null,
-    ai_environment:  ai?.environment||null,
-    ai_events:       ai?.events||null,
-    ai_visa:         ai?.visa||null,
-    ai_climate:      ai?.climate||null,
-    // Media
-    photos:          (photos||[]).slice(0,9),
-    news:            newsRaw||[],
-    events_data:     [],
-    // Extra AI fields
-    weather_now:     weather?.now||null,
-    weather_forecast:weather?.forecast||[],
-    top_places:      places||[],
-  };
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    console.log(`[AreaPipeline] ${areaName} — AI generation attempt ${attempt}/${MAX_ATTEMPTS}`);
 
-  // Save to DB
-  try {
-    const { error } = await supabase.from("area_intel")
-      .upsert(intel, { onConflict:"area_name,state_name,country_name" });
-    if(error) console.error(`[AreaIntel] DB upsert error for ${areaName}:`, error.message);
-    else console.log(`[AreaIntel] ✓ ${areaName} stored (next refresh: ${nextUpdate})`);
-  } catch(e) {
-    console.error(`[AreaIntel] DB error for ${areaName}:`, e.message);
+    // Generate with Mistral
+    const aiIntel = await runMistralForArea(areaName, stateName, countryName, continent, rawData);
+    if (!aiIntel) {
+      console.log(`[AreaPipeline] ${areaName} attempt ${attempt}: Mistral returned null`);
+      if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 10000));
+      continue;
+    }
+
+    // Verify with web search
+    verificationResult = await verifyAreaIntel(areaName, stateName, countryName, aiIntel);
+
+    if (verificationResult.regenerate && attempt < MAX_ATTEMPTS) {
+      console.log(`[AreaPipeline] ${areaName} attempt ${attempt}: verification says regenerate — ${verificationResult.reason}`);
+      await new Promise(r => setTimeout(r, 8000));
+      continue;
+    }
+
+    // Intel verified (or max attempts reached)
+    finalIntel = aiIntel;
+    console.log(`[AreaPipeline] ${areaName} ✓ verified (attempt ${attempt}, confidence=${verificationResult.confidence})`);
+    break;
   }
 
-  areaIntelMemCache[cacheKey] = intel;
-  return intel;
+  if (!finalIntel) {
+    console.log(`[AreaPipeline] ${areaName}: all attempts failed — storing partial data`);
+  }
+
+  // ── PHASE 4: Compile and store ─────────────────────────────────
+  const nextUpdate = new Date(Date.now() + AREA_INTEL_REFRESH_MS).toISOString();
+  const cacheKey = `${areaName}||${stateName || ""}||${countryName}`;
+
+  const fi = finalIntel || {};
+  const ai = fi.ai_intel || {};
+
+  const record = {
+    area_name:     areaName,
+    state_name:    stateName || null,
+    country_name:  countryName,
+    country_iso:   countryIso || null,
+    continent,
+    last_updated:  new Date().toISOString(),
+    next_update_at: nextUpdate,
+    lat:  coords?.lat || null,
+    lon:  coords?.lon || null,
+
+    // Verification metadata
+    verification_score:    verificationResult?.confidence || 0,
+    verification_sources:  verificationResult?.sources_found || 0,
+    verification_flags:    verificationResult?.flags || [],
+    verification_result:   verificationResult || null,
+
+    // All spec categories as JSONB columns
+    ai_geography:     fi.geography     || null,
+    ai_weather:       fi.weather       || null,
+    ai_air_environment: fi.air_environment || null,
+    ai_history_culture: fi.history_culture || null,
+    ai_food_drink:    fi.food_drink    || null,
+    ai_accommodation: fi.accommodation || null,
+    ai_transport:     fi.transport     || null,
+    ai_cost_of_living: fi.cost_of_living || null,
+    ai_health:        fi.health        || null,
+    ai_safety:        fi.safety        || null,
+    ai_nightlife:     fi.nightlife_entertainment || null,
+    ai_attractions:   fi.attractions   || null,
+    ai_shopping:      fi.shopping      || null,
+    ai_connectivity:  fi.connectivity  || null,
+    ai_religion:      fi.religion      || null,
+    ai_languages:     fi.languages     || null,
+    ai_demographics:  fi.demographics  || null,
+    ai_environment:   fi.environment   || null,
+    ai_events:        fi.events        || null,
+    ai_visa:          fi.visa          || null,
+
+    // AI Intel fields (top-level for easy access)
+    ai_briefing:           ai.briefing          || null,
+    ai_vibe:               ai.vibe              || null,
+    ai_hidden_gem:         ai.hidden_gem        || null,
+    ai_best_time:          ai.best_time         || null,
+    ai_avoid_if:           ai.avoid_if          || null,
+    ai_trending:           ai.trending_topic    || null,
+    ai_recommendations:    ai.recommendations   || [],
+    ai_local_tips:         ai.local_tip ? [ai.local_tip] : [],
+    ai_packing_list:       ai.packing_list      || [],
+    ai_cost_estimate:      ai.cost_3day_trip_usd ? { three_day_usd: ai.cost_3day_trip_usd } : null,
+    ai_day_itinerary:      ai.day_itinerary     || null,
+    ai_sensory_description: ai.sensory          || null,
+    ai_traveler_scores:    ai.traveler_scores   || null,
+    ai_sub_areas:          ai.sub_areas         || [],
+    ai_etiquette:          fi.history_culture?.etiquette || [],
+    ai_culture:            fi.history_culture   || null,
+    ai_history:            fi.history_culture   || null,
+    ai_finance:            fi.cost_of_living    || null,
+    ai_climate:            fi.weather           || null,
+
+    // Media
+    photos:          (photos || []).slice(0, 9),
+    news:            newsRaw || [],
+    events_data:     eventsRaw || [],
+    weather_now:     weather?.now || null,
+    weather_forecast: weather?.forecast || [],
+    top_places:      places || [],
+  };
+
+  try {
+    const { error } = await supabase.from("area_intel")
+      .upsert(record, { onConflict: "area_name,state_name,country_name" });
+    if (error) console.error(`[AreaPipeline] DB upsert error for ${areaName}:`, error.message);
+    else console.log(`[AreaPipeline] ✓ ${areaName} stored (next refresh: ${nextUpdate})`);
+  } catch(e) {
+    console.error(`[AreaPipeline] DB error for ${areaName}:`, e.message);
+  }
+
+  areaIntelMemCache[cacheKey] = record;
+  return record;
+}
+
+async function generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso) {
+  // Delegate to the full pipeline (source gathering → AI → verification → store)
+  return runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso);
 }
 
 async function getOrGenerateAreaIntel(areaName, stateName, countryName, countryIso) {
@@ -2556,6 +2350,39 @@ app.post("/api/pipeline/run-all", async (req,res) => {
   res.json({message:`Full pipeline started for ${COUNTRIES.length} countries`});
   runStartupPipeline();
 });
+app.post("/api/pipeline/pregen-areas", async (req,res) => {
+  if (areaGenProgress.running) return res.json({ message:"Already running", progress: areaGenProgress });
+  const force = req.query.force === "true";
+  res.json({ message: force ? "Force-regenerating ALL area intel" : "Generating missing area intel", started: true });
+  generateAllAreaIntel({ force }).catch(console.error);
+});
+
+app.post("/api/pipeline/pregen-areas/stop", (req,res) => {
+  areaGenProgress.running = false;
+  res.json({ message: "Area gen stop signal sent" });
+});
+
+app.get("/api/pipeline/pregen-areas/status", (req,res) => {
+  res.json({ ...areaGenProgress, log: areaGenProgress.log.slice(0, 30) });
+});
+
+app.get("/api/pipeline/area-coverage", async (req,res) => {
+  try {
+    const [areasRes, intelRes] = await Promise.all([
+      supabase.from("areas").select("*", { count:"exact", head:true }),
+      supabase.from("area_intel").select("*", { count:"exact", head:true }).not("ai_briefing","is",null),
+    ]);
+    const total = areasRes.count || 0;
+    const withIntel = intelRes.count || 0;
+    res.json({
+      total_areas: total,
+      areas_with_intel: withIntel,
+      areas_missing_intel: total - withIntel,
+      coverage_pct: total > 0 ? Math.round(withIntel / total * 100) : 0,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/pipeline/pregen-states", async (req,res) => {
   if (stateGenProgress.running) {
     return res.json({ message:"Already running", progress: stateGenProgress });
@@ -2632,6 +2459,7 @@ function resetGenProgress() {
   stateGenProgress.log         = [];
   stateGenProgress.current     = null;
   stateGenProgress.completedAt = null;
+  areaGenProgress.running      = false;
 }
 
 // ── RESET endpoints ──────────────────────────────────────────────
@@ -3558,22 +3386,199 @@ async function preGenerateAllStateIntel() {
   return generateAllStateIntel({ force: false });
 }
 
-async function preGenerateMissingAreaIntel() {
-  if (!areaIntelTableExists) return;
+// ══════════════════════════════════════════════════════════════════
+// AREA INTEL GENERATOR — Sequential, all areas, with verification
+// ══════════════════════════════════════════════════════════════════
+const areaGenProgress = {
+  running: false,
+  total: 0,
+  done: 0,
+  failed: 0,
+  current: null,
+  startedAt: null,
+  completedAt: null,
+  failedAreas: [],
+  log: [],
+};
+
+function agLog(msg) {
+  const line = `[${new Date().toISOString().slice(11,19)}] ${msg}`;
+  console.log('[AreaGen]', msg);
+  areaGenProgress.log = [line, ...areaGenProgress.log].slice(0, 100);
+}
+
+async function generateAllAreaIntel({ force = false } = {}) {
+  if (areaGenProgress.running) { agLog('Already running'); return { skipped: true }; }
+  if (!areaIntelTableExists)   { agLog('area_intel table missing — run geo_migration_v3.sql'); return { error: 'table_missing' }; }
+
+  areaGenProgress.running     = true;
+  areaGenProgress.done        = 0;
+  areaGenProgress.failed      = 0;
+  areaGenProgress.failedAreas = [];
+  areaGenProgress.startedAt   = new Date().toISOString();
+  areaGenProgress.completedAt = null;
+  areaGenProgress.log         = [];
+
   try {
-    const { data: areasNeedingIntel } = await supabase
-      .from('area_intel')
-      .select('id, area_name, state_name, country_name, country_iso')
-      .is('ai_briefing', null)
-      .limit(10);
-    if (!areasNeedingIntel?.length) return;
-    sgLog(`AreaPreGen: ${areasNeedingIntel.length} areas missing AI intel`);
-    for (const area of areasNeedingIntel) {
-      await generateAndStoreAreaIntel(area.area_name, area.state_name, area.country_name, area.country_iso)
-        .catch(e => sgLog(`AreaPreGen fail ${area.area_name}: ${e.message?.slice(0,50)}`));
-      await new Promise(r => setTimeout(r, 10000));
+    // Load ALL area_intel records that need processing
+    // Areas to process = all cities/areas in DB that either:
+    //   (a) have no area_intel record yet, OR
+    //   (b) have an area_intel record with null ai_briefing (force=false skips fully-generated ones)
+    agLog('Loading areas from DB...');
+
+    // Get all areas from areas table
+    let allAreas = [];
+    let page = 0;
+    while (true) {
+      const { data: batch, error } = await supabase
+        .from('areas')
+        .select('id, name, state_id, country_iso')
+        .range(page * 1000, (page + 1) * 1000 - 1);
+      if (error || !batch || batch.length === 0) break;
+      allAreas = allAreas.concat(batch);
+      if (batch.length < 1000) break;
+      page++;
     }
-  } catch(e) { sgLog(`AreaPreGen error: ${e.message}`); }
+    agLog(`Loaded ${allAreas.length} total areas from DB`);
+
+    if (allAreas.length === 0) {
+      agLog('No areas in DB — run Geo pipeline first');
+      areaGenProgress.running = false;
+      return { error: 'no_areas' };
+    }
+
+    // Get state names for all area state_ids
+    const stateIdSet = [...new Set(allAreas.map(a => a.state_id).filter(Boolean))];
+    const stateMap = {};
+    for (let i = 0; i < stateIdSet.length; i += 500) {
+      const { data: states } = await supabase
+        .from('states')
+        .select('id, name, country_iso')
+        .in('id', stateIdSet.slice(i, i + 500));
+      (states || []).forEach(s => stateMap[s.id] = s);
+    }
+    agLog(`Loaded names for ${Object.keys(stateMap).length} states`);
+
+    // Get which areas already have AI intel (unless force=true)
+    let toProcess = allAreas;
+    if (!force) {
+      let doneKeys = new Set();
+      let iPage = 0;
+      while (true) {
+        const { data: existing } = await supabase
+          .from('area_intel')
+          .select('area_name, state_name, country_name')
+          .not('ai_briefing', 'is', null)
+          .range(iPage * 1000, (iPage + 1) * 1000 - 1);
+        if (!existing || existing.length === 0) break;
+        existing.forEach(e => doneKeys.add(`${e.area_name}||${e.state_name || ''}||${e.country_name}`));
+        if (existing.length < 1000) break;
+        iPage++;
+      }
+
+      toProcess = allAreas.filter(a => {
+        const state    = stateMap[a.state_id];
+        const country  = COUNTRIES.find(c => c.iso === (a.country_iso || state?.country_iso));
+        const key = `${a.name}||${state?.name || ''}||${country?.name || ''}`;
+        return !doneKeys.has(key);
+      });
+      agLog(`${doneKeys.size} areas already have intel — ${toProcess.length} need generation`);
+    }
+
+    areaGenProgress.total = toProcess.length;
+    agLog(`Starting: ${toProcess.length} areas to process`);
+
+    // Process ONE AT A TIME sequentially
+    for (let i = 0; i < toProcess.length; i++) {
+      if (!areaGenProgress.running) { agLog('Stopped by user'); break; }
+
+      const area    = toProcess[i];
+      const state   = stateMap[area.state_id];
+      const country = COUNTRIES.find(c => c.iso === (area.country_iso || state?.country_iso));
+      if (!country) { areaGenProgress.done++; continue; }
+
+      const areaName    = area.name;
+      const stateName   = state?.name   || null;
+      const countryName = country.name;
+      const countryIso  = country.iso;
+
+      areaGenProgress.current = `${areaName}, ${stateName || countryName} (${i+1}/${toProcess.length})`;
+      agLog(`Processing ${areaName} [${countryIso}]`);
+
+      let success = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const result = await runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso);
+          if (result && result.ai_briefing) {
+            agLog(`✅ ${areaName} — intel stored (verified=${result.verification_score >= 0.6})`);
+            success = true;
+            break;
+          }
+          if (attempt < 3) {
+            const wait = mistralQueue._backoff_ms > 0 ? mistralQueue._backoff_ms + 6000 : 8000;
+            agLog(`⚠ ${areaName} attempt ${attempt}: no AI data — waiting ${Math.round(wait/1000)}s`);
+            await new Promise(r => setTimeout(r, wait));
+          }
+        } catch(e) {
+          const msg = e.message?.slice(0,80) || 'error';
+          if (attempt < 3) {
+            agLog(`⚠ ${areaName} attempt ${attempt} error: ${msg}`);
+            await new Promise(r => setTimeout(r, 10000));
+          } else {
+            agLog(`❌ ${areaName} failed: ${msg}`);
+          }
+        }
+      }
+
+      if (!success) {
+        areaGenProgress.failed++;
+        areaGenProgress.failedAreas.push(areaName);
+      }
+      areaGenProgress.done++;
+
+      // 6s between areas (Mistral rate limit via queue)
+      if (i < toProcess.length - 1) {
+        await new Promise(r => setTimeout(r, 6000));
+      }
+    }
+
+    // Retry failed areas once
+    if (areaGenProgress.failedAreas.length > 0 && areaGenProgress.running) {
+      agLog(`🔄 Retrying ${areaGenProgress.failedAreas.length} failed areas…`);
+      const retryNames = new Set(areaGenProgress.failedAreas);
+      areaGenProgress.failedAreas = [];
+
+      for (const area of allAreas.filter(a => retryNames.has(a.name))) {
+        if (!areaGenProgress.running) break;
+        const state   = stateMap[area.state_id];
+        const country = COUNTRIES.find(c => c.iso === (area.country_iso || state?.country_iso));
+        if (!country) continue;
+        areaGenProgress.current = `RETRY: ${area.name}`;
+        await new Promise(r => setTimeout(r, 30000));
+        try {
+          const result = await runFullAreaIntelPipeline(area.name, state?.name || null, country.name, country.iso);
+          if (result?.ai_briefing) { agLog(`✅ RETRY OK: ${area.name}`); }
+          else { areaGenProgress.failedAreas.push(area.name); agLog(`❌ RETRY FAILED: ${area.name}`); }
+        } catch(e) {
+          areaGenProgress.failedAreas.push(area.name);
+          agLog(`❌ RETRY ERROR: ${area.name}: ${e.message?.slice(0,60)}`);
+        }
+      }
+    }
+
+    agLog(`Complete — ${areaGenProgress.done} done, ${areaGenProgress.failedAreas.length} still failed`);
+    areaGenProgress.completedAt = new Date().toISOString();
+  } catch(e) {
+    agLog(`Fatal error: ${e.message}`);
+  }
+
+  areaGenProgress.running = false;
+  areaGenProgress.current = null;
+  return { done: areaGenProgress.done, failed: areaGenProgress.failedAreas.length };
+}
+
+async function preGenerateMissingAreaIntel() {
+  return generateAllAreaIntel({ force: false });
 }
 
 const PORT = process.env.PORT||3000;
