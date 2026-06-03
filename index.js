@@ -3220,6 +3220,156 @@ const stateGenProgress = {
   log: [],
 };
 
+
+// ══════════════════════════════════════════════════════════════════
+// STATE INTEL PIPELINE — runs for a single state, stores result
+// ══════════════════════════════════════════════════════════════════
+const stateIntelMemCache = {};
+const STATE_INTEL_REFRESH_MS = 8 * 60 * 60 * 1000; // 8 hours
+
+function stateIntelNeedsRefresh(intel) {
+  if (!intel) return true;
+  if (!intel.next_update_at) return true;
+  return new Date(intel.next_update_at).getTime() < Date.now();
+}
+
+async function runStatePipeline(stateId) {
+  const { data: state, error: stErr } = await supabase
+    .from("states")
+    .select("id,name,country_iso,state_code,latitude,longitude")
+    .eq("id", stateId)
+    .single();
+  if (stErr || !state) { console.error("[StatePipeline] State not found:", stateId); return null; }
+
+  const country = COUNTRIES.find(c => c.iso === state.country_iso);
+  if (!country) { console.error("[StatePipeline] Country not found:", state.country_iso); return null; }
+
+  const stateName   = state.name;
+  const countryName = country.name;
+  const continent   = country.continent;
+  const iso2        = ISO3_TO_ISO2[state.country_iso] || "US";
+
+  console.log(`[StatePipeline] Starting for ${stateName}, ${countryName}`);
+
+  // Resolve coordinates
+  let coords = (state.latitude && state.longitude)
+    ? { lat: parseFloat(state.latitude), lon: parseFloat(state.longitude) }
+    : await geocodePlace(stateName, countryName);
+  if (!coords) coords = geoCoordCache[state.country_iso] || { lat: 0, lon: 0 };
+  else if (!state.latitude) {
+    supabase.from("states").update({ latitude: coords.lat, longitude: coords.lon })
+      .eq("id", stateId).then(() => {}).catch(() => {});
+  }
+
+  const safe = async (fn, fallback) => { try { return await fn(); } catch(e) { return fallback; } };
+
+  const [weather, newsRaw, photos, eventsRaw, places, waqiData] = await Promise.all([
+    safe(() => fetchWeatherByCoords(coords.lat, coords.lon), { now: null, forecast: [] }),
+    safe(() => fetchGoogleNewsByQuery(`"${stateName}" "${countryName}" travel tourism`, iso2), []),
+    safe(() => fetchUnsplash(`${stateName} ${countryName}`), []),
+    safe(() => fetchGoogleNewsByQuery(`"${stateName}" "${countryName}" events festival`, iso2), []),
+    safe(() => fetchPlacesByCoords(coords.lat, coords.lon), []),
+    safe(() => fetchWAQIByCoords(coords.lat, coords.lon, stateName), null),
+  ]);
+
+  const { data: areas } = await supabase
+    .from("areas")
+    .select("id,name,type,population")
+    .eq("state_id", stateId)
+    .order("population", { ascending: false })
+    .limit(60);
+
+  const ai = await safe(() => runMistralForState(stateName, countryName, continent, {
+    weather, news: newsRaw, events: eventsRaw, places, airQuality: waqiData, areas: areas || []
+  }), null);
+
+  const nextUpdate = new Date(Date.now() + STATE_INTEL_REFRESH_MS).toISOString();
+
+  const intel = {
+    state_id:         stateId,
+    country_iso:      state.country_iso,
+    state_name:       stateName,
+    country_name:     countryName,
+    state_code:       state.state_code,
+    continent,
+    last_updated:     new Date().toISOString(),
+    next_update_at:   nextUpdate,
+    lat:              coords.lat,
+    lon:              coords.lon,
+    weather_now:      weather?.now    || null,
+    weather_forecast: weather?.forecast || [],
+    news_headlines:   newsRaw         || [],
+    photos:           (photos || []).slice(0, 9),
+    events:           eventsRaw       || [],
+    top_places:       places          || [],
+    air_quality:      waqiData        || null,
+    areas:            areas           || [],
+    // AI fields
+    ai_briefing:           ai?.briefing          || null,
+    ai_vibe:               ai?.vibe              || null,
+    ai_recommendations:    ai?.recommendations   || [],
+    ai_safety_summary:     ai?.safety_summary    || null,
+    ai_best_months:        ai?.best_months       || [],
+    ai_hidden_gem:         ai?.hidden_gem        || null,
+    ai_trending_now:       ai?.trending_now      || [],
+    ai_avoid_if:           ai?.avoid_if          || null,
+    ai_cost_estimate:      ai?.cost_estimate     || null,
+    ai_local_tips:         ai?.local_tips        || [],
+    ai_day_itinerary:      ai?.day_itinerary     || null,
+    ai_sensory_description: ai?.sensory_description || null,
+    ai_climate_info:       ai?.climate_summary   ? { summary: ai.climate_summary }  : null,
+    ai_transport_info:     ai?.transport_overview ? { overview: ai.transport_overview } : null,
+    ai_food_scene:         ai?.food_scene        ? { overview: ai.food_scene }       : null,
+    ai_history:            ai?.history_brief     ? { overview: ai.history_brief }    : null,
+    ai_culture:            ai?.culture_brief     ? { overview: ai.culture_brief }    : null,
+    ai_health_info:        ai?.health_overview   ? { overview: ai.health_overview }  : null,
+    ai_connectivity:       ai?.connectivity_overview ? { overview: ai.connectivity_overview } : null,
+    ai_shopping:           ai?.shopping_overview  ? { overview: ai.shopping_overview } : null,
+    ai_nightlife:          ai?.nightlife_overview ? { overview: ai.nightlife_overview } : null,
+    ai_accommodation:      ai?.accommodation_overview ? { overview: ai.accommodation_overview } : null,
+    ai_safety_detail:      ai?.safety_detail     || null,
+    ai_traveler_scores:    ai?.traveler_scores   || null,
+    ai_etiquette:          null,
+    ai_emergency_script:   null,
+  };
+
+  try {
+    const { error: upsertErr } = await supabase
+      .from("state_intel")
+      .upsert(intel, { onConflict: "state_id" });
+    if (upsertErr) console.error("[StatePipeline] DB upsert error:", upsertErr.message);
+    else console.log(`[StatePipeline] ✓ ${stateName} saved to state_intel (next refresh: ${nextUpdate})`);
+  } catch(e) {
+    console.error("[StatePipeline] state_intel error:", e.message);
+  }
+
+  stateIntelMemCache[stateId] = intel;
+  return intel;
+}
+
+// ── Background stale refresh ─────────────────────────────────────
+let stateIntelRefreshRunning = false;
+async function refreshStaleStateIntel() {
+  if (stateIntelRefreshRunning) return;
+  stateIntelRefreshRunning = true;
+  try {
+    if (!stateIntelTableExists) return;
+    const now = new Date().toISOString();
+    const { data: stale } = await supabase.from("state_intel")
+      .select("state_id, state_name")
+      .lt("next_update_at", now)
+      .limit(5);
+    if (stale && stale.length > 0) {
+      console.log(`[StateRefresh] Refreshing ${stale.length} stale state intel records...`);
+      for (const s of stale) {
+        await runStatePipeline(s.state_id).catch(e => console.error(`[StateRefresh] ${s.state_name}:`, e.message));
+        await new Promise(r => setTimeout(r, 6000));
+      }
+    }
+  } catch(e) { console.error("[StateRefresh] Error:", e.message); }
+  finally { stateIntelRefreshRunning = false; }
+}
+
 function sgLog(msg) {
   const line = `[${new Date().toISOString().slice(11,19)}] ${msg}`;
   console.log('[StateGen]', msg);
