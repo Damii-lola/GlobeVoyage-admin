@@ -32,6 +32,34 @@ const ENV = {
   GOOGLE_MAPS_KEY:      process.env.GOOGLE_MAPS_KEY,
 };
 
+// ══════════════════════════════════════════════════════════════════
+// MISTRAL KEY VALIDITY TRACKER
+// Once a 401 is received the key is definitely invalid/expired.
+// We skip ALL further Mistral calls in this session so we don't
+// spam thousands of failed attempts and log noise.
+// ══════════════════════════════════════════════════════════════════
+let MISTRAL_KEY_VALID = !!ENV.MISTRAL_API_KEY;
+let MISTRAL_401_AT    = null;
+let MISTRAL_401_COUNT = 0;
+
+function markMistral401() {
+  MISTRAL_401_COUNT++;
+  if (!MISTRAL_401_AT) {
+    MISTRAL_401_AT = new Date().toISOString();
+    console.error("╔══════════════════════════════════════════════════════════╗");
+    console.error("║  MISTRAL 401 — API KEY IS INVALID OR MISSING             ║");
+    console.error("║  All AI intel generation is PAUSED until key is fixed.   ║");
+    console.error("║  Non-AI data (weather/news/places) still saves normally. ║");
+    console.error("║  FIX: Render dashboard → Environment → MISTRAL_API_KEY  ║");
+    console.error("╚══════════════════════════════════════════════════════════╝");
+  }
+  MISTRAL_KEY_VALID = false;
+}
+
+function mistralAvailable() {
+  return MISTRAL_KEY_VALID && !!ENV.MISTRAL_API_KEY;
+}
+
 let THREE_JS = "", EARCUT_JS = "";
 try { THREE_JS  = fs.readFileSync(path.join(__dirname,"node_modules/three/build/three.min.js"),"utf8"); } catch(e){}
 try { EARCUT_JS = fs.readFileSync(path.join(__dirname,"node_modules/earcut/src/earcut.js"),"utf8"); } catch(e){}
@@ -57,77 +85,10 @@ async function ensureScripts() {
   if(EARCUT_JS) console.log("✓ earcut.js ready");
 }
 
-// ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
 // HARDCODED GEO DATA — 192 countries, 1085 states, 23326 areas
-// Parsed from GlobeVoyage geo document
-// ══════════════════════════════════════════════════════════════
-const HARDCODED_GEO = {"Afghanistan":{"Badakhshan":["Faizabad","Baharak","Ishkashim","Wakhan","Jurm","Kishim","Raghistan","Shighnan","Darwaz","Shahri Buzurg"],"Badghis":["Qala i Naw","Ab Kamari","Jawand","Muqur","Bala Murghab","Qadis","Ghormach"],"Baghlan":["Puli Khumri","Baghlani Jadid","Andarab","Khost wa Fereng","Dushi","Dahana i Ghori","Banu","Tala wa Barfak","Guzargahi Nur"],"Balkh":["Mazar-i-Sharif","Balkh (Ancient City)","Dehdadi","Dawlatabad","Khulm","Sholgara","Chimtal","Charbolak","Hairatan","Nahri Shahi"],"Bamyan":["Bamyan City","Yakawlang","Panjab","Kahmard","Saighan","Shibar","Waras"],"Daykundi":["Nili","Khadir","Shahristan","Miramor","Sangtakht","Ashtarlay","Kiti","Patoo"],"Farah":["Farah City","Bala Buluk","Bakwa","Khaki Safed","Pusht Rod","Anardara","Qala-i-Kah","Shib Koh","Gulistan","Pur Chaman"],"Faryab":["Maymana","Andkhoy","Pashtun Kot","Shirin Tagab","Almar","Qaysar","Gurziwan","Bilchiragh","Khwaja Sabz Posh","Kohistan","Qurghan","Khan Chahar Bagh"],"Ghazni":["Ghazni City","Jaghori","Andar","Qarabagh","Muqur","Malistan","Nawur","Gelan","Giro","Ab Band","Deh Yak","Jaghatu","Rashidan","Khwaja Umari"],"Ghor":["Chaghcharan (Firozkoh)","Shahrak","Lal Wa Sarjangal","Pasaband","Saghar","Tulak","Dawlat Yar","Du Layna","Charsada"],"Helmand":["Lashkar Gah","Sangin","Marjah","Nad Ali","Garmser","Kajaki","Nawzad","Musa Qala","Washir","Nawa-I-Barakzayi","Khanashin (Reg)"],"Heart":["Herat City","Shindand","Guzara","Karukh","Kushk (Rabat-i-Sangi)","Kushki Kuhna","Gulran","Zinda Jan","Enjil","Adraskan","Ghoryan","Kohsan","Obe","Pashtun Zarghun","Chishti Sharif"],"Jowzjan":["Sheberghan","Aqcha","Khwaja Du Koh","Qarqin","Khamyab","Fayzabad","Mardyan","Mingajik","Darzab","Qush Tepa"],"Kabul":["Kabul City (including Wazir Akbar Khan, Shahr-e Naw, Dasht-e Barchi, Macrorayan, Kart-e Sakhi)","Paghman","Bagrami","Deh Sabz","Shakardara","Mir Bacha Kot","Kalakan","Guldara","Qarabagh","Istalif","Khaki Jabbar","Surobi","Mussahi","Chahar Asyab"],"Kandahar":["Kandahar City (including Mirwais Mina, Dand, Shahrak-e-Ghalo)","Arghandab","Panjwai","Spin Boldak","Zhari","Shah Wali Kot","Khakrez","Maiwand","Ghorak","Maruf","Arghistan","Reg (Registan)","Shorabak","Miyanishin","Naish"],"Kapisa":["Mahmud-i-Raqi","Nijrab","Tagab","Alasay","Hesa Awal Kohistan","Hesa Duwum Kohistan","Koh Band"],"Khost":["Khost City (Matun)","Sabari (Yaqubi)","Bak","Jaji Maidan","Tere Zayi (Alizayi)","Tanai","Gurbuz","Mando Zayi (Ismail Khel)","Musakhel","Qalandar","Nadir Shah Kot","Spera","Shamal"],"Kunar":["Asadabad","Bar Kunar","Asmar","Dangam","Marawara","Sirkanay","Shigal","Wata Pur","Narang","Chowkay","Nurgal","Khas Kunar","Pech (Manogai)","Chapa Dara"],"Kunduz":["Kunduz City","Imam Sahib","Dasht-i-Archi","Chahar Dara","Aliabad","Khan Abad","Qalay-i-Zal"],"Laghman":["Mihtarlam","Qarghayi","Alingar","Alishing","Dawlat Shah","Badpakh"],"Logar":["Puli Alam","Baraki Barak","Charkh","Khoshi","Mohammad Agha","Kharwar","Azra"],"Nangarhar":["Jalalabad City","Surkh Rod","Behsud","Kama","Goshta","Lal Pur","Muhmand Dara","Shinwar","Bati Kot","Rodat","Chaparhar","Khogyani","Sherzad","Pachir Aw Agam","Deh Bala (Haska Meyna)","Achin","Nazyan","Kot","Dur Baba","Hesarak"],"Nimruz":["Zaranj","Chakhansur","Kang","Khash Rod","Dilaram","Char Burjak"],"Nuristan":["Parun","Wama","Waygal","Kamdesh","Barg-i-Matal","Du Ab","Mandol","Nurgaram"],"Paktia":["Gardez","Zurmat","Jaji (Ali Khel)","Chamkani","Dand Aw Patan","Tsamkani","Sayed Karam","Mirzaka","Ahmad Khel","Lazha Mangal","Shwak","Wuza Zadran (Jadran)","Ahmadabad"],"Paktika":["Sharana","Urgun","Zarghun Shahr","Jani Khel","Yahya Khel","Yusuf Khel","Omna","Bermal","Gayan","Sar Hawza","Nika","Dila","Khushamand","Katawaz (Waza Khwa)","Turwo","Wor Mamay","Gomal","Sarobi"],"Panjshir":["Bazarak","Rokha","Dara","Abshar","Hesa Awal (Khenj)","Hesa Duwum (Paryan)","Shotul"],"Parwan":["Charikar","Bagram","Jabal Saraj","Salang","Shinwari","Ghorband (Siahgird)","Shekh Ali","Surkh Parsa","Kohi Safi"],"Samangan":["Aybak","Khuram Wa Sarbagh","Hazrat-i-Sultan","Ruyi Du Ab","Dara-i-Sufi Bala","Dara-i-Sufi Payin","Feroz Nakhchir"],"Sar-e Pol":["Sar-e Pol City","Sangcharak","Balkhab","Sozma Qala","Sayyad","Kohistanat","Gosfandi"],"Takhar":["Taloqan","Khanabad","Kalafgan","Khwaja Ghar","Yangi Qala","Chah Ab","Farkhar","Warsaj","Bangi","Baharak","Khwaja Bahauddin","Dashti Qala","Darqad","Rustaq","Namak Ab","Hazar Sumuch"],"Uruzgan":["Tarinkot","Chora","Deh Rahwod","Shahidi Hassas (Cafer)","Gizab","Khas Uruzgan"],"Wardak":["Maydan Shahr","Chaki Wardak","Day Mirdad","Jalrez","Jaghatu","Saydabad","Nirkh","Markazi Bihsud","Hesa-i-Awali Bihsud"],"Zabul":["Qalat","Shah Joy","Shinkay","Tarnak wa Jaldak","Arghandab","Daychopan","Mizana","Shamulzayi","Naw Bahar","Kakar (Khak-e-Afghan)"]},"Albania":{"Berat":["Berat City","Kuçovã","Poliçan","Skrapar","Ura Vajgurore (Dimal)"],"Diber":["Peshkopi","Bulqizë","Burrel (Mat)","Klos"],"Durres":["Durrës City","Shijak","Krujë","Fushë-Krujë","Sukth"],"Elbasan":["Elbasan City","Cërrik","Gramsh","Librazhd","Peqin","Prrenjas","Belsh"],"Fier":["Fier City","Lushnjë","Patos","Divjakë","Roskovec","Mallakastër (Ballsh)"],"Gjirokaster":["Gjirokastër City","Tepelenë","Përmet","Këlcyrë","Libohovë","Memaliaj","Dropull"],"Korce":["Korçë City","Pogradec","Maliq","Devoll (Bilisht)","Kolonjë (Ersekë)","Pustec"],"Kukes":["Kukës City","Has (Krumë)","Tropojë (Bajram Curri)"],"Lezhe":["Lezhë City","Mirditë (Rrëshen)","Kurbin (Laç)"],"Shkoder":["Shkodër City","Malësi e Madhe (Koplik)","Pukë","Vau i Dejës","Fushë-Arrëz"],"Tirana":["Tirana City (including Blloku, Kombinat, Laprakë, Ali Demi, Kinostudio)","Kamëz","Vorë","Kavajë","Rrogozhinë"],"Vlore":["Vlorë City","Sarandë","Delvinë","Himarë","Selenicë","Konispol"]},"Algeria":{"Adrar":["Adrar City","Timimoun","Reggane","Aoulef","Tsabit","Zaouiet Kounta","Fenoughil","Bordj Badji Mokhtar"],"Chlef":["Chlef City","Oued Fodda","Boukadir","Ténès","El Karimia","El Marsa","Ouled Fares","Taougrite","Ain Merane"],"Laghouat":["Laghouat City","Aflou","Hassi R'Mel","Ain Madhi","Ksar El Hirane","Sidi Makhlouf","Oued Morra","El Ghicha"],"Oum El Bouaghi":["Oum El Bouaghi City","Ain Beida","Ain M'lila","Ain Fakroun","Souk Naamane","Meskiana","Dhalaa"],"Batna":["Batna City","Barika","Arris","Ain Touta","Merouana","Tazoult","N'Gaous","Thniet El Abed","Chemora"],"Bejaia":["Bejaia City","Akbou","Amizour","Kherrata","Sidi Aïch","El Kseur","Seddouk","Adekar","Souk El Ténine"],"Biskra":["Biskra City","Tolga","Ouled Djellal","Sidi Khaled","El Kantara","Zeribet El Oued","Sidi Okba","M'Chouneche"],"Bechar":["Béchar City","Kenadsa","Taghit","Abadla","Beni Abbes","Kerzaz","Tabelbala","Lahmar"],"Blida":["Blida City","Boufarik","Ouled Yaïch","Larbaa","Meftah","El Affroun","Mouzaia","Chréa"],"Bouira":["Bouira City","Lakhdaria","Sour El Ghozlane","Ain Bessem","M'Chedallah","Bechloul","Kadiria","Haizer"],"Tamantasset":["Tamanrasset City","In Salah","In Ghar","Abalessa","Idles","Tazrouk","Tin Zaouatine","In Guezzam"],"Tebessa":["Tébessa City","Bir el Ater","Chéria","Ouenza","El Aouinet","Morsott","Negrine","El Kouif"],"Tlemcen":["Tlemcen City","Maghnia","Ghazaouet","Remchi","Nedroma","Sebdou","Ouled Mimoun","Hennaya","Bab El Assa"],"Tiaret":["Tiaret City","Sougueur","Frenda","Ksar Chellala","Mahdia","Dahmouni","Rahouia","Oued Lili"],"Tizi Ouzou":["Tizi Ouzou City","Azazga","Larbaâ Nath Irathen","Tigzirt","Draâ Ben Khedda","Boghni","Ain El Hammam","Azeffoun","Ouadhia"],"Algiers":["Algiers Center (including Kasbah, Bab El Oued, Hydra, Ben Aknoun, El Biar)","Sidi M'Hamed","Bouzareah","Cheraga","Zeralda","Bir Mourad Raïs","Hussein Dey","El Harrach","Dar El Beïda","Rouïba","Baraki"],"Djelfa":["Djelfa City","Hassi Bahbah","Ain Oussera","Messaad","Charef","Dar Chioukh","El Idrissia","Had-Sahary"],"Jijel":["Jijel City","Taher","El Milia","Chekfa","Texenna","Sidi Abdelaziz","El Ancer","Ziama Mansouriah"],"Setif":["Sétif City","El Eulma","Bouandas","Ain Oulmene","Ain Arnat","Salah Bey","Amoucha","Guenzet","Bougaa"],"Saida":["Saïda City","Ain El Hadjar","Youb","Hassasna","Sidi Boubekeur","Ouled Brahim"],"Skikda":["Skikda City","El Harrouch","Collo","Azzaba","Tamalous","Ramdane Djamel","Sidi Mezghiche","Ben Azzouz"],"Sidi Bel Abbes":["Sidi Bel Abbès City","Telagh","Sfisef","Ben Badis","Mostefa Ben Brahim","Sidi Ali Benyoub","Marhoum","Moulay Slissen"],"Annaba":["Annaba City","El Bouni","Berrahal","El Hadjar","Chetaïbi","Seraïdi"],"Guelma":["Guelma City","Oued Zenati","Bouchegouf","Guelaat Bou Sbaa","Hammam Debagh","Heliopolis","Ain Makhlouf"],"Constantine":["Constantine City","El Khroub","Hamma Bouziane","Didouche Mourad","Zighoud Youcef","Ain Abid","Ibn Ziad"],"Medea":["Médéa City","Berrouaghia","Ksar El Boukhari","Beni Slimane","Tablat","El Omaria","Seghouane","Aziz","Souagui"],"Mostaganem":["Mostaganem City","Ain Nouissy","Ain Tedles","Achacha","Bouguirat","Kheireddine","Mesra","Sidi Ali","Sidi Lakhdar"],"M’Sila":["M'Sila City","Bou Saâda","Sidi Aissa","Ain El Hadjel","Magra","Ouled Derradj","Ben Srour","Hammam Dhaa"],"Mascara":["Mascara City","Mohammadia","Tighennif","Sig","Ghriss","Oued Taria","Bou Hanifia","Aouf"],"Ouargla":["Ouargla City","Hassi Messaoud","Touggourt","Temacine","Megarine","El Hadjira","Taibet","Sidi Khouiled"],"Oran":["Oran City","Es Senia","Bir El Djir","Ain El Turk","Arzew","Bethioua","Oued Tlelat","Boutlelis","Gediel"],"El Bayadh":["El Bayadh City","Rogassa","Chellala","Brezina","El Abiodh Sidi Cheikh","Bougtob","Boussemghoun","Arbaouat"],"Illizi":["Illizi City","Djanet","In Amenas","Bordj Omar Driss","Debdeb"],"Bordj Bou Arreridj":["Bordj Bou Arréridj City","Ras El Oued","Mansoura","Bordj Ghedir","Bir Kasdali","El Achir","Medjana","Djaâfra"],"Boumerdes":["Boumerdès City","Boudouaou","Dellys","Bordj Menaïel","Khemis El Khechna","Isser","Thénia","Naciria"],"El Tarf":["El Tarf City","El Kala","Dréan","Besbes","Ben M'Hidi","Bouteldja","Bouhadjar"],"Tindouf":["Tindouf City","Oum el Assel"],"El Oued":["El Oued City","Guémar","Bayadha","Robbah","Kouinine","Reguiba","Magrane","Debila"],"Khenchela":["Khenchela City","Kaïs","Chechar","Bouhmama","Babar","El Hamma","Ain Touila"],"Souk Ahras":["Souk Ahras City","Sedrata","Taoura","M'daourouch","Merahna","Haddada","Oued Kebrit"],"Tipaza":["Tipaza City","Cherchell","Kolea","Hadjout","Bou Ismail","Gouraya","Damous","Ahmer El Ain"],"Mila":["Mila City","Chelghoum Laïd","Tadjenanet","Grarem Gouga","Teleghma","Rouached","Sidi Merouane","Bouhatem"],"Ain Defla":["Ain Defla City","Khemis Miliana","Miliana","El Attaf","Al Amra","Djelida","Boumedfaâ","Rouina"],"Naama":["Naâma City","Ain Séfra","Mécheria","Moghrar","Asla","Tiout"],"Ain Temouchent":["Ain Témouchent City","Beni Saf","Hammam Bou Hadjar","El Amria","Ain Larbaâ","Oulhaça El Gheraba"],"Ghardaia":["Ghardaïa City","El Guerara","Metlili","Berriane","Daya Ben Dahoua","Zelfana"],"Relizane":["Relizane City","Oued Rhiou","Ammi Moussa","Mazouna","Yellel","Mendes","Ain Tarek","Zemmora"],"Timimoun":["Timimoun City","Aougrout","Charouine","Ksar Kaddour"],"Bordj Badji Mokhtar":["Bordj Badji Mokhtar City","Timiaouine"],"Ouled Djellal":["Ouled Djellal City","Sidi Khaled","Besbes"],"Beni Abbes":["Béni Abbès City","Kerzaz","El Ouata","Tabelbala","Igli"],"In Salah":["In Salah City","In Ghar","Foggaret Ezzaouia"],"In Guezzam":["In Guezzam City","Tin Zaouatine"],"Touggourt":["Touggourt City","Temacine","Megarine","El Hadjira","Taibet"],"Djanet":["Djanet City","Bordj El Haouas"],"El M’Ghair":["El M'Ghair City","Djamaa","Still","M'Rara"],"El Meniaa":["El Meniaa City","Hassi Gara"]},"Andorra":{"Andorra la Vella":["Santa Coloma","La Margineda","Central District (including Av. Meritxell, Príncep Benlloch)"],"Canillo":["Soldeu","El Tarter","Incles","L'Aldosa de Canillo","Ransol","Meritxell","Els Plans","Forn","Bordes d'Envalira"],"Encamp":["Pas de la Casa","Vila","Les Bons","Grau Roig"],"Escaldes-Engordany":["Els Vilars","Engolasters","El Fener","Sakany"],"La Massana":["Arinsal","Pal","Erts","Sispony","Anyós","L'Aldosa de la Massana","Escàs"],"Ordino":["El Serrat","Llorts","Arans","La Cortinada","Ansalonga","Sornàs","Segudet"],"Sant Julia de Loria":["Auvinyà","Bissisarri","Certers","Fontaneda","Juberri","Llumeneres","Nagol","Aixovall"]},"Angola":{"Bengo":["Caxito","Dande","Ambriz","Nambuangongo","Dembos","Pango Aluquém","Bula Atumba"],"Benguela":["Benguela City","Lobito","Catumbela","Baía Farta","Cubal","Ganda","Balombo","Caimbambo","Chongorói","Bocoio"],"Bie":["Kuito","Andulo","Camacupa","Chinguar","Catabola","Nharea","Cuemba","Cunhinga","Chitembo"],"Cabinda":["Cabinda City","Cacongo","Buco-Zau","Belize"],"Cuando Cubango":["Menongue","Cuito Cuanavale","Cuchi","Cuangar","Calai","Dirico","Mavinga","Rivungo","Nancova"],"Cuanza Norte":["Ndalatando","Cazengo","Cambambe","Ambaca","Golungo Alto","Lucala","Banga","Bolongongo","Quiculungo","Samba Cajú","Ngonguembo"],"Cuanza Sul":["Sumbe","Porto Amboim","Amboim (Gabela)","Cela (Waku Kungo)","Libolo","Mussende","Quibala","Seles","Conda","Ebo","Cassongue","Quilenda"],"Cunene":["Ondjiva","Cuanhama","Ombadja","Namacunde","Cahama","Curoca","Cuvelai"],"Huambo":["Huambo City","Caála","Bailundo","Ekunha","Longonjo","Ukuma","Chinjenje","Mungo","Catchiungo","Tchicala Tcholohanga","Londuimbali"],"Huila":["Lubango","Chibia","Humpata","Cacula","Matala","Jamba","Kuvango","Caluquembe","Chicomba","Caconda","Quilengues","Gambos"],"Luanda":["Luanda City (including Ingombota, Maianga, Rangel, Samba, Sambizanga, Cazenga)","Viana","Belas","Cacuaco","Talatona","Kilamba Kiaxi","Icolo e Bengo","Quiçama"],"Lunda Norte":["Dundo","Chitato","Cambulo","Lucapa","Capenda-Camulemba","Cuilo","Caungula","Cuango","Xá-Muteba","Lóvua"],"Lunda Sul":["Saurimo","Dala","Muconda","Cacolo"],"Malanje":["Malanje City","Calandula","Cacuso","Cangandala","Mucari","Cuaba Nzogo","Quela","Kiwaba Nzoji","Massango","Marimba","Luquembo","Quirima","Cambundi-Catembo"],"Moxico":["Luena","Cameia","Camanongue","Léua","Lucano","Luau","Alto Zambeze","Bundas","Luchazes"],"Namibe":["Moçâmedes (Namibe City)","Tôwa (Tombua)","Virei","Bibala","Camucuio"],"Uige":["Uíge City","Negage","Sanza Pombo","Maquela do Zombo","Damba","Mucaba","Puri","Bungo","Kangola","Alto Cauale","Quitexe","Ambuila","Bembe","Songo","Milunga","Quimbele"],"Zaire":["M'banza-Kongo","Soyo","Nzeto","Cuimba","Nóqui","Tomboco"]},"Antigua and Barbuda":{"Saint George":["Potters Village","Piggotts (St. Mark's)","Osbourn (including V.C. Bird International Airport)","Barnes Hill","New Winthorpes","Gunthorpes","Sea View Farm","Coolidge"],"Saint John":["St. John's City (Capital, including Inner City, Ovals, Camperdown)","Gray's Farm","Greenbay","Fort Road","Tomlinson","Upper Gamble's","Villa","Yorks","Cedar Grove","Dickenson Bay","Five Islands","St. Johnston Village"],"Saint Mary":["Bolans","Jennings","Ebenezer","Blubber Valley","Yorks (St. Mary)","Seahorse","Sawcolts","John Hughes","Old Road","Urlings","Johnson's Point"],"Saint Paul":["Falmouth","English Harbour (including Nelson's Dockyard)","Liberta","Bethesda","Christian Hill","Delaps","Table Hill Gordon"],"Saint Peter":["Parham","Big Duers","Cocoa Hall","Freemansville","Vernons","Parry's","Gilbert's","Mercer's Creek"],"Saint Philip":["Freetown","Willikies","Seatons","Glanvilles","Newfield","Lyons","St. Phillip's Village"],"Barbuda":["Codrington (The primary settlement)","Redonda"]},"Argentina":{"Buenos Aires":["Palermo","Recoleta","San Telmo","Puerto Madero","La Boca","Belgrano","Caballito","Flores","Almagro","Villa Urquiza"],"Buenos Aires Province":["La Plata","Mar del Plata","Bahía Blanca","Tandil","San Isidro","Pilar","Vicente López","Tigre","Quilmes","Lanús","Avellaneda","Pergamino","Olavarría","San Nicolás"],"Catamarca":["San Fernando del Valle de Catamarca","Belén","Tinogasta","Andalgalá","Santa María","Fiambalá","Recreo","Valle Viejo"],"Chaco":["Resistencia","Presidencia Roque Sáenz Peña","Villa Ángela","Charata","Juan José Castelli","Fontana","Barranqueras","General José de San Martín"],"Chubut":["Rawson","Comodoro Rivadavia","Trelew","Puerto Madryn","Esquel","Gaiman","Rada Tilly","Sarmiento"],"Cordoba":["Córdoba City","Villa Carlos Paz","Río Cuarto","Villa María","San Francisco","Alta Gracia","Jesús María","Villa General Belgrano","Cosquín","La Falda"],"Corrientes":["Corrientes City","Goya","Paso de los Libres","Curuzú Cuatiá","Mercedes","Bella Vista","Santo Tomé","Ituzaingó (near Iberá Wetlands)"],"Entre Rios":["Paraná","Concordia","Gualeguaychú","Concepción del Uruguay","Victoria","Colón","Gualeguay","Chajarí"],"Formosa":["Formosa City","Clorinda","Pirané","El Colorado","Las Lomitas","Ingeniero Juárez","Ibarreta"],"Jujuy":["San Salvador de Jujuy","San Pedro de Jujuy","Palpalá","Perico","Humahuaca","Tilcara","Purmamarca","La Quiaca"],"La Pampa":["Santa Rosa","General Pico","Eduardo Castex","Toay","Realicó","Macachín","General Acha","25 de Mayo"],"La Rioja":["La Rioja City","Chilecito","Chamical","Aimogasta","Chepes","Villa Unión (near Talampaya)","Famatina"],"Mendoza":["Mendoza City","San Rafael","Godoy Cruz","Luján de Cuyo","Maipú","Guaymallén","Las Heras","Tunuyán","Malargüe","Tupungato","San Martín"],"Misiones":["Posadas","Puerto Iguazú (near Iguazu Falls)","Oberá","Eldorado","Apóstoles","San Ignacio","Montecarlo","Aristóbulo del Valle"],"Neuquen":["Neuquén City","San Martín de los Andes","Villa La Angostura","Zapala","Cutral Có","Plaza Huincul","Chos Malal","Centenario"],"Rio Negro":["Viedma","San Carlos de Bariloche","General Roca","Cipolletti","Las Grutas","San Antonio Oeste","El Bolsón","Choele Choel","Cinco Saltos"],"Salta":["Salta City","San Ramón de la Nueva Orán","Tartagal","Cafayate","Rosario de la Frontera","Metán","General Güemes","Cachi"],"San Juan":["San Juan City","Chimbas","Rawson","Rivadavia","Santa Lucía","Caucete","San José de Jáchal","Barreal"],"San Luis":["San Luis City","Villa Mercedes","Merlo","Juana Koslay","La Punta","Justo Daract","Quines"],"Santa Cruz":["Río Gallegos","El Calafate (near Perito Moreno Glacier)","Caleta Olivia","Puerto Deseado","El Chaltén","Puerto San Julián","Las Heras","Pico Truncado"],"Santa Fe":["Santa Fe City","Rosario","Rafaela","Venado Tuerto","Reconquista","Santo Tomé","Villa Constitución","Sunchales","San Lorenzo"],"Santiago del Estero":["Santiago del Estero City","La Banda","Termas de Río Hondo","Frías","Añatuya","Quimilí","Clodomira"],"Tierra del Fuego":["Ushuaia","Río Grande","Tolhuin"],"Tucuman":["San Miguel de Tucumán","Yerba Buena","Concepción","Tafí Viejo","Aguilares","Monteros","Tafí del Valle","Famaillá"]},"Armenia":{"Yerevan":["Kentron (Downtown / Center)","Arabkir","Ajapnyak","Avan","Davtashen","Erebuni","Malatia-Sebastia","Nor Nork","Nork-Marash","Nubarashen","Shengavit","Kanaker-Zeytun"],"Aragatsotn":["Ashtarak","Aparan","Talin","Tsaghkahovit","Oshakan","Byurakan (home to the Observatory)","Mastara","Agarak"],"Ararat":["Artashat","Ararat City","Masis","Vedi","Khor Virap (area surrounding the monastery)","Surenavan","Yeraskh","Avshar"],"Armavir":["Armavir City","Vagharshapat (Echmiadzin)","Metsamor","Baghramyan","Myasnikyan","Karakert","Sardarapat","Gai"],"Gegharkunik":["Gavar","Sevan","Martuni","Vardenis","Chambarak","Lchashen","Shoghakat (Nadezhda)","Artsvanist"],"Kotayk":["Hrazdan","Abovyan","Tsaghkadzor","Charentsavan","Yeghvard","Nor Hachn","Garni (area surrounding the temple)","Geghard","Arzni"],"Lori":["Vanadzor","Alaverdi","Stepanavan","Spitak","Tashir","Tumanyan","Odzun","Shnogh","Mets Parni"],"Shirak":["Gyumri","Artik","Maralik","Akhuryan","Amasia","Ashotsk","Anipemza","Panik"],"Syunik":["Kapan","Goris","Sisian","Meghri","Kadjaran","Tatev (area surrounding the monastery)","Tegh","Shurnukh"],"Tavush":["Ijevan","Dilijan","Berd","Noyemberyan","Azatamut","Koghb","Achajur","Haghartsin"],"Vayots Dzor":["Yeghegnadzor","Jermuk","Vayk","Areni (famous wine region)","Gladzor","Malishka","Shatin"]},"Australia":{"New South Wales":["Sydney (including CBD, Parramatta, Blacktown, Penrith, Manly, Bondi)","Newcastle","Wollongong","Central Coast (Gosford, Wyong)","Tweed Heads","Maitland","Tamworth","Albury","Port Macquarie","Orange","Dubbo","Wagga Wagga","Bathurst","Coffs Harbour","Lismore"],"Queensland":["Brisbane (including CBD, Ipswich, Logan City, Redland City)","Gold Coast","Sunshine Coast","Townsville","Cairns","Toowoomba","Mackay","Rockhampton","Bundaberg","Hervey Bay","Gladstone","Mount Isa","Maryborough","Gympie"],"South Australia":["Adelaide (including CBD, Salisbury, Elizabeth, Glenelg, Port Adelaide)","Mount Gambier","Whyalla","Murray Bridge","Port Augusta","Port Pirie","Port Lincoln","Victor Harbor","Gawler","Roxby Downs"],"Tasmania":["Hobart (including Glenorchy, Kingston, Clarence)","Launceston","Devonport","Burnie","Ulverstone","New Norfolk","Queenstown","Smithton"],"Victoria":["Melbourne (including CBD, St Kilda, Richmond, Dandenong, Frankston, Geelong)","Ballarat","Bendigo","Shepparton","Wodonga","Mildura","Warrnambool","Traralgon","Wangaratta","Moe","Morwell","Sale"],"Western Australia":["Perth (including CBD, Fremantle, Joondalup, Mandurah, Rockingham)","Bunbury","Geraldton","Kalgoorlie-効率 (Kalgoorlie-Boulder)","Albany","Busselton","Karratha","Broome","Port Hedland","Esperance"],"Australian Capital Territory":["Canberra (including Civic, Belconnen, Gungahlin, Tuggeranong, Woden Valley, Kingston)","Hall","Tharwa"],"Northern Territory":["Darwin (including Palmerston)","Alice Springs","Katherine","Nhulunbuy","Tennant Creek","Jabiru","Yulara"],"Jervis Bay Territory":["Jervis Bay Village","Wreck Bay Village","Ashmore and Cartier Islands"],"Australian Antarctic Territory":["Mawson Station","Davis Station","Casey Station"],"Christmas Island":["Flying Fish Cove (The Settlement)","Silver City","Poon Saan","Drumsite"],"Cocos Islands":["West Island (Capital)","Home Island","Coral Sea Islands","Heard Island and McDonald Islands"],"Norfolk Island":["Kingston (Official Capital)","Burnt Pine (Commercial Center)"]},"Austria":{"Burgenland":["Eisenstadt (Capital)","Rust","Neusiedl am See","Mattersburg","Oberpullendorf","Oberwart","Güssing","Jennersdorf"],"Carinthia":["Klagenfurt am Wörthersee (Capital)","Villach","Wolfsberg","Spittal an der Drau","Feldkirchen in Kärnten","Sankt Veit an der Glan","Völkermarkt","Hermagor-Pressegger See","Velden am Wörthersee"],"Lower Austria":["Sankt Pölten (Capital)","Wiener Neustadt","Baden bei Wien","Krems an der Donau","Amstetten","Mödling","Klosterneuburg","Baden","Tulln an der Donau","Schwechat","Waidhofen an der Ybbs","Zwettl"],"Salzburg":["Salzburg City (Capital)","Hallein","Saalfelden am Steinernen Meer","Sankt Johann im Pongau","Bischofshofen","Zell am See","Seekirchen am Wallersee","Tamsweg","Mittersill"],"Styria":["Graz (Capital)","Leoben","Kapfenberg","Bruck an der Mur","Feldbach","Gratwein-Straßengel","Knittelfeld","Leibnitz","Deutschlandsberg","Weiz","Judenburg","Schladming"],"Tyrol":["Innsbruck (Capital)","Kufstein","Telfs","Schwaz","Hall in Tirol","Wörgl","Lienz","Imst","Kitzbühel","Landeck","St. Anton am Arlberg"],"Upper Austria":["Linz (Capital)","Wels","Steyr","Leonding","Traun","Braunau am Inn","Ansfelden","Bad Ischl","Gmunden","Vöcklabruck","Ried im Innkreis","Enns"],"Vienna":["Innere Stadt (1st District / City Center)","Leopoldstadt (2nd)","Landstraße (3rd)","Wieden (4th)","Margareten (5th)","Mariahilf (6th)","Neubau (7th)","Josefstadt (8th)","Alsergrund (9th)","Favoriten (10th)","Simmering (11th)","Meidling (12th)","Hietzing (13th)","Penzing (14th)","Rudolfsheim-Fünfhaus (15th)","Ottakring (16th)","Hernals (17th)","Währing (18th)","Döbling (19th)","Brigittenau (20th)","Floridsdorf (21st)","Donaustadt (22nd)","Liesing (23rd)"],"Vorarlberg":["Bregenz (Capital)","Dornbirn","Feldkirch","Lustenau","Bludenz","Hohenems","Götzis","Hard","Lech am Arlberg"]},"Azerbaijan":{"Baku":["Sabail (including Old City / Icherisheher)","Yasamal","Nasimi","Narimanov","Nizami","Khatai","Binagadi","Sabunchu","Surakhani","Garadagh","Khazar","Pirallahi"],"Ganja":["Kapaz District","Nizami District","Hajikend"],"Khankendi":["Khankendi City","Kərkicahan"],"Lankaran":["Lankaran City","Liman","Garmatuk","Haftoni","Narimanabad","Istisu","Balali"],"Mingachevir":["Mingachevir City"],"Naftalan":["Naftalan City","Gashalti Garagoyunlu"],"Shirvan":["Shirvan City","Bayramly","Hajigahramanly"],"Sumgait":["Sumgait City","Jorat","Haji Zeynalabdin"],"Shaki":["Shaki City","Turan","Celebi Khan","Kish","Oxud"],"Yevlakh":["Yevlakh City","Aran","Meyveli","Qaramammadli"],"Nakhchivan City":["Nakhchivan City","Aliabad","Tumbul","Garaçuq"],"Absheron":["Khyrdalan","Masazir","Saray","Mehdiabad","Novkhany","Jeyranbatan","Gobu"],"Aghjabadi":["Aghjabadi City","Hindarkh","Boyat","Salmanbeyli","Giyamaddinli"],"Aghdam":["Aghdam City","Guzanly","Quzanli","Khindiristan","Alibeyli"],"Agdash":["Agdash City","Laki","Khosrov","Porao","Kotanarkh"],"Aghstafa":["Aghstafa City","Poylu","Vurgun","Dag Kesemen","Kohnegishlag"],"Agsu":["Agsu City","Bozavand","Kalva","Gagali","Gashad"],"Astara":["Astara City","Kijaba","Archivan","Pensar","Tangarud"],"Balakan":["Balakan City","Qabaqcol","Mahamalar","Talalar","Ititala"],"Barda":["Barda City","Lemberan","Yeni Dashkend","Alpout","Otuzikiler"],"Beylagan":["Beylagan City","Oranjala","Milabad","Dunyamalilar","Shahsevan"],"Bilasuvar":["Bilasuvar City","Khirmanli","Bagramtapa","Aliabad","Amankend"],"Dashkasan":["Dashkasan City","Alunitdag","Bayan","Khushbulag","Zivlan"],"Fuzuli":["Fuzuli City","Horadiz","Ahmadbayli","Bala Bahmanli","Alkhanli"],"Gadabay":["Gadabay City","Slavyanka","Novoivanovka","Shinikh","Chaldash"],"Goranboy":["Goranboy City","Dalimammadli","Kazanbulag","Tap Qaraqoyunlu","Borsunlu"],"Goychay":["Goychay City","Bigir","Laki","Chereke","Garamaryam"],"Goygol":["Goygol City","Khanlar","Hajimelik","Topalhassanli","Zurnabad"],"Hajigabul":["Hajigabul City","Qarasu","Muqan","Meyniman","Atbulaq"],"Imishli":["Imishli City","Bahramtapa","Qaralar","Sarkhanly","Yalavac"],"Ismayilli":["Ismayilli City","Lahij","Basqal","Ivanovka","Galagayin"],"Jabrayil":["Jabrayil City","Jojoq Marjanli","Soltanli","Amirvarly","Shukurbalili"],"Jalilabad":["Jalilabad City","Goytapa","Prishib","Alabad","Garazanjir"],"Kalbajar":["Kalbajar City","Istisu","Vank","Zar","Zod"],"Khachmaz":["Khachmaz City","Nabran","Khudat","Yalama","Guba-Yalama National Park area"],"Khizi":["Khizi City","Altiaghaj","Gilazi","Shuraabad","Yeni Gushchu"],"Khojaly":["Khojaly City","Asgaran","Badara","Ganyatagh","Chanagchi"],"Khojavend":["Khojavend City","Hadrut","Red Bazar (Girmizi Bazar)","Sos","Tugh"],"Kurdamir":["Kurdamir City","Karrar","Atakishili","Yenikend","Mollakend"],"Lachin":["Lachin City","Zabukh","Sus","Minkend","Gulabird"],"Lankaran District":["Lankaran City (Administrative Center)","Germatuk","Haftoni","Hirkan","Istisu"],"Lerik":["Lerik City","Blaband","Chayrud","Monidigah","Zuvand"],"Masally":["Masally City","Boradigah","Arkivan","Shikhlar","Mahmudavar"],"Neftchala":["Neftchala City","Khasankulugushchu","Khilly","Banke","Ashaghy Garamanly"],"Oghuz":["Oghuz City","Khachmaz (Oghuz)","Padar","Kerimli","Bayan"],"Qabala":["Qabala City","Vandam","Nij","Bum","Chukhur Gabala"],"Qakh":["Qakh City","Ilisu","Lakit","Gum","Gakhbash"],"Qazax":["Qazax City","Khanliglar","Kosalar","Dash Salahli","Chayli"],"Gobustan":["Gobustan City (Maraza)","Nabur","Sundu","Tekla","Jelyam"],"Quba":["Quba City","Red Village (Girmizi Gasaba)","Khinalug","Gonagkend","Vladimirovka"],"Qubadli":["Qubadli City","Khanlig","Mahmudlu","Hal","Muradkhanli"],"Qusar":["Qusar City","Samur","Laza","Hil","Shahdag area"],"Saatly":["Saatly City","Fatmalikend","Azadkend","Yeni Novruzlu","Garajalar"],"Sabirabad":["Sabirabad City","Galagayin","Akhundlu","Kovlar","Surra"],"Salyan":["Salyan City","Garachuqur","Marishli","Seyidan","Hasanli","Arbatan","Chukhanly"],"Samukh":["Samukh City","Karajally","Aliyabad","Poylu","Yenikend","Leki","Institute Settlement"],"Shabran":["Shabran City","Divichi","Gendob","Surra","Zeyve","Uzunboyad","Pirabadil"],"Shaki District":["Shaki City (Administrative Center)","Kish","Oxud","Turan","Celebi Khan","Baltali","Incha"],"Shamakhi":["Shamakhi City","Lahij","Demirchi","Madrasa","Chuqur动态 (Chuquryurd)","Gobustan (Shamakhi area)","Melham"],"Shamkir":["Shamkir City","Zayam","Dallar","Kur","Chinarly","Yeni Hayat","Sabirkend"],"Shusha":["Shusha City","Turshsu","Malibeyli","Dashalty","Safiyan"],"Siyazan":["Siyazan City","Gilgilchay","Besh Barmag area","Mesharif","Zarat","Eynali"],"Tartar":["Tartar City","Maragha","Shikharkh","Sugovushan","Madagiz","Seydimli","Buruj"],"Tovuz":["Tovuz City","Qovlar","Alibeyli","Bozalganly","Duz Cirdaxan","Agdam (Tovuz)","Yanigly"],"Ujar":["Ujar City","Qarabork","Alpi","Gazyan","Leki (Ujar)","Boyat"],"Yardimli":["Yardimli City","Arvana","Chay Uzun","Ostair","Alar","Bozayran"],"Yevlakh District":["Yevlakh City (Administrative Center)","Aran","Qaramammadli","Khaldan","Malbinasi","Salahly"],"Zagatala":["Zagatala City","Aliabad","Danachi","Muxax","Car","Yuxari Tala","Ashaghi Tala"],"Zangilan":["Zangilan City","Minjivan","Agali (Smart Village)","Vejnali","Bartaz","Mammadbeyli"],"Zardab":["Zardab City","Meliqmli","Alibeyli","Garavelli","Boyat","Isgandarly"],"Aghdara":["Aghdara City (Mardakert)","Sugovushan (Aghdara area)","Talish","Umudlu","Vank (Aghdara area)"],"Babek":["Babek City","Nehram","Jahri","Shikhmahmud","Aliabad (Babek)","Goshadize"],"Julfa":["Julfa City","Alahi","Yayci","Gulistan","Arazin","Saltaq"],"Kangarli":["Givrag","Shahtakhty","Khok","Yurdchu","Garabaglar","Tazakend"],"Ordubad":["Ordubad City","Unus","Venend","Bist","Gilan","Aza"],"Sadarak":["Heydarabad","Sadarak Village","Garaghaj"],"Shahbuz":["Shahbuz City","Badamli","Bicenek","Kolany","Shahbuzkend","Ayrinj"],"Sharur":["Sharur City","Yengija","Demirci (Sharur)","Oguzkend","Zeyva","Mahmudkend"]},"Bahamas":{"New Providence":["Nassau (Capital City)","Paradise Island","Fox Hill","Gambier Village","Adelaide Village","Carmichael","Cable Beach"],"Acklins":["Snug Corner","Spring Point","Lovely Bay","Salina Point","Mason's Bay"],"Berry Islands":["Great Harbour Cay","Bullock's Harbour","Chub Cay","Little Stirrup Cay (CocoCay)","Great Stirrup Cay"],"Bimini":["Alice Town","Bailey Town","Porgy Bay","South Bimini"],"Black Point (Exuma)":["Black Point Settlement","Staniel Cay","Farmer's Cay"],"Cat Island":["Arthur's Town","New Bight","Port Howe","Old Bight","Orange Creek"],"Central Abaco":["Marsh Harbour","Dundas Town","Murphy Town","Spring City"],"Central Andros":["Fresh Creek","Staniard Creek","Blanket Sound","Behring Point","Cargill Creek"],"Central Eleuthera":["Governor's Harbour","Palmetto Point","Savannah Sound","Hatchet Bay"],"City of Freeport (Grand Bahama)":["Freeport City","Lucaya","Pinder's Point","Hunters","Mack Town"],"Crooked Island and Long Cay":["Colonel Hill","Landrail Point","Cabbage Hill","Albert Town (Long Cay)"],"East Grand Bahama":["High Rock","Pelican Point","Mclean's Town","Sweetings Cay"],"Exuma":["George Town","Rolleville","Steventon","Moss Town","Forbes Hill","Williams Town"],"Grand Cay (Abaco)":["Grand Cay Settlement","Little Grand Cay"],"Harbour Island (Eleuthera)":["Dunmore Town"],"Hope Town (Abaco)":["Hope Town Settlement","Elbow Cay","Man-O-War Cay","Great Guana Cay"],"Inagua":["Matthew Town"],"Long Island":["Clarence Town","Deadman's Cay","Simms","Salt Pond","Buckley's"],"Mangrove Cay (Andros)":["Moxey Town","Lisbon Creek","Dorsetts","Burnt Rock"],"Mayaguana":["Abraham's Bay","Pirates Well","Betsy Bay"],"Moore's Island (Abaco)":["Hard Bargain (Capital)","Bight Settlement"],"North Abaco":["Cooper's Town","Treasure Cay","Fox Town","Crown Haven","Wood Cay","Mount Hope","Little Abaco"],"North Andros":["Nicholls Town","Morgan's Bluff","Mastic Point","Lowe Sound","Red Bays"],"North Eleuthera":["Upper Bogue","Lower Bogue","The Bluff","Current","Gregory Town"],"Ragged Island":["Duncan Town"],"Rum Cay":["Port Nelson"],"San Salvador":["Cockburn Town","United Estates","Sugar Loaf","Polaris"],"South Abaco":["Sandy Point","Crossing Rocks","Cherokee Sound","Casuarina Point","Bahama Palm Shores"],"South Andros":["Congo Town","The Bluff (South Andros)","Long Bay Cays","Kemp's Bay","Deep Creek","Mars Bay"],"South Eleuthera":["Rock Sound","Tarpum Bay","Green Castle","Deep Creek (Eleuthera)","Bannerman Town","Wemyss Bight"],"Spanish Wells (Eleuthera)":["Spanish Wells Settlement (St. George's Cay)","Russell Island"],"West Grand Bahama":["Eight Mile Rock","West End","Holmes Rock","Pinder's Point","Bootle Bay","Hanna Hill"],"Green Turtle Cay (Abaco)":["New Plymouth"]},"Bahrain":{"Capital Governorate":["Manama (Capital City)","Juffair","Seef","Diplomatic Area","Adliya","Gudaibiya","Hoora","Sanabis","Al Burhama","Umm Al Hassam","Sitra (Northern parts / Industrial area)","Bilad Al Qadeem","Nabih Saleh (Island)"],"Muharraq Governorate":["Muharraq City","Al Hidd","Arad","Busaiteen","Galali","Dair","Samaheej","Amwaj Islands","Diyar Al Muharraq"],"Northern Governorate":["Hamad Town","Budaiya","Saar","Janabiya","Diraz","Bani Jamra","Al Qadam","Abu Saiba","Shakhoora","Jidhafs","Sehla","Al Markh","Malkiya","Sadad","Karzakan","Dumistan"],"Southern Governorate":["Riffa (East Riffa and West Riffa)","Isa Town","Awali","Zallaq","Askar","Jaww","Al Door","Sakhir (Desert region / F1 Circuit area)","Khalifa City","Hawar Islands"]},"Bangladesh":{"Barishal":["Barishal City","Bhola","Patuakhali","Pirojpur","Jhalokati","Barguna","Kuakata","Gournadi"],"Chattogram":["Chattogram City (Chittagong)","Cox's Bazar","Cumilla (Comilla)","Feni","Brahmanbaria","Rangamati","Bandarban","Khagrachhari","Noakhali","Chandpur","Lakshmipur"],"Dhaka":["Dhaka City (Capital, North and South)","Gazipur","Narayanganj","Tangail","Savar","Faridpur","Manikganj","Munshiganj","Narsingdi","Rajbari","Madaripur","Gopalganj","Shariatpur"],"Khulna":["Khulna City","Jashore (Jessore)","Satkhira","Bagerhat (Mongla Port)","Kushtia","Jhenaidah","Magura","Meherpur","Narail","Chuadanga"],"Mymensingh":["Mymensingh City","Jamalpur","Netrokona","Sherpur","Muktagachha","Bhaluka"],"Rangpur":["Rangpur City","Dinajpur","Saidpur","Gaibandha","Kurigram","Lalmonirhat","Nilphamari","Panchagarh","Thakurgaon"],"Sylhet":["Sylhet City","Sreemangal","Moulvibazar","Habiganj","Sunamganj","Beanibazar","Golapganj"]},"Barbados":{"Christ Church":["Oistins (Major town and fishing hub)","Hastings","Worthing","Rockley","St. Lawrence Gap","Maxwell","Silver Sands","Enterprise (Miami Beach area)","Wotton","Charnocks (location of Grantley Adams International Airport)"],"Saint Andrew":["Belleplaine","Cambridge","Chalky Mount","Shorey Village","Turners Hall","Walkers","Greenland"],"Saint George":["Boarded Hall","Bulkeley","Charles Rowe Bridge","Flat Rock","Gun Hill (home to the Signal Station)","Market Hill","Newbury","Rowans","Walkers Terrace"],"Saint James":["Holetown (Historic first settlement town)","Fitts Village","Paynes Bay","Sunset Crest","Husbands","Prospect","Porters","Lancaster"],"Saint John":["Four Roads","Bathsheba (Southern coastal extension)","Coach Hill","Massiah Street","Newcastle","Sargeant Street","Society","Venture"],"Saint Joseph":["Bathsheba (Primary village and surf hub)","Cattlewash","Chimborazo","Horse Hill","mallows","Spa","Sugar Hill"],"Saint Lucy":["Checker Hall","Crab Hill","Hope","Nesfield","Pie Corner","River Bay","Stroud Bay"],"Saint Michael":["Bridgetown (Capital City, including Deep Water Harbour)","Bank Hall","Black Rock","Carleton Village","Deacons","Green Hill","Grazettes","Hindsbury","Pine","Warrens (Major commercial hub)","Wildey"],"Saint Peter":["Speightstown (Major northern town)","Ashton Hall","Boscobelle","Mile and a Quarter","Mullins","Six Mens","Whim"],"Saint Philip":["Six Cross Roads (Commercial center)","Crane (The Crane Beach area)","Diamond Valley","Emerald City","Foul Bay","Marchfield","Ruby","Sunbury","Wellhouse"],"Saint Thomas":["Welches","Arch Hall","Arthur Seat","Bloxbury","Clifton Hill","Holy Innocents","Shop Hill","Sturges"]},"Belarus":{"Brest Oblast":["Brest City (Administrative Center)","Baranovichi","Pinsk","Kobrin","Bereza","Luninets","Ivatsevichi","Pruzhany","Lyakhovichi","Gantsevichi","Mikashevichi","Kamenets (near Belovezhskaya Pushcha)"],"Gomel Oblast":["Gomel City (Administrative Center)","Mozyr","Zhlobin","Svetlogorsk","Rechitsa","Kalinkovichi","Rogachev","Dobrush","Zhytkavichy","Khojniki","Petrikov"],"Grodno Oblast":["Grodno City (Administrative Center)","Lida","Slonim","Volkovysk","Smorgon","Novogrudok","Oshmyany","Shchuchin","Mosty","Ostrovets","Ivyat"],"Minsk Oblast":["Borisov","Soligorsk","Molodechno","Zhodino","Slutsk","Vileika","Dzerzhinsk","Maryina Gorka","Stolbtsy","Nesvizh","Zaslavl","Logoysk"],"Mogilev Oblast":["Mogilev City (Administrative Center)","Bobruisk","Gorki","Osipovichi","Krichev","Klimovichi","Shklov","Kostyukovichi","Chausy","Mstislavl","Bykhov"],"Vitebsk Oblast":["Vitebsk City (Administrative Center)","Orsha","Polotsk","Novopolotsk","Glubokoye","Lepel","Postavy","Braslav (famous lake region)","Dokshitsy","Gorodok","Tolochin"],"City of Minsk":["Tsentralny District","Sovetsky District","Pervomaysky District","Partizansky District","Zavodskoy District","Leninsky District","Oktyabrsky District","Moskovsky District","Frunzensky District"]},"Belgium":{"Brussels-Capital Region (Free from provinces)":["City of Brussels (Capital City)","Anderlecht","Ixelles (Elsene)","Schaerbeek","Etterbeek","Saint-Gilles","Uccle","Molenbeek-Saint-Jean","Jette","Woluwe-Saint-Lambert","Woluwe-Saint-Pierre"],"Antwerp (Flemish Region)":["Antwerp City","Mechelen","Turnhout","Geel","Lier","Schoten","Brasschaat","Mol","Heist-op-den-Berg"],"East Flanders (Flemish Region)":["Ghent (Gent)","Aalst","Sint-Niklaas","Oudenaarde","Dendermonde","Lokeren","Ninove","Beveren"],"Flemish Brabant (Flemish Region)":["Leuven","Vilvoorde","Halle","Tienen","Diest","Asse","Zaventem (home to Brussels Airport)","Dilbeek"],"Limburg (Flemish Region)":["Hasselt","Genk","Sint-Truiden","Lommel","Tongeren","Beringen","Maasmechelen"],"West Flanders (Flemish Region)":["Bruges (Brugge)","Ostend (Oostende)","Kortrijk","Roeselare","Ypres (Ieper)","Knokke-Heist","Waregem"],"Hainaut (Walloon Region)":["Charleroi","Mons","Tournai","La Louvière","Mouscron","Châtelet","Ath"],"Liège (Walloon Region)":["Liège City","Verviers","Seraing","Herstal","Eupen (Capital of the German-speaking Community)","Huy","Spa","Malmedy"],"Luxembourg (Walloon Region)":["Arlon","Bastogne","Marche-en-Famenne","Virton","Neufchâteau","Bouillon"],"Namur (Walloon Region)":["Namur City","Dinant","Gembloux","Andenne","Ciney","Couvin"],"Walloon Brabant (Walloon Region)":["Wavre","Waterloo","Louvain-la-Neuve","Nivelles","Braine-l'Alleud","Tubize"]},"Belize":{"Belize":["Belize City (Largest city)","San Pedro Town (on Ambergris Caye)","Ladyville","Hattieville","Caye Caulker","Lord's Bank","Maskall","Crooked Tree","Bermudian Landing"],"Cayo":["Belmopan (Capital City of Belize)","San Ignacio","Santa Elena","Benque Viejo del Carmen","Spanish Lookout","Valley of Peace","Bullet Tree Falls","San Antonio","Roaring Creek"],"Corozal":["Corozal Town","Consejo","Sarteneja","Little Belize","Chunox","Libertad","San Joaquin","Patchacan"],"Orange Walk":["Orange Walk Town","Trial Farm","Shipyard","Guinea Grass","San Jose","San Pablo","August Pine Ridge","Blue Creek"],"Stann Creek":["Dangriga (Administrative Center)","Placencia","Hopkins","Independence and Mango Creek","Seine Bight","Mullins River","Pomona","Kendall"],"Toledo":["Punta Gorda (Administrative Center)","Monkey River Town","San Antonio (Toledo)","Silver Creek","Big Falls","Blue Creek (Toledo)","Aguacate","San Pedro Columbia"]},"Benin":{"Alibori":["Kandi (Administrative Center)","Banikoara","Gogounou","Malanville","Segbana","Karimama"],"Atakora":["Natitingou (Administrative Center)","Tanguiéta","Boukoumbé","Cobly","Kérou","Kouandé","Matéri","Pehunco","Toucountouna"],"Atlantique":["Allada (Administrative Center)","Abomey-Calavi (Largest city in the department)","Ouidah","Kpomasse","Toffo","Tori-Bossito","Zè","Sô-Ava"],"Borgou":["Parakou (Administrative Center)","Bembèrèkè","N'Dali","Nikki","Kalalè","Pèrèrè","Sinendé","Tchaourou"],"Collines":["Dassa-Zoumé (Administrative Center)","Savalou","Savè","Bantè","Glazoué","Ouèssè"],"Donga":["Djougou (Administrative Center)","Bassila","Copargo","Ouaké"],"Kouffo":["Aplahoué (Administrative Center)","Dogbo-Tota","Djakotomey","Klouékanmè","Lalo","Toviklin"],"Littoral":["Cotonou (Administrative Center and de facto Capital City)"],"Mono":["Lokossa (Administrative Center)","Athiémé","Bopa","Comè","Grand-Popo","Houéyogbé"],"Ouémé":["Porto-Novo (Official Capital City of Benin)","Adjarra","Adjohoun","Aguégués","Akpro-Missérété","Avrankou","Bonou","Dangbo","Sèmè-Kpodji"],"Plateau":["Pobè (Administrative Center)","Sakété","Kétou","Ifangni","Adja-Ouèrè"],"Zou":["Abomey (Administrative Center)","Bohicon","Covè","Djidja","Ouinhi","Agbangnizoun","Za-Kpota","Zagnanado","Zogbodomey"]},"Bhutan":{"Bumthang":["Jakar (Administrative Center)","Chamkhar","Tang","Ura","Chhumey","Choekhor"],"Chhukha":["Phuentsholing (Major commercial hub and border town)","Chhukha Town (Administrative Center)","Gedu","Tsimasham","Logchina","Darla"],"Dagana":["Dagana Dzong (Administrative Center)","Daga","Lhamoizingkha","Gesarling","Tseza","Kana"],"Gasa":["Gasa Dzong (Administrative Center)","Laya","Lunana","Khatoe","Khamaed"],"Haa":["Haa Town (Administrative Center)","Damthang","Bji","Katsho","Samar","Uesu"],"Lhuentse":["Lhuentse Dzong (Administrative Center)","Tangmachu","Khoma (Famous weaving village)","Kurtoe","Menbi","Gangzur"],"Mongar":["Mongar Town (Administrative Center)","Gyalposhing","Lingmethang","Yadi","Drametse","Kengkhar"],"Paro":["Paro Town (Administrative Center)","Drugyel","Shaba","Lamgong","Wangchang","Tsento"],"Pemagatshel":["Pemagatshel Town (Administrative Center)","Nganglam","Denchi","Shumar","Zobel","Khar"],"Punakha":["Punakha (Administrative Center / Ancient Capital)","Khuruthang","Lobesa","Barp","Toewang","Kabisa"],"Samdrup Jongkhar":["Samdrup Jongkhar Town (Administrative Center)","Jomotshangkha (Daifam)","Samdrupchoeling (Bangtar)","Dewathang","Gomdar","Orong"],"Samtse":["Samtse Town (Administrative Center)","Gomtu","Sibsu","Chamarchi","Pagli","Yoeseltse"],"Sarpang":["Sarpang Town (Administrative Center)","Gelephu (Major commercial hub)","Sarpangtar","Jigmechoeling","Umling","Chhuzanggang"],"Thimphu":["Thimphu City (Capital City of Bhutan)","Dechencholing","Babesa","Simtokha","Khasadrapchu","Hongtsho"],"Trashigang":["Trashigang Town (Administrative Center)","Kanglung","Wamrong","Khaling","Rangjung","Radi"],"Trashiyangtse":["Trashiyangtse Town (Administrative Center)","Doksum","Bumdeling","Khamdang","Yalang","Ramjar"],"Trongsa":["Trongsa Town (Administrative Center)","Langthil","Drakteng","Tangsibji","Nubi","Korphu"],"Tsirang":["Damphu (Administrative Center)","Mendrelgang","Kilkhorthang","Goseling","Rangthangling","Barshong"],"Wangdue Phodrang":["Wangdue Phodrang Town (Administrative Center)","Bajo","Nobding","Phadjoding","Gaselo","Gangtey (Phobjikha Valley)"],"Zhemgang":["Zhemgang Town (Administrative Center)","Panbang","Tingtibi","Bardo","Goshing","Trong"]},"Bolivia":{"Beni":["Trinidad (Capital)","Riberalta","Guayaramerín","San Borja","Rurrenabaque","Santa Ana del Yacuma","Reyes","San Ignacio de Moxos"],"Chuquisaca":["Sucre (Constitutional Capital of Bolivia)","Camargo","Monteagudo","Padilla","Tarabuco","Muyupampa","Villa Abecia","Zudáñez"],"Cochabamba":["Cochabamba City (Capital)","Quillacollo","Sacaba","Tiquipaya","Colcapirhua","Punata","Cliza","Villa Tunari (Chapare region)","Aiquile","Mizque"],"La Paz":["La Paz City (Seat of Government and Capital)","El Alto (Largest city in the department)","Viacha","Caranavi","Achacachi","Copacabana (on Lake Titicaca)","Coroico (Yungas region)","Chulumani","Patacamaya"],"Oruro":["Oruro City (Capital)","Huanuni","Challapata","Caracollo","Machacamarca","Sabaya","Salinas de Garci Mendoza"],"Pando":["Cobija (Capital)","Porvenir","Puerto Rico","Gonzalo Moreno","El Sena","San Lorenzo"],"Potosí":["Potosí City (Capital)","Uyuni (Gateway to the Salt Flats)","Tupiza","Villazón (Border town)","Llallagua","Uncía","Betanzos","Colchani"],"Santa Cruz":["Santa Cruz de la Sierra (Capital and largest city)","Montero","Warnes","La Guardia","El Torno","Camiri","San Ignacio de Velasco","Puerto Suárez","Samaipata","Vallegrande"],"Tarija":["Tarija City (Capital)","Yacuiba","Bermejo","Villa Montes","San Lorenzo","Entre Ríos","Padcaya"]},"Bosnia and Herzegovina":{"Federation of Bosnia and Herzegovina":["Sarajevo (Capital City / Canton 9)","Tuzla (Canton 3)","Zenica (Canton 4)","Mostar (Canton 7)","Bihać (Canton 1)","Travnik (Canton 6)","Livno (Canton 10)","Široki Brijeg (Canton 8)","Orašje (Canton 2)","Goražde (Canton 5)","Neum (Coastal town)","Međugorje"],"Republika Srpska":["Banja Luka (Administrative Center)","Bijeljina","Istočno Sarajevo (East Sarajevo)","Prijedor","Doboj","Trebinje","Zvornik","Gradiška","Foča","Višegrad"],"Brčko District":["Brčko City (Self-governing neutral administrative unit)","Gornji Rahić","Maoča","Bijela","Brezik"]},"Botswana":{"Central District":["Serowe (Capital / Largest village)","Palapye","Mahalapye","Selibe-Phikwe","Bobonong","Letlhakane","Orapa","Tonota","Tutume"],"Chobe District":["Kasane (Capital)","Kazungula","Pandamatenga","Kachikau","Kavimba","Lesoma"],"Ghanzi District":["Ghanzi (Capital)","Charles Hill","Dekar","New Xade","Ncojane","Karakubis"],"Kgalagadi District":["Tsabong (Capital)","Kang","Hukuntsi","Werda","Omaweneno","Middlepits","Bokspits"],"Kgatleng District":["Mochudi (Capital)","Bokaa","Artesia","Oodi","Morwa","Mmathubudukwane"],"Kweneng District":["Molepolole (Capital)","Mogoditshane","Thamaga","Gabane","Letlhakeng","Lentsweletau","Mmopane"],"North-East District":["Masunga (Capital)","Francistown (City / Administrative hub)","Tati Siding","Tsamaya","Ramokgwebana","Moroka"],"North-West District":["Maun (Capital / Gateway to Okavango)","Kasane (Historically grouped, now separate)","Shakawe","Gumare","Sehithwa","Tsau","Nxamasere"],"South-East District":["Ramotswa (Capital)","Gaborone (Capital City of Botswana)","Tlokweng","Otse","Mogobane"],"Southern District":["Kanye (Capital)","Jwaneng","Lobatse","Moshupa","Goodhope","Pitsane","Mabutsane"]},"Brazil":{"Acre":["Rio Branco (Capital City)","Cruzeiro do Sul","Sena Madureira","Tarauacá","Feijó","Brasiléia","Epitaciolândia","Xapuri"],"Alagoas":["Maceió (Capital City)","Arapiraca","Palmeira dos Índios","Rio Largo","Penedo","União dos Palmares","Marechal Deodoro","Maragogi"],"Amapá":["Macapá (Capital City)","Santana","Laranjal do Jari","Oiapoque (Border town)","Porto Grande","Mazagão","Amapá City"],"Amazonas":["Manaus (Capital City)","Parintins","Itacoatiara","Manacapuru","Coari","Tabatinga (Border town)","Tefé","Maués"],"Bahia":["Salvador (Capital City)","Feira de Santana","Vitória da Conquista","Camaçari","Juazeiro","Itabuna","Ilhéus","Porto Seguro","Barreiras"],"Ceará":["Fortaleza (Capital City)","Caucaia","Juazeiro do Norte","Maracanaú","Sobral","Crato","Itapipoca","Aquiraz","Jericoacoara"],"Distrito Federal (Federal District)":["Brasília (Capital City of Brazil)","Ceilândia","Taguatinga","Samambaia","Plano Piloto","Águas Claras","Guará","Gama"],"Espírito Santo":["Vitória (Capital City)","Vila Velha","Serra","Cariacica","Cachoeiro de Itapemirim","Linhares","São Mateus","Guarapari"],"Goiás":["Goiânia (Capital City)","Aparecida de Goiânia","Anápolis","Rio Verde","Luziânia","Águas Lindas de Goiás","Trindade","Catalão","Formosa","Caldas Novas"],"Maranhão":["São Luís (Capital City)","Imperatriz","Timon","Caxias","Codó","Açailândia","Bacabal","Balsas","Barreirinhas (Lençóis Maranhenses gateway)"],"Mato Grosso":["Cuiabá (Capital City)","Várzea Grande","Rondonópolis","Sinop","Tangará da Serra","Sorriso","Primavera do Leste","Barra do Garças","Cáceres"],"Mato Grosso do Sul":["Campo Grande (Capital City)","Dourados","Três Lagoas","Corumbá","Ponta Porã (Border town)","Naviraí","Nova Andradina","Bonito"],"Minas Gerais":["Belo Horizonte (Capital City)","Uberlândia","Contagem","Juiz de Fora","Betim","Montes Claros","Ribeirão das Neves","Uberaba","Governador Valadares","Ipatinga","Ouro Preto"],"Pará":["Belém (Capital City)","Ananindeua","Santarém","Marabá","Parauapebas","Castanhal","Abaetetuba","Altamira","Tucuruí"],"Paraíba":["João Pessoa (Capital City)","Campina Grande","Santa Rita","Patos","Bayeux","Sousa","Cajazeiras","Cabedelo"],"Paraná":["Curitiba (Capital City)","Londrina","Maringá","Ponta Grossa","Cascavel","Foz do Iguaçu (Iguazu Falls hub)","São José dos Pinhais","Paranaguá"],"Pernambuco":["Recife (Capital City)","Jaboatão dos Guararapes","Olinda","Caruaru","Petrolina","Paulista","Cabo de Santo Agostinho","Garanhuns","Fernando de Noronha (Archipelago district)"],"Piauí":["Teresina (Capital City)","Parnaíba","Picos","Floriano","Piripiri","Campo Maior","Oeiras"],"Rio de Janeiro":["Rio de Janeiro City (Capital City)","São Gonçalo","Duque de Caxias","Nova Iguaçu","Niterói","Campos dos Goytacazes","Belford Roxo","São João de Meriti","Petrópolis","Volta Redonda","Cabo Frio","Angra dos Reis"],"Rio Grande do Norte":["Natal (Capital City)","Mossoró","Parnamirim","São Gonçalo do Amarante","Macaíba","Caicó","Ceará-Mirim","Tibau do Sul (Pipa Beach area)"],"Rio Grande do Sul":["Porto Alegre (Capital City)","Caxias do Sul","Canoas","Pelotas","Santa Maria","Gravataí","Viamão","Novo Hamburgo","Passo Fundo","Rio Grande","Gramado"],"Rondônia":["Pôrto Velho (Capital City)","Ji-Paraná","Ariquemes","Cacoal","Vilhena","Jaru","Rolim de Moura"],"Roraima":["Boa Vista (Capital City)","Rorainópolis","Caracaraí","Pacaraima (Border town)","Cantá","Mucajaí"],"Santa Catarina":["Florianópolis (Capital City)","Joinville (Largest city)","Blumenau","São José","Chapecó","Criciúma","Itajaí","Balneário Camboriú","Lages"],"São Paulo":["São Paulo City (Capital City)","Guarulhos","Campinas","São Bernardo do Campo","Santo André","São José dos Campos","Osasco","Ribeirão Preto","Sorocaba","Santos","São José do Rio Preto"],"Sergipe":["Aracaju (Capital City)","Nossa Senhora do Socorro","Lagarto","Itabaiana","São Cristóvão","Estância","Tobias Barreto"],"Tocantins":["Palmas (Capital City)","Araguaína","Gurupi","Porto Nacional","Paraíso do Tocantins","Colinas do Tocantins","Guaraí"]},"Brunei":{"Belait":["Kuala Belait (Administrative Center)","Seria (Oil hub town)","Sungai Liang","Mumong","Panaga","Labi","Sukang","Melilas","Bukit Sawat"],"Brunei-Muara":["Bandar Seri Begawan (Capital City of Brunei)","Muara Town (Main port)","Gadong","Kiulap","Berakas (Location of Brunei International Airport)","Sengkurong","Jerudong (Home to Jerudong Park)","Kampong Ayer (The Water Village)","Lambak","Rimba","Mentiri"],"Temburong":["Bangar (Administrative Center)","Labu","Batu Apoi","Amo","Bukok","Ulu Temburong (National Park area)"],"Tutong":["Tutong Town (Administrative Center)","Pekan Tutong","Keriam","Telisai","Tanjong Maya","Kiudang","Lamunin","Rambai","Ukong"]},"Bulgaria":{"Blagoevgrad":["Blagoevgrad City (Administrative Center)","Sandanski","Petrich","Gotse Delchev","Razlog","Bansko (Major ski resort)","Hadzhidimovo","Kresna"],"Burgas":["Burgas City (Administrative Center)","Nesebar (including Sunny Beach)","Pomorie","Sozopol","Karnobat","Aytos","Tsarevo","Primorsko","Malko Tarnovo"],"Dobrich":["Dobrich City (Administrative Center)","Balchik","Kavarna","Shabla","General Toshevo","Tervel","Krushari"],"Gabrovo":["Gabrovo City (Administrative Center)","Sevlievo","Tryavna","Dryanovo"],"Haskovo":["Haskovo City (Administrative Center)","Dimitrovgrad","Svilengrad (Border town)","Harmanli","Ivaylovgrad","Lyubimets","Topolovgrad"],"Kardzhali":["Kardzhali City (Administrative Center)","Momchilgrad","Krumovgrad","Ardino","Kirkovo","Dzhebel","Chernoochene"],"Kyustendil":["Kyustendil City (Administrative Center)","Dupnitsa","Bobov Dol","Sapareva Banya","Rila","Kocherinovo"],"Lovech":["Lovech City (Administrative Center)","Troyan","Teteven","Lukovit","Yablanitsa","Letnitsa","Apriltsi"],"Montana":["Montana City (Administrative Center)","Lom (Major Danube port)","Berkovitsa","Varshets","Chiprovtsi","Valchedram"],"Pazardzhik":["Pazardzhik City (Administrative Center)","Velingrad (Spa capital)","Panagyurishte","Peshera","Batak","Septemvri","Bratsigovo","Strelcha"],"Pernik":["Pernik City (Administrative Center)","Radomir","Breznik","Tran","Zemen"],"Pleven":["Pleven City (Administrative Center)","Cherven Bryag","Levski","Belene","Knezha","Nikopol","Dolna Mitropoliya"],"Plovdiv":["Plovdiv City (Administrative Center)","Asenovgrad","Karlovo","Rakovski","Parvomay","Stamboliyski","Krichim","Hisarya","Sopot","Sadovo"],"Razgrad":["Razgrad City (Administrative Center)","Isperih","Kubrat","Loznitsa","Tsar Kaloyan"],"Ruse":["Ruse City (Administrative Center / Major Danube port)","Byala","Vetovo","Slivo Pole","Borovo","Dve Mogili"],"Shumen":["Shumen City (Administrative Center)","Veliki Preslav (Ancient capital)","Novi Pazar","Pliska (Ancient capital)","Kaolinovo","Smyadovo"],"Silistra":["Silistra City (Administrative Center)","Tutrakan","Dulovo","Alfatar","Sitovo"],"Sliven":["Sliven City (Administrative Center)","Nova Zagora","Kotel","Tvarditsa"],"Smolyan":["Smolyan City (Administrative Center)","Devin","Chepelare (Pamporovo resort area)","Madan","Zlatograd","Rudozem","Banite"],"Sofia City (Sofia-grad)":["Sofia (Capital City of Bulgaria)","Bankya","Novi Iskar","Buhovo"],"Sofia Province":["Samokov (Borovets resort area)","Kostinbrod","Botevgrad","Ihtiman","Elin Pelin","Svoge","Slivnitsa","Godech","Etropole","Koprivshtitsa","Zlatitsa","Pirdop"],"Stara Zagora":["Stara Zagora City (Administrative Center)","Kazanlak (Rose Valley hub)","Chirpan","Radnevo","Galabovo","Pavel Banya","Gurkovo","Nikolaevo"],"Targovishte":["Targovishte City (Administrative Center)","Popovo","Omurtag","Opaka","Antonovo"],"Varna":["Varna City (Administrative Center / Maritime capital)","Provadiya","Devnya","Aksakovo","Beloslav","Dalgopol","Valchi Dol","Byala (Varna region)"],"Veliko Tarnovo":["Veliko Tarnovo City (Administrative Center / Historical capital)","Gorna Oryahovitsa","Svishtov (Danube port and university town)","Pavlikeni","Elena","Lyaskovets","Strazhitsa","Polski Trambesh"],"Vidin":["Vidin City (Administrative Center)","Belogradchik (Famous for rock formations)","Kula","Bregovo","Dunavtsi"],"Vratsa":["Vratsa City (Administrative Center)","Mezdra","Kozloduy (Nuclear power plant hub)","Oryahovo","Byala Slatina","Krivodol","Roman"],"Yambol":["Yambol City (Administrative Center)","Elhovo","Straldzha","Bolyarovo"]},"Burkina Faso":{"Boucle du Mouhoun":["Dédougou (Administrative Center)","Boromo","Tougan","Nouna","Toma","Solenzo","Safané"],"Cascades":["Banfora (Administrative Center)","Sindou","Niangoloko","Soubakaniédougou","Mangodara","Tiéfora"],"Centre":["Ouagadougou (Capital City of Burkina Faso)","Saaba","Komsilga","Koubri","Pabré","Tanghin-Dassouri"],"Centre-Est":["Tenkodogo (Administrative Center)","Koupéla","Garango","Pouytenga","Ouargaye","Bittou (Border town)"],"Centre-Nord":["Kaya (Administrative Center)","Kongoussi","Boulsa","Pissila","Tikaré","Barsalogho"],"Centre-Ouest":["Koudougou (Administrative Center)","Réo","Léo","Sapouy","Kokolologho","Sabié"],"Centre-Sud":["Manga (Administrative Center)","Kombissiri","Pô","Tiébélé (Famous for traditional painted Gurunsi architecture)","Nobéré","Ziou"],"Est":["Fada N'Gourma (Administrative Center)","Diapaga","Bogandé","Pama","Gayéri","Kantchari"],"Hauts-Bassins":["Bobo-Dioulasso (Administrative Center and second-largest city)","Houndé","Orodara","Toussiana","Lena","Faramana"],"Nord":["Ouahigouya (Administrative Center)","Titao","Yako","Gourcy","Séguénéga","Thiou"],"Plateau-Central":["Ziniaré (Administrative Center)","Boussé","Zorgho","Méguet","Absouya","Mogtédo"],"Sahel":["Dori (Administrative Center)","Djibo","Gorom-Gorom","Sebba","Bani","Markoye"],"Sud-Ouest":["Gaoua (Administrative Center)","Diébougou","Batié","Kampti","Dano","Ioba"]},"Burundi":{"Buhumuza":["Cankuzo (Administrative Center)","Ruyigi","Karuzi","Muyinga","Gisuru","Bweru","Mishiha"],"Bujumbura":["Bujumbura City (Former capital and largest economic hub)","Isare","Kabezi","Kanyosha","Mubimbi","Mukike","Mutimbuzi","Nyabiraba"],"Burunga":["Makamba (Administrative Center)","Bururi","Rumonge","Nyanza-Lac","Rutana","Mabanda","Kayogoro"],"Butanyerera":["Ngozi (Administrative Center)","Kayanza","Kirundo","Muyinga (Western sections)","Busiga","Marangara","Tangara"],"Gitega":["Gitega City (Political Capital City of Burundi)","Muramvya","Mwaro","Bubanza","Cibitoke","Gishubi","Giheta","Bugendana","Makebuko"]},"Cabo Verde":{"Boa Vista":["Sal Rei (Administrative Center)","Rabil","Fundo das Figueiras","Cabeça dos Tarrafes","Bofareira","Estância de Baixo"],"Brava":["Nova Sintra (Administrative Center)","Nossa Senhora do Monte","Furna (Main port)","Cachaço","Mato Grande"],"Maio":["Porto Inglês (Administrative Center / Cidade do Maio)","Calheta","Cascabulho","Barreiro","Figueira da Horta","Morro"],"Mosteiros":["Mosteiros (Administrative Center / Igreja)","Feijoal","Relva","Achada Grande","Corvo"],"Paul":["Pombas (Administrative Center)","Janela","Eito","Passagem","Cabo da Ribeira"],"Porto Novo":["Porto Novo Town (Administrative Center)","Alto Mira","Ribeira da Cruz","Tarrafal de Monte Trigo","Chã de Morte"],"Praia":["Praia City (Capital City of Cabo Verde)","Achada Santo António","Palmarejo","Platô (Historical Center)","Fazenda","Tira Chapéu"],"Ribeira Brava":["Ribeira Brava Town (Administrative Center)","Preguiça","Juncalinho","Carriçal","Fajã de Baixo"],"Ribeira Grande":["Ribeira Grande Town (Administrative Center / Povoação)","Ponta do Sol","Coculi","Garça de Cima","Chã de Igreja"],"Ribeira Grande de Santiago":["Cidade Velha (Administrative Center / Historical Capital)","Santana","Salineiro","Calabaceira"],"Sal":["Espargos (Administrative Center)","Santa Maria (Major tourism hub)","Palmeira (Main port)","Pedra de Lume","Murdeira"],"Santa Catarina":["Assomada (Administrative Center)","Boa Entrada","Chã de Tanque","Ribeira da Barca","Achada Leite"],"Santa Catarina do Fogo":["Cova Figueira (Administrative Center)","Chã das Caldeiras (Located inside the volcanic crater)","Estância Roque","Achada Furna"],"Santa Cruz":["Pedra Badejo (Administrative Center)","Achada Fazenda","Cancelo","Rebelo","Chã de Silva"],"São Domingos":["São Domingos Town (Administrative Center)","Praia Baixo","Água de Gato","Milho Branco","Rui Vaz"],"São Filipe":["São Filipe Town (Administrative Center)","Ponta Verde","Patim","São Jorge","Curral Grande"],"São Lourenço dos Órgãos":["João Teves (Administrative Center)","Órgãos Pequeno","Longueira","Mato Raia"],"São Miguel":["Calheta de São Miguel (Administrative Center)","Achada Monte","Principal","Pilão Cão"],"São Salvador do Mundo":["Achada Igreja (Administrative Center)","Picos","Babosa","Jalalo Ramos"],"São Vicente":["Mindelo (Administrative Center / Cultural Capital)","Baía das Gatas","São Pedro","Calhau","Lazareto"],"Tarrafal":["Tarrafal Town (Administrative Center)","Chão Bom","Achada Tenda","Ribeira da Prata"],"Tarrafal de São Nicolau":["Tarrafal de São Nicolau Town (Administrative Center)","Praia Branca","Ribeira Prata","Hortelão"]},"Cambodia":{"Phnom Penh (Autonomous Municipality)":["Chamkar Mon","Doun Penh","Prampir Makara","Tuol Kork","Dangkao","Meanchey","Russey Keo","Sen Sok","Pou Senchey","Chroy Changvar","Prek Pnov","Chbar Ampov"],"Banteay Meanchey":["Serei Saophoan (Administrative Center)","Poipet (Major border town and casino hub)","Mongkol Borei","Thmar Pouk","Preah Netr Preah","Phnom Srok","Malai","Svay Chek"],"Battambang":["Battambang City (Administrative Center)","Thmar Koul","Moung Ruessei","Sangkae","Banan","Kamrieng","Phnom Proek","Sampov Loun","Bavel"],"Kampong Cham":["Kampong Cham City (Administrative Center)","Prey Chhor","Cheung Prey","Batheay","Kang Meas","Chamkar Leu","Srei Santhor","Koh Sotin"],"Kampong Chhnang":["Kampong Chhnang City (Administrative Center)","Boribor","Rolea B'ier","Tuek Phos","Kampong Tralach","Chol Kiri","Sameakki Mean Chey"],"Kampong Speu":["Chbar Mon (Administrative Center)","Oudong (Ancient capital city)","Samraong Tong","Kong Pisei","Phnom Sruoch","Thpong","Aural (Home to Cambodia's highest peak)"],"Kampong Thom":["Stueng Saen (Administrative Center)","Baray","Kampong Svay","Sandan","Santuk","Stoung","Prasat Sambour (Sambor Prei Kuk area)"],"Kampot":["Kampot City (Administrative Center)","Chhouk","Angkor Chey","Banteay Meas","Kampong Trach","Tuek Chhou","Dang Tong"],"Kandal":["Ta Khmau (Administrative Center)","Kien Svay","Muk Kampoul","Angk Snuol","Ponhea Leu","S'ang","Koh Thom","Lvea Aem"],"Kep":["Kep City (Administrative Center)","Damnak Chang'aeur"],"Koh Kong":["Khemarak Phoumin (Administrative Center / Koh Kong City)","Sre Ambel","Thma Bang","Botum Sakor","Mondol Seima"],"Kratié":["Kratié City (Administrative Center / Mekong dolphin site)","Chhloung","Snuol","Prek Prasab","Sambour","Chetr Borei"],"Mondulkiri":["Sen Monorom (Administrative Center)","Koh Nhek","Keo Seima","O'Reang","Pechr Chenda"],"Oddar Meanchey":["Samraong (Administrative Center)","Anlong Veng (Historical Khmer Rouge stronghold)","Chong Kal","Banteay Ampil","Trapeang Prasat"],"Pailin":["Pailin City (Administrative Center)","Sala Krau"],"Preah Sihanouk":["Sihanoukville (Administrative Center / Port city)","Koh Rong (Island commune)","Prey Nob","Stueng Hav","Kampong Seila"],"Preah Vihear":["TBeng Meanchey (Administrative Center)","Choam Ksant (Near the Preah Vihear Temple)","Chheb","Rovieng","Kulen","Sangkum Thmei"],"Prey Veng":["Prey Veng City (Administrative Center)","Peam Ro","Ba Phnom","Kamchay Mear","Mesang","Pearang","Kampong Trabaek","Peam Chor"],"Pursat":["Pursat City (Administrative Center)","Krakor","Kandieng","Phnum Kravanh (Cardamom Mountains area)","Veal Veang","Bakan"],"Ratanakiri":["Banlung (Administrative Center)","Lumphat (Former capital)","O'Chum","Voen Sai","Ta Veng","Andong Meas"],"Siem Reap":["Siem Reap City (Administrative Center / Angkor Wat gateway)","Kralanh","Puok","Sotnikum","Prasat Bakong","Chi Kraeng","Banteay Srei","Svay Leu"],"Stung Treng":["Stung Treng City (Administrative Center)","Thala Barivat","Siem Bouk","Siem Pang","Sesan"],"Svay Rieng":["Svay Rieng City (Administrative Center)","Bavet (Major international border crossing)","Rumduol","Romeas Haek","Svay Chrum","Chantrea"],"Takéo":["Doun Kaev (Administrative Center)","Angkor Borei (Ancient historical site)","Bati (Tonle Bati area)","Kirivong","Prey Kabbas","Tram Kak","Koh Andaet"],"Tboung Khmum":["Suong (Administrative Center)","Tboung Khmum Town","Memot","Ponhea Kraek","Dambae","Kroch Chhmar"]},"Cameroon":{"Adamawa":["Ngaoundéré (Regional Capital and major transport hub)","Banyo","Tibati","Meiganga","Tignère","Bankim"],"Centre":["Yaoundé (Regional Capital and National Capital of Cameroon)","Mbalmayo","Bafia","Obala","Monatélé","Eseka","Mfou","Akonolinga"],"East":["Bertoua (Regional Capital)","Batouri","Yokadouma","Abong-Mbang","Belabo","Garoua-Boulaï (Major border town with Central African Republic)","Betare-Oya"],"Far North":["Maroua (Regional Capital)","Kousséri (Border city adjacent to N'Djamena, Chad)","Mokolo","Yagoua","Mora","Kaélé","Waza (Gateway to the famous national park)"],"Littoral":["Douala (Regional Capital and Cameroon's largest city / primary economic port)","Edéa (Major industrial and hydroelectric hub)","Nkongsamba","Loum","Mbanga","Yabassi","Mouanko"],"North":["Garoua (Regional Capital and major river port)","Guíder","Figuil","Poli","Rey Bouba","Lagdo","Pitoa"],"Northwest":["Bamenda (Regional Capital)","Kumbo","Wum","Nkambe","Mbengwi","Ndop","Fundong"],"South":["Ebolowa (Regional Capital)","Kribi (Major deep-sea port and coastal resort town)","Sangmélima","Ambam","Campo","Djoum","Ma'an"],"Southwest":["Buea (Regional Capital, located at the foot of Mount Cameroon)","Limbe (Coastal city, major oil refining and botanical center)","Kumba (Largest commercial hub in the region)","Mamfe","Mundemba","Fontem","Tiko"],"West":["Bafoussam (Regional Capital)","Foumban (Historic cultural capital of the Bamum Kingdom)","Dschang (Major university town)","Mbouda","Bangangté","Baham","Bafang","Bandjoun"]},"Canada":{"Alberta":["Calgary (Largest city and major economic/financial hub)","Edmonton (Provincial Capital and major northern supply gateway)","Red Deer","Lethbridge","Medicine Hat","St. Albert","Grande Prairie","Fort McMurray (Major urban service area for the oil sands)"],"British Columbia":["Vancouver (Largest city and major Pacific port hub)","Victoria (Provincial Capital, located on Vancouver Island)","Surrey","Burnaby","Kelowna (Major hub of the Okanagan Valley)","Nanaimo","Prince George (Major northern regional hub)","Kamloops"],"Manitoba":["Winnipeg (Provincial Capital and largest city)","Brandon (Second-largest city and agricultural hub)","Steinbach","Thompson (Major northern regional hub)","Portage la Prairie","Winkler","Selkirk","Churchill (Famous Arctic port and ecotourism hub)"],"New Brunswick":["Moncton (Largest metropolitan area and major transportation hub)","Saint John (Major industrial port city)","Fredericton (Provincial Capital and educational hub)","Dieppe","Miramichi","Edmundston","Bathurst","Campbellton"],"Newfoundland and Labrador":["St. John's (Provincial Capital and largest economic/cultural hub)","Mount Pearl","Corner Brook (Major hub on the west coast of Newfoundland)","Conception Bay South","Grand Falls-Windsor","Gander (Historic aviation hub)","Happy Valley-Goose Bay (Major hub in Labrador)","Labrador City"],"Nova Scotia":["Halifax (Provincial Capital and major Atlantic economic/maritime hub)","Sydney (Major hub of Cape Breton Island)","Dartmouth (Part of the Halifax Regional Municipality)","Truro (Known as the \"Hub of Nova Scotia\")","New Glasgow","Kentville","Amherst","Yarmouth"],"Ontario":["Toronto (Provincial Capital and largest city in Canada)","Ottawa (National Capital of Canada)","Mississauga","Hamilton (Major industrial and port city)","London","Kitchener / Waterloo (Major technology and university hub)","Windsor (Major border hub adjacent to Detroit)","Thunder Bay (Major northwestern port and regional hub)"],"Prince Edward Island":["Charlottetown (Provincial Capital and largest city)","Summerside (Second-largest city)","Stratford","Cornwall","Three Rivers","Kensington","Souris","Alberton"],"Quebec":["Montreal (Largest city in the province and major cultural/economic hub)","Quebec City (Provincial Capital and historic fortified city)","Laval","Gatineau (Part of the National Capital Region, adjacent to Ottawa)","Longueuil","Sherbrooke (Major hub of the Eastern Townships)","Saguenay","Trois-Rivières"],"Saskatchewan":["Saskatoon (Largest city and major economic/university hub)","Regina (Provincial Capital)","Prince Albert (Gateway to the north)","Moose Jaw","Yorkton","Swift Current","North Battleford","Lloydminster (Border city shared with Alberta)"],"Northwest Territories":["Yellowknife (Territorial Capital and largest economic hub)","Hay River","Inuvik (Major hub north of the Arctic Circle)","Fort Smith","Behchokǫ̀","Fort Simpson","Tuktoyaktuk"],"Nunavut":["Iqaluit (Territorial Capital and largest community, located on Baffin Island)","Rankin Inlet (Major transportation and administrative hub for the Kivalliq region)","Cambridge Bay (Administrative hub for the Kitikmeot region)","Arviat","Igloolik","Pond Inlet","Pangnirtung"],"Yukon":["Whitehorse (Territorial Capital and home to the vast majority of Yukon's population)","Dawson City (Historic heart of the Klondike Gold Rush)","Watson Lake","Haines Junction (Gateway to Kluane National Park)","Carmacks","Teslin","Old Crow (Sole fly-in community in the territory)"]},"Central African Republic":{"Bamingui-Bangoran":["Ndélé (Prefecture Capital)","Bamingui","Mvane","Kaga-Nze"],"Bangui (Capital city prefecture)":["First Arrondissement (Central administrative district)","Second Arrondissement","Third Arrondissement (Includes the commercial district of KM5)","Fourth Arrondissement","Fifth Arrondissement","Sixth Arrondissement","Seventh Arrondissement","Eighth Arrondissement"],"Basse-Kotto":["Mobaye (Prefecture Capital)","Alindao (Major commercial hub)","Kembé","Mingala","Zangba","Satéma"],"Haute-Kotto":["Bria (Prefecture Capital / Major diamond mining center)","Ouadda","Yalinga","Sam-Ouandja"],"Haut-Mbomou":["Obo (Prefecture Capital)","Zémio","Rafai","Djéma","Bambouti (Border town near South Sudan)"],"Kémo":["Sibut (Prefecture Capital / Major transit junction)","Dekoa","Mala","Ndjoukou"],"Lim-Pendé":["Paoua (Prefecture Capital)","Ngaoundaye","Ndim","Taley","Béb倾向 (Bébura)"],"Lobaye":["Mbaiki (Prefecture Capital / Coffee and timber hub)","Boda (Major mining town)","Mongoumba (River port near the DRC border)","Boganangone","Pissa","Boganda"],"Mambéré":["Bouar (Prefecture Capital / Strategic transport and military hub)","Baboua (Border post near Cameroon)","Abba","Niem-Yéléwa"],"Mambéré-Kadéï":["Berbérati (Prefecture Capital / CAR's third-largest city)","Gamboula (Important border crossing with Cameroon)","Amada-Gaza","Sosso-Nakombo","Dédé-Makouba"],"Mbomou":["Bangassou (Prefecture Capital / Key river border town with DRC)","Ouango","Bakouma (Known for uranium deposits)","Gambo","Nzangba"],"Nana-Grébizi (Economic prefecture)":["Kaga-Bandoro (Prefecture Capital)","Mbrès","Ndenga","Ouandago"],"Nana-Mambéré":["Baoro (Prefecture Capital)","Bouar (Historically linked; note that administrative restructuring places Bouar as the capital of Mambéré, while Baoro leads Nana-Mambéré)","Gallo","Bocaranga (Bordering area)"],"Ombella-M'Poko":["Boali (Prefecture Capital / Famous for the Boali waterfalls and hydroelectric dams)","Damara","Yaloké (Major cattle trading and mining hub)","Bossembélé (Key highway intersection)","Bogangolo","Bimbo (Large city closely mirroring the Bangui metropolitan area)"],"Ouaka":["Bambari (Prefecture Capital / Major regional commercial city)","Ippy","Grimari","Bakala","Kouango (River port on the Ubangi River)"],"Ouham":["Bossangoa (Prefecture Capital)","Markounda (Border town near Chad)","Nana-Bakassa","Bouca","Benzambé"],"Ouham-Fafa":["Batangafo (Prefecture Capital)","Bouca (Southern sector)","Kabo (Important northern transit hub near Chad)","Sido"],"Ouham-Pendé":["Bozoum (Prefecture Capital)","Bocaranga (Major regional market town)","Koui","Bossemptélé (Major transit hub on the RN3)"],"Sangha-Mbaéré (Economic prefecture)":["Nola (Prefecture Capital / Timber and diamond hub located at the confluence forming the Sangha River)","Bayanga (Gateway to the Dzanga-Sangha Protected Areas)","Bambio","Salo (River port terminal)"],"Vakaga":["Birao (Prefecture Capital / Remote northern hub near Chad and Sudan borders)","Ouanda Djallé","Am Dafok (Border post with Sudan)","Gordil"]},"Chad":{"Barh El Gazel":["Moussoro (Provincal Capital / Major crossroads hub)","Salal","Michemire","Mandjoura","Chadra"],"Batha":["Ati (Provincial Capital)","Oum Hadjer","Yao (Located near Lake Fitri)","Am Sack","Assinet","Haraze Djombo Kibit"],"Borkou":["Faya-Largeau (Provincial Capital / Largest oasis in northern Chad)","Kouba Olanga","Yarda","Tigui","Kirdimi"],"Chari-Baguirmi":["Massenya (Provincial Capital / Historic capital of the Baguirmi Kingdom)","Mandélia","Dourbali","Bousso","Lougoun"],"Ennedi-Est":["Amdjarass (Provincial Capital)","Bahaï (Important border town near Sudan)","Bao","Kaoura","Mourdi"],"Ennedi-Ouest":["Fada (Provincial Capital / Famous for its desert canyon and guelta)","Gouro","Kalait","Ounianga Kébir (Gateway to the Lakes of Ounianga UNESCO site)","Nohi"],"Guéra":["Mongo (Provincial Capital)","Bitkine","Melfi","Mangalmé","Baro","Oum Hadjer (Southern sector border)"],"Hadjer-Lamis":["Massakory (Provincial Capital)","Bokoro","Ngama","Massaguet","Mani (Border town near Cameroon)"],"Kanem":["Mao (Provincial Capital)","Mondo","Nokou","Rig Rig","Wadjigui"],"Lac":["Bol (Provincial Capital / Located on the shores of Lake Chad)","Liwa","Ngouri","Bagasola","Doum Doum"],"Logone Occidental":["Moundou (Provincial Capital / Chad's second-largest city and industrial hub)","Beinamar","Benoye","Krim Krim","Beladjia"],"Logone Oriental":["Doba (Provincial Capital / Center of Chad's oil industry)","Goré","Baïbokoum","Bébédjia","Laramanaye"],"Mandoul":["Koumra (Provincial Capital)","Moïssala","Goundi","Bedjondo","Peni"],"Mayo-Kebbi Est":["Bongor (Provincial Capital / Major agricultural hub on the Logone River)","Gounou Gaya","Fianga","Guelendeng","Yagoua (Border transit sector)"],"Mayo-Kebbi Ouest":["Pala (Provincial Capital / Known for gold and mining exploration prospects)","Léré","Binder","Gagal","Torrock"],"Moyen-Chari":["Sarh (Provincial Capital / Major southern commercial city)","Koumogo","Kyabé","Maro","Balimba"],"N'Djamena (Capital City)":["1st Arrondissement (Farcha sector)","2nd Arrondissement (Moursal / Commercial zone)","3rd Arrondissement (Administrative and diplomatic core)","4th Arrondissement","5th Arrondissement","6th Arrondissement","7th Arrondissement","8th Arrondissement","9th Arrondissement (Walia sector / Southern gateway)","10th Arrondissement"],"Ouaddai":["Abéché (Provincial Capital / Major historical, educational, and eastern hub)","Am Dam","Chokoyan","Abougoudam","Bourtaïl"],"Salamat":["Am Timan (Provincial Capital)","Haraze","Abou-Deïa","Mangueigne"],"Sila":["Goz Beïda (Provincial Capital)","Koukou Angarana","Tissi (Tri-border area near Sudan and CAR)","Ade"],"Tandjilé":["Laï (Provincial Capital)","Kélo (Largest commercial town in the province)","Benoye (Eastern boundary sector)","Béré","Dafra"],"Tibesti":["Bardaï (Provincial Capital / Located in the Tibesti Mountains)","Zouar","Aouzou","Wour","Sherda"],"Wadi Fira":["Biltine (Provincial Capital)","Guéréda","Iriba","Matadjana","Tiné"]},"Chile":{"Antofagasta":["Antofagasta (Regional Capital)","Calama (Major mining hub / gateway to San Pedro de Atacama)","Tocopilla","Mejillones","Taltal","San Pedro de Atacama","María Elena"],"Araucanía":["Temuco (Regional Capital)","Padre Las Casas","Angol","Villarrica (Major lakeside tourism hub)","Pucón (Famous adventure tourism hub)","Victoria","Lautaro","Collipulli"],"Arica and Parinacota":["Arica (Regional Capital and major port city)","Putre","General Lagos (Visviri)","Camarones (Cuviza)"],"Atacama":["Copiapó (Regional Capital)","Vallenar","Caldera (Major port and beach destination)","Chañaral","Diego de Almagro","Huasco","Tierra Amarilla"],"Aysén":["Coyhaique (Regional Capital)","Puerto Aysén","Chile Chico","Cochrane","Puerto Cisnes","Melinka","Tortel (Caleta Tortel)","Villa Amengual"],"Biobío":["Concepción (Regional Capital and major metropolitan hub)","Talcahuano (Major naval port city)","Los Ángeles","Coronel","Chiguayante","San Pedro de la Paz","Hualpén","Mulchén"],"Coquimbo":["La Serena (Regional Capital)","Coquimbo (Major port city bordering La Serena)","Ovalle","Illapel","Vicuña (Heart of the Elqui Valley)","Salamanca","Los Vilos","Andacollo"],"Los Lagos":["Puerto Montt (Regional Capital and major salmon industry hub)","Osorno","Castro (Capital of Chiloé Island)","Puerto Varas (Major lakeside tourism destination)","Ancud (Chiloé)","Quellón (Southern terminus of the Pan-American Highway)","Purranque","Frutillar"],"Los Ríos":["Valdivia (Regional Capital)","La Unión","Río Bueno","Panguipulli","Paillaco","Los Lagos City","Mariquina","Futrono"],"Magallanes":["Punta Arenas (Regional Capital and major sub-Antarctic hub)","Puerto Natales (Gateway to Torres del Paine National Park)","Porvenir (Tierra del Fuego)","Puerto Williams (Southernmost city in the world)"],"Maule":["Talca (Regional Capital)","Curicó","Linares","Constitución (Major coastal forestry and port city)","Cauquenes","San Javier","Molina","Parral"],"Metropolitan Region of Santiago":["Santiago (National Capital of Chile)","Puente Alto","Maipú","La Florida","San Bernardo","Las Condes","Melipilla","Talagante"],"Ñuble":["Chillán (Regional Capital)","San Carlos","Coihueco","Bulnes","Yungay","Quirihue","San Nicolás","Cobquecura"],"O'Higgins":["Rancagua (Regional Capital)","San Fernando","Pichilemu (World-famous surf capital of Chile)","Rengo","Machalí","Graneros","Santa Cruz (Heart of the Colchagua Valley wine country)","San Vicente de Tagua Tagua"],"Tarapacá":["Iquique (Regional Capital and major tax-free port city)","Alto Hospicio","Pozo Almonte","Pica","Huara","Camiña"],"Valparaíso":["Valparaíso (Regional Capital, major historical port, and legislative seat)","Viña del Mar (Major coastal resort city)","Quilpué","Villa Alemana","San Antonio (Chile's busiest commercial freight port)","Quillota","Los Andes","San Felipe","Hanga Roa (Capital and sole town of Easter Island / Rapa Nui)"]},"China":{"Anhui":["Hefei (Provincial Capital)","Wuhu (Major river port and industrial hub)","Bengbu (Key northern railway junction)","Anqing","Ma'anshan (Major steel manufacturing center)","Huainan (Coal mining hub)","Huangshan City (Gateway to the famous Mount Huang / Yellow Mountain)","Bozhou (Historical hub for traditional Chinese medicine)"],"Fujian":["Fuzhou (Provincial Capital)","Xiamen (Major coastal city and Special Economic Zone)","Quanzhou (Historic maritime Silk Road port)","Zhangzhou","Putian","Ningde (Major electric vehicle battery manufacturing hub)","Sanming","Longyan"],"Gansu":["Lanzhou (Provincial Capital / Major transport and petrochemical hub on the Yellow River)","Tianshui","Baiyin","Wuwei (Historic Silk Road oasis town)","Zhangye (Famous for the Danxia landforms)","Jiuquan (Aerospace hub / satellite launch center area)","Dunhuang (Home of the historic Mogao Caves)","Pingliang"],"Guangdong":["Guangzhou (Provincial Capital / Major historical and commercial megacity)","Shenzhen (Global technology and financial hub / Special Economic Zone)","Dongguan (Major manufacturing hub)","Foshan","Shantou","Zhuhai (Bordering Macau)","Huizhou","Zhanjiang (Major southern naval port)"],"Guizhou":["Guiyang (Provincial Capital / Major big data and tech infrastructure hub)","Zunyi (Historic political site)","Liupanshui","Anshun (Gateway to Huangguoshu Waterfall)","Bijie","Tongren","Kaili","Xingyi"],"Hainan":["Haikou (Provincial Capital / Located on the northern coast)","Sanya (Major tropical resort and beach destination)","Danzhou","Sansha (Administrative center for South China Sea islands)","Qionghai","Wenchang (Location of the Wenchang Spacecraft Launch Site)","Wanning","Orient"],"Hebei":["Shijiazhuang (Provincial Capital)","Tangshan (Major heavy industrial and port city)","Baoding (Historical regional center)","Handan","Qinhuangdao (Major coastal port and resort town)","Zhangjiakou (Co-host of the 2022 Winter Olympics)","Chengde (Location of the historic Imperial Summer Resort)","Cangzhou"],"Heilongjiang":["Harbin (Provincial Capital / Famous for its winter Ice and Snow Festival)","Daqing (Major domestic oil industry hub)","Qiqihar","Mudanjiang","Jiamusi","Jixi","Hegang","Heihe (Border city adjacent to Blagoveshchensk, Russia)"],"Henan":["Zhengzhou (Provincial Capital / Major central logistics and transport hub)","Luoyang (Ancient capital city / Home of the Longmen Grottoes)","Kaifeng (Historical northern Song capital)","Nanyang","Anyang (Historic site of the ancient Shang capital Yin)","Xinxiang","Pingdingshan","Jiaozuo"],"Hubei":["Wuhan (Provincial Capital / Massive transport, educational, and industrial megacity)","Xiangyang (Historic walled fortress city)","Yichang (Gateway to the Three Gorges Dam)","Jingzhou","Shiyan (Major automotive manufacturing center)","Huangshi","Xiaogan","Xianning"],"Hunan":["Changsha (Provincial Capital)","Hengyang","Zhuzhou (Major locomotive manufacturing and rail hub)","Xiangtan","Yueyang (Located on Dongting Lake)","Changde","Yiyang","Zhangjiajie (Famous for its towering quartz-sandstone pillars)"],"Jiangsu":["Nanjing (Provincial Capital / Major historical, cultural, and educational center)","Suzhou (Major economic hub famous for its classical gardens and canals)","Wuxi","Changzhou","Nantong","Xuzhou (Major transport and machinery manufacturing hub in the north)","Yangzhou","Lianyungang (Major eastern seaport terminal)"],"Jiangxi":["Nanchang (Provincial Capital)","Ganzhou (Largest city by area in the province / rare earths hub)","Jiujiang (Major port on the Yangtze River)","Jingdezhen (World-famous historic capital of porcelain)","Pingxiang","Xinyu","Yingtan","Shangrao"],"Jilin":["Changchun (Provincial Capital / Major automotive manufacturing industrial center)","Jilin City (Second-largest city in the province)","Siping","Liaoyuan","Tonghua","Baishan","Baicheng","Songyuan"],"Liaoning":["Shenyang (Provincial Capital / Historical industrial and cultural hub of the northeast)","Dalian (Major international seaport and financial hub on the Liaodong Peninsula)","Anshan (Major iron and steel production center)","Fushun","Benxi","Dandong (Major border city adjacent to Sinuiju, North Korea)","Jinzhou","Yingkou"],"Qinghai":["Xining (Provincial Capital / Gateway to the Tibetan Plateau)","Haidong","Golmud (Major transport oasis hub in the Qaidam Basin)","Delingha","Yushu","Tongren (Regong arts cultural center)","Mangya"],"Shaanxi":["Xi'an (Provincial Capital / Ancient imperial capital and home of the Terracotta Army)","Baoji","Xianyang (Adjacent to Xi'an / Ancient Qin capital site)","Weinan","Yan'an (Historic revolutionary base area)","Yulin (Major coal and energy producing center)","Hanzhong","Ankang"],"Shandong":["Jinan (Provincial Capital)","Qingdao (Major port city, industrial center, and home of Tsingtao Brewery)","Yantai","Weifang (Famous as the kite capital of the world)","Zibo (Historic cultural and industrial center)","Linyi","Jining (Historic cultural center near Qufu, the birthplace of Confucius)","Tai'an (Located at the foot of Mount Tai)"],"Shanxi":["Taiyuan (Provincial Capital / Major industrial and coal mining hub)","Datong (Famous for the Yungang Grottoes)","Changzhi","Jincheng","Yangquan","Linfen","Yuncheng","Xinzhou"],"Sichuan":["Chengdu (Provincial Capital / Major western economic, tech, and cultural megacity)","Mianyang (Major science and technology development hub)","Nanchong","Yibin (Located at the start of the Yangtze River / spirits production center)","Luzhou","Deyang","Leshan (Home of the Giant Buddha)","Zigong (Famous for its history of salt mining and lantern festivals)"],"Taiwan *(Claimed)*":["Taipei (Claimed as provincial capital / Main urban center)","Kaohsiung (Major southern port hub)","Taichung","Tainan (Historic cultural capital)","Hsinchu (Major global semiconductor technology hub)","Keelung","Taoyuan","Hualien"],"Yunnan":["Kunming (Provincial Capital / Known as the \"Spring City\")","Qujing","Yuxi","Baoshan","Lijiang (UNESCO World Heritage old town)","Pu'er (Famous for tea production)","Dali (Historic cultural capital of the Dali Kingdom)","Jinghong (Capital of the Xishuangbanna region)"],"Zhejiang":["Hangzhou (Provincial Capital / Major e-commerce, tech, and historical hub)","Ningbo (Major global container shipping port)","Wenzhou (Famous for its private enterprise and manufacturing history)","Shaoxing","Jiaxing","Jinhua (Includes the massive commodity hub of Yiwu)","Huzhou","Taizhou"],"Guangxi":["Nanning (Regional Capital / Gateway to Southeast Asian trade)","Guilin (World-famous for its dramatic karst limestone mountains and rivers)","Liuzhou (Major industrial and automotive manufacturing hub)","Wuzhou","Beihai (Major southern coastal port and resort city)","Qinzhou","Guigang","Yulin"],"Inner Mongolia":["Hohhot (Regional Capital)","Baotou (Major industrial and rare earths manufacturing hub)","Ordos (Known for modern urban infrastructure and coal mining)","Chifeng","Tongliao","Hulunbuir (Famous for its vast northern grasslands)","Wuhai","Manzhouli (China's busiest land border port with Russia)"],"Ningxia":["Yinchuan (Regional Capital)","Shizuishan","Wuzhong","Guyuan","Zhongwei (Located along the Yellow River / cloud computing hub)"],"Tibet (Xizang)":["Lhasa (Regional Capital / Spiritual and historical heart of Tibet)","Shigatse (Xigaze / Second-largest city)","Chamdo (Qamdo)","Nyingchi","Shannan (Lhoka)","Nagqu","Ngari (Shiquanhe)"],"Xinjiang":["Urumqi (Regional Capital / Major economic and transport hub of Central Asia)","Karamay (Major oil industry center)","Turpan (Famous for grape production and desert depressions)","Hami","Kashgar (Kashi / Historic Silk Road trading hub)","Aksu","Korla","Yining (Ghulja)"],"Beijing":["Dongcheng District","Xicheng District (Includes the financial street and government quarters)","Chaoyang District (Primary commercial, diplomatic, and CBD area)","Haidian District (Major technology and university hub / Zhongguancun)","Fengtai District","Shijingshan District","Shunyi District (Location of Beijing Capital International Airport)","Changping District"],"Chongqing":["Yuzhong District (The historic mountain-peninsula city center)","Jiangbei District","Nan'an District","Shapingba District (Educational and cultural center)","Jiulongpo District","Wanzhou District (Major regional hub on the upper Yangtze)","Fuling District","F陵 (Fuling) / Qianjiang District"],"Shanghai":["Huangpu District (Includes the historic Bund and Nanjing Road)","Pudong New Area (Major global financial, shipping, and tech hub)","Xuhui District","Jing'an District","Changning District","Hongkou District","Yangpu District","Minhang District"],"Tianjin":["Heping District (City center core)","Binhai New Area (Massive industrial development zone and coastal port)","Hexi District","Nankai District","Hedong District","Hebei District","X青 (Xiqing) District","Jinnan District"],"Hong Kong":["Central and Western District (Financial heart on Hong Kong Island)","Wan Chai","Eastern District","Yau Tsim Mong (Kowloon commercial and retail hub)","Sham Shui Po","Kwun Tong","Shatin (New Territories urban center)","Tuen Mun"],"Macau":["Sé (Central business and casino district)","Nossa Senhora de Fátima (Most populous northern district)","Santo António","São Lázaro","São Lourenço","Taipa (Island residential and university area)","Coloane (Island conservation and coastal village area)","Cotai (Reclaimed land zone hosting mega-resorts)"]},"Colombia":{"Amazonas":["Leticia (Department Capital / Southernmost tri-border town with Brazil and Peru)","Puerto Nariño (Eco-tourism hub on the Amazon River)","El Encanto","La Chorrera","Tarapacá","Puerto Santander"],"Antioquia":["Medellín (Department Capital / Major economic, innovation, and cultural hub)","Bello","Itagüí","Envigado","Rionegro (Location of José María Córdova International Airport)","Apartadó (Commercial hub of the Urabá banana-growing region)","Turbo (Major port town on the Gulf of Urabá)","Santa Fe de Antioquia (Historic colonial town)"],"Arauca":["Arauca City (Department Capital / Border town with Venezuela)","Saravena","Tame","Arauquita","Fortul","Puerto Rondón"],"Atlántico":["Barranquilla (Department Capital / Major maritime port and industrial city)","Soledad (Major metropolitan city adjacent to Barranquilla)","Malambo","Sabanalarga","Baranoa","Puerto Colombia (Historic port town)"],"Bogotá (Capital District)":["Localidad de Chapinero (Financial and commercial sector)","Localidad de Usaquén","Localidad de Santa Fe (Historic downtown core)","Localidad de Suba","Localidad de Kennedy","Localidad de Fontibón (Includes El Dorado International Airport area)","Localidad de Teusaquillo","Localidad de Engativá"],"Bolívar":["Cartagena (Department Capital / Historic fortified port city and UNESCO World Heritage site)","Magangué (Major fluvial port on the Magdalena River)","Turbaco","Arjona","El Carmen de Bolívar","Mompox (Santa Cruz de Mompox / Historic colonial river town)"],"Boyacá":["Tunja (Department Capital / High-altitude historical city)","Duitama (Major industrial and commercial hub)","Sogamoso (Industrial and mining center)","Chiquinquirá (Major religious pilgrimage site)","Villa de Leyva (Famous colonial village destination)","Paipa (Known for hot springs and tourism)"],"Caldas":["Manizales (Department Capital / Heart of the Coffee Axis)","La Dorada (Important logistics hub on the Magdalena River)","Chinchiná (Major coffee production hub)","Riosucio","Villamaría","Anserma"],"Caquetá":["Florencia (Department Capital / Gateway to the Amazon basin)","San Vicente del Caguán","Puerto Rico","Belén de los Andaquíes","El Doncello","Curillo"],"Casanare":["Yopal (Department Capital / Agricultural and oil industry hub)","Aguazul","Villanueva","Tauramena","Paz de Ariporo","Orocué"],"Cauca":["Popayán (Department Capital / Known as the \"White City\" for its colonial architecture)","Santander de Quilichao","Puerto Tejada","El Tambo","Patía (El Bordo)","Silvia (Cultural hub of the Misak indigenous community)"],"Cesar":["Valledupar (Department Capital / Cradle of Vallenato music)","Aguachica (Second-largest city in the department)","Agustín Codazzi","Bosconia (Major highway crossroads hub)","El Paso","La Jagua de Ibirico (Major coal mining center)"],"Chocó":["Quibdó (Department Capital / Located on the Atrato River in a high-rainfall rainforest zone)","Istmina","Condoto","Nuquí (Major Pacific eco-tourism and whale watching destination)","Bahía Solano","Acandí (Caribbean coastal gateway near the Darién Gap)"],"Córdoba":["Montería (Department Capital / Cattle-ranching capital of Colombia)","Lorica (Famous for its historic riverside marketplace architecture)","Sahagún","Cereté","Planeta Rica","Tierralta"],"Cundinamarca":["Soacha (Massive urban center directly adjacent to Bogotá)","Facatativá","Chía (Major suburban and commercial hub north of Bogotá)","Zipaquirá (Famous for its underground Salt Cathedral)","Girardot (Major weekend resort city on the Magdalena River)","Fusagasugá","Mosquera","Funza"],"Guainía":["Inírida (Department Capital / Located near the dramatic Cerros de Mavecure rock formations)","Barrancominas","Cacahual","Puerto Colombia (Guainía / Fluvial settlement)","Pana Pana"],"Guaviare":["San José del Guaviare (Department Capital / Transition town between the plains and the jungle)","Calamar","El Retorno","Miraflores"],"Huila":["Neiva (Department Capital / Major urban center of the Upper Magdalena valley)","Pitalito (Major high-quality coffee production hub)","Garzón","San Agustín (Famous for its pre-Columbian archaeological park)","Campoalegre","Rivera"],"La Guajira":["Riohacha (Department Capital / Coastal city near the Wayuu indigenous homelands)","Maicao (Major commercial border town near Venezuela)","Uribia (Indigenous capital of the Wayuu culture)","San Juan del Cesar","Fonseca","Albania (Location of the massive Cerrejón open-pit coal mine)"],"Magdalena":["Santa Marta (Department Capital / Historic Caribbean port and gateway to Tayrona National Park)","Ciénaga","El Banco (Historic fluvial port on the Magdalena River)","Fundación","Plato","Aracataca (Birthplace of novelist Gabriel García Márquez)"],"Meta":["Villavicencio (Department Capital / Main gateway to the Eastern Plains / Llanos Orientales)","Acacías","Granada","Puerto López (Geographical center area of Colombia)","Puerto Gaitán (Major oil and agribusiness hub)","La Macarena (Gateway to Caño Cristales, the \"River of Five Colors\")"],"Nariño":["Pasto (San Juan de Pasto / Department Capital at the foot of Galeras Volcano)","Tumaco (Major Pacific port and industrial town)","Ipiales (Border town with Ecuador / Home of Las Lajas Sanctuary)","Tuquerres","Samaniego","Barbacoas"],"Norte de Santander":["Cúcuta (Department Capital / Major international border city with Venezuela)","Ocaña (Historic city in the mountain region)","Pamplona (Historic university and colonial city)","Villa del Rosario (Birthplace of the 1821 Gran Colombia constitution)","Tibú (Center of the Catatumbo region)","Los Patios","El Zulia","Chinácota"],"Putumayo":["Mocoa (Department Capital)","Puerto Asís (Largest commercial hub in the department, on the Putumayo River)","Orito (Major oil industry center)","Sibundoy (Cultural hub in the Sibundoy Valley)","Puerto Leguízamo (Remote river port and naval base bordering Peru)","Villagarzón","San Francisco","Santiago"],"Quindío":["Armenia (Department Capital / Heart of the Coffee Axis)","Calarcá (Second-largest town in the department)","Salento (Famous colonial tourist town / Gateway to the Cocora Valley)","Quimbaya","Montenegro (Home of the National Coffee Park)","Filandia (Known for architecture and handicrafts)","La Tebaida","Circasia"],"Risaralda":["Pereira (Department Capital and largest city in the Coffee Axis)","Dosquebradas (Industrial city adjacent to Pereira)","Santa Rosa de Cabal (Famous for hot springs and gastronomy)","Belén de Umbría","Marsella (Known for preserved architectural heritage)","Quinchía","Virginia","Santuario"],"San Andrés y Providencia":["San Andrés City (Department Capital / Located on the north end of San Andrés Island)","San Luis (Traditional Afro-Caribbean neighborhood area on San Andrés)","La Loma (Historic village on the highest point of San Andrés)","Santa Isabel (Administrative and commercial hub of Providencia Island)","Bottom House (Providencia Island)","Mountain (Providencia Island)"],"Santander":["Bucaramanga (Department Capital / Major financial and educational hub)","Floridablanca (Part of the Bucaramanga metropolitan area)","Girón (Preserved colonial national monument town)","Piedecuesta","Barrancabermeja (Home to Colombia's largest petroleum refinery on the Magdalena River)","San Gil (Adventure sports capital of Colombia)","Socorro (Historic cradle of the Comunero Revolt)","Barichara (Widely considered one of Colombia's most beautiful colonial villages)"],"Sucre":["Sincelejo (Department Capital)","Corozal (Second-largest urban center)","Tolú (Major coastal Caribbean beach resort town)","Coveñas (Principal oil pipeline terminal and beach destination)","San Marcos (Commercial hub of the San Jorge river region)","Sampués (Famous for artisan crafts and the *sombrero vueltiao*)","Majagual","San Onofre"],"Tolima":["Ibagué (Department Capital / Known as the musical capital of Colombia)","Espinal (Major agricultural center for rice and cotton)","Melgar (Major weekend resort and tourism town)","Honda (Historic colonial river port on the Magdalena River)","Mariquita (Historic town of the Royal Botanical Expedition)","Líbano","Chaparral","Prado (Home to a large tourist reservoir lake)"],"Valle del Cauca":["Cali (Department Capital / Colombia's third-largest city and salsa capital)","Buenaventura (Colombia's main Pacific commercial seaport)","Palmira (Home to the international airport serving Cali)","Tuluá (Major commercial center for the central valley)","Buga (Guadalajara de Buga / Major Catholic pilgrimage site)","Cartago (Famous for embroidery and colonial history)","Jamundí","Yumbo (Major industrial hub of the region)"],"Vaupés":["Mitú (Department Capital / Remote rainforest river port near Brazil)","Carurú","Taraira","Pacoa (Departmental corregimiento)","Papunahua (Departmental corregimiento)","Yavaraté (Departmental corregimiento / Border post with Brazil)"],"Vichada":["Puerto Carreño (Department Capital / Port at the confluence of the Orinoco and Meta rivers)","Puerto Gaitán border area / Santa Rosalía","Cumaribo (Largest municipality in Colombia by land area)","La Primavera","San José de Ocuné"]},"Comoros":{"Anjouan (*Ndzuwani*)":["Mutsamudu (Capital of the Island and major port city)","Domoni (Historic coastal town and former capital)","Ouani (Location of the island's airport)","Mirontsi","Sima","Koni-Chodra","Moya","Bambao Mtouni"],"Grande Comore (*Ngazidja*)":["Moroni (Capital of the Island and National Capital of the Comoros)","Mitsamiouli (Major northern town and tourist hub)","Iconi (Historic town south of Moroni)","Foumboni","Mbeni","Hahaya (Location of Prince Said Ibrahim International Airport)","Chezani","Itsandra mdjini"],"Mohéli (*Mwali*)":["Fomboni (Capital of the Island and primary urban hub)","Nioumachoua (Gateway to the Mohéli Marine Park)","Wanani","Hoani","Djoiezi","Miringoni","Ndrondroni","Itsamia (Famous sea turtle nesting village)"]},"Congo (Congo-Brazzaville)":{"Bouenza":["Madingou (Department Capital)","Nkayi (Major sugar refining and commercial hub)","Loutété (Important cement manufacturing town)","Bouansa","Mouyondzi","Loudima"],"Brazzaville (Capital City)":["Makélékélé (1st Arrondissement)","Bacongo (2nd Arrondissement / Historic cultural quarter)","Poto-Poto (3rd Arrondissement / Major commercial and market hub)","Moungali (4th Arrondissement)","Ouenzé (5th Arrondissement)","Talangaï (6th Arrondissement)","Mfilou (7th Arrondissement)","Madibou (8th Arrondissement)","Djiri (9th Arrondissement)"],"Congo-Oubangui":["Mossaka (Major river port town at the confluence of the Congo and Ubangi rivers)","Liranga","Loukoléla","Tokou"],"Cuvette":["Owando (Department Capital)","Oyo (Major economic, infrastructure, and political hub)","Boundji","Makoua","Mossaka (Note: Historically and logistically grouped with the river transport zones)","Loukoléla","Ngoko"],"Cuvette-Ouest":["Ewo (Department Capital)","Etoumbi","Kellé","Mbomo (Gateway to the Odzala-Kokoua National Park)","Okoyo","Abala"],"Djoué-Léfini":["Mayama","Ngabé (Historic kingdom seat along the Congo River)","Kindamba","Vindza"],"Kouilou":["Hinda (Departmental Administrative Capital)","Loango (Historic capital of the Kingdom of Loango / cultural site)","Madingo-Kayes","Diosso (Famous for the Diosso Gorges)","Nzambi","Tchiamba-Nzassi"],"Lékoumou":["Sibiti (Department Capital)","Bambama","Zanaga (Known for major iron ore deposits)","Komono","Mayéyé"],"Likouala":["Impfondo (Department Capital / Major northern deep-rainforest river port)","Enyellé","Dongou","Epéna","Betou (Important border transit town near the CAR)","Bouanila"],"Niari":["Dolisie / Loubomo (Department Capital / Congo's third-largest city and a major rail transit hub)","Mossendjo (Important forestry and timber hub)","Kibangou","Mayoko (Iron mining exploration hub)","Kimongo","Louvakou"],"Nkéni-Alima":["Gamboma (Major agricultural trade hub)","Ngo","Ollombo (Location of the international airport serving the Plateaux region)","Mpouya"],"Plateaux":["Djambala (Department Capital)","Gamboma","Lekana","Ngo","Ollombo","Mpouya"],"Pool":["Kinkala (Department Capital)","Mindouli","Boko","Kindamba","Mayama","Ngabé","Goma Tsé-Tsé"],"Pointe-Noire (Major Port City)":["Lumumba (1st Arrondissement / Central business and administrative district)","Mvou-Mvou (2nd Arrondissement)","Tié-Tié (3rd Arrondissement / Heavily populated urban hub)","Loandjili (4th Arrondissement)","Mongo-Poukou (5th Arrondissement)","Ngoyo (6th Arrondissement)"],"Sangha":["Ouésso (Department Capital / Major northern hub on the Sangha River near the Cameroon border)","Sembé","Souanké","Pokola (Major industrial logging and timber hub)","Ngbala","Kabo"]},"Costa Rica":{"Alajuela":["Alajuela (Province Capital / Location of Juan Santamaría International Airport)","San Carlos (Ciudad Quesada / Major agricultural and livestock hub)","San Ramón (Known as a cultural and literary center)","Grecia (Famous for its unique metal church)","Atenas (Renowned for its climate)","Palmares","Upala (Northern border region hub)","Los Chiles"],"Cartago":["Cartago (Province Capital / Historic colonial capital of Costa Rica)","Paraíso","Turrialba (Major center for adventure tourism and agricultural research)","La Unión (Tres Ríos)","Oreamuno (San Rafael)","El Guarco (Tejar)","Alvarado (Pacayas)","Jiménez (Juan Viñas)"],"Guanacaste":["Liberia (Province Capital / Major tourism gateway and international airport)","Nicoya (Heart of the Nicoya Peninsula \"Blue Zone\")","Santa Cruz (Declared the national folklore city)","Cañas","Tilarán (Hub for wind energy near Lake Arenal)","Bagaces","Filadelfia (Carrillo)","Tamarindo (Major coastal surf and tourism hub)"],"Heredia":["Heredia (Province Capital / Known as the \"City of Flowers\")","San Francisco","Barva (Famous for colonial architecture and masquerades)","Santo Domingo","Santa Bárbara","San Rafael","San Isidro","Sarapiquí (Puerto Viejo / Large lowland ecotourism and banana sector)"],"Limón":["Limón / Puerto Limón (Province Capital / Primary Caribbean commercial port)","Pococí (Guápiles / Major commercial hub of the Caribbean lowlands)","Siquirres","Talamanca (Bribri / Includes the major tourist destination of Puerto Viejo de Talamanca)","Matina","Guácimo"],"Puntarenas":["Puntarenas (Province Capital / Historic Pacific port city)","Esparza","Quepos (Gateway to Manuel Antonio National Park)","Golfito (Southern port and duty-free commercial zone)","Corredores (Ciudad Neily / Major border commercial center near Panama)","Garabito (Jacó / Major coastal resort and surf town)","Osa (Ciudad Cortés / Gateway to the Osa Peninsula)","Coto Brus (San Vito)"],"San José":["San José (Province Capital and National Capital of Costa Rica)","Desamparados","Goicoechea (Guadalupe)","Perez Zeledón (San Isidro de El General / Major economic hub of the southern region)","Tibás","Escazú (Major upscale commercial and residential area)","Curridabat","Moravia"]},"Ivory Coast":{"Abidjan":["Cocody (Upscale residential and diplomatic district)","Plateau (The central business district / \"The Parisian Plateau\")","Yopougon (Most populous residential and vibrant cultural district)","Treichville (Historic commercial port district)","Marcory","Koumassi","Abobo","Port-Bouët (Location of Félix-Houphouët-Boigny International Airport)","Yamoussoukro *(Political Capital)**:*","Yamoussoukro City (National Political and Administrative Capital)","Attiégouakro","Morofé","Kossou (Location of the Kossou Dam and lake)","Subiakro"],"Bas-Sassandra":["San-Pédro (Regional Capital / World's largest raw cocoa exporting port)","Sassandra (Historic colonial beach resort town)","Soubré (Center of the cocoa belt and major hydroelectric hub)","Tabou (Border coastal town near Liberia)","Fresco","Méagui"],"Comoé":["Abengourou (Regional Capital / Seat of the historic Indénié Kingdom)","Aboisso (Major agricultural hub near the Ghana border)","Grand-Bassam (Historic coastal town / UNESCO World Heritage site)","Agnibilékrou","Adiaké","Tiapoum"],"Denguélé":["Odienné (Regional Capital)","Minignan","Kaniasso","Madinani","Samatiguila","Seydougou"],"Gôh-Djiboua":["Gagnoa (Regional Capital / Major agricultural and cultural hub)","Divo (Major cocoa and palm oil trading center)","Oumé","Guitry","Lakota","Ouragahio"],"Lacs":["Dimbokro (Regional Capital)","Toumodi","Bouaflé (Major agricultural hub near the Marahoué river)","Sinfra","Arrah","Bongouanou"],"Lagunes":["Dabou (Regional Capital)","Bingerville (Historic former colonial capital suburb)","Grand-Lahou (Coastal town at the mouth of the Bandama River)","Alépé","Sikensi","Jacqueville (Coastal beach resort peninsula)","Azaguié"],"Montagnes":["Man (Regional Capital / Known as the \"City of 18 Mountains\")","Danané (Major trading town near the Guinea and Liberia borders)","Duékoué (Important crossroads and timber hub)","Guiglo","Bangolo","Toulepleu","Biankouma"],"Sassandra-Marahoué":["Daloa (Regional Capital / Major trading hub of the central-west region)","Bouaflé","Sinfra","Zuénoula","Vavoua","Issia"],"Savanes":["Korhogo (Regional Capital / Cultural heartland of the Senoufo people)","Ferkessédougou (Major northern railway and livestock trading hub)","Boundiali","Ouangolodougou (Strategic border transit town near Burkina Faso)","Tingréla (Border town near Mali)","Kouto"],"Vallée du Bandama":["Bouaké (Regional Capital / Côte d'Ivoire's second-largest city)","Katiola (Famous for traditional pottery industries)","Dabakala","Béoumi","Sakassou (Historic capital of the Baoulé Kingdom)","Niakaramandougou"],"Woroba":["Séguéla (Regional Capital / Known for diamond mining exploration fields)","Mankono","Touba","Kani","Pristina (Kounahiri sector)"],"Zanzan":["Bondoukou (Regional Capital / Historic \"City of a Thousand Mosques\")","Bouna (Gateway to Comoé National Park)","Tanda","Nassian","Koun-Fao","Sandégué"]},"Croatia":{"Bjelovar-Bilogora":["Bjelovar (County Seat)","Daruvar (Famous for thermal spas and Czech minority culture)","Garešnica","Grubišno Polje","Čazma"],"Brod-Posavina":["Slavonski Brod (County Seat / Major industrial and border port city)","Nova Gradiška","Donji Andrijevci","Okučani","Oriovac"],"Dubrovnik-Neretva":["Dubrovnik (County Seat / World-famous historic walled city and UNESCO site)","Metković (Major valley town near the Neretva delta)","Korčula (Historic fortified town on Korčula Island)","Ploče (Major maritime freight port)","Cavtat","Opuzen","Vela Luka"],"Istria":["Pazin (Administrative County Seat)","Pula (Largest city / Famous for its well-preserved Roman amphitheater)","Poreč (Major coastal tourism hub with the Euphrasian Basilica)","Rovinj (Iconic coastal fishing port and tourist destination)","Umag","Labin","Novigrad","Buzet"],"Karlovac":["Karlovac (County Seat / Known as the \"city on four rivers\")","Ogulin","Duga Resa","Slunj (Famous for the Rastoke watermills village)","Ozalj"],"Koprivnica-Križevci":["Koprivnica (County Seat)","Križevci","Đurđevac","Ludbreg boundary sector / Legrad","Virje"],"Krapina-Zagorje":["Krapina (County Seat / Famous Neanderthal archaeological site)","Zabok (Main economic and transit hub of the county)","Marija Bistrica (Croatia's prominent Marian pilgrimage shrine)","Oroslavje","Donja Stubica","Pregrada"],"Lika-Senj":["Gospić (County Seat)","Otočac","Senj (Historic coastal town with the Nehaj Fortress)","Novalja (Major party and beach resort hub on Pag Island)","Plitvička Jezera area (Gateway to the Plitvice Lakes National Park)","Brinje"],"Međimurje":["Čakovec (County Seat)","Prelog","Mursko Središće (Northernmost town in Croatia)","Nedelišće","Kotoriba"],"Osijek-Baranja":["Osijek (County Seat / Economic and cultural capital of Slavonia)","Đakovo (Famous for its monumental cathedral and Lipizzaner stud farm)","Našice","Valpovo","Beli Manastir (Cultural hub of the Baranja region)","Belišće","Donji Miholjac"],"Požega-Slavonia":["Požega (County Seat)","Pakrac","Lipik (Famous for mineral spa therapies)","Pleternica","Kutjevo (Renowned center of Croatian wine production)"],"Primorje-Gorski Kotar":["Rijeka (County Seat / Croatia's principal seaport and transit hub)","Opatija (Historic 19th-century seaside resort town)","Crikvenica","Krk (Main settlement on Krk Island)","Mali Lošinj (Largest island town in the Adriatic)","Delnice (Center of the mountainous Gorski Kotar region)","Kastav","Cres"],"Sisak-Moslavina":["Sisak (County Seat / Major industrial and river port city)","Kutina (Industrial and commercial hub of Moslavina)","Petrinja","Novska","Popovača","Glina"],"Split-Dalmatia":["Split (County Seat / Croatia's second-largest city, centered around Diocletian's Palace)","Makarska (Center of the Makarska Riviera resort coast)","Sinj (Famous for the Alka knights tournament)","Trogir (UNESCO World Heritage historic island town)","Solin (Site of ancient Roman Salona)","Omiš","Hvar (Elite island tourism destination)","Imotski"],"Šibenik-Knin":["Šibenik (County Seat / Coastal historic city with St. James Cathedral)","Knin (Historic royal fortress city and key inland rail junction)","Vodice (Major coastal resort town)","Drniš","Murter (Island settlement gateway to the Kornati Islands)","Skradin (Gateway to Krka National Park)"],"Varaždin":["Varaždin (County Seat / Renowned for preserved Baroque architecture and former capital)","Ivanec","Novi Marof","Lepoglava (Famous for lacemaking and historical prison monastery)","Ludbreg (Geographical \"center of the world\" folklore monument town)"],"Virovitica-Podravina":["Virovitica (County Seat)","Slatina","Orahovica","Pitomača","Suhopolje"],"Vukovar-Syrmia":["Vukovar (County Seat / Major Danube river port and historic symbol city)","Vinkovci (Largest city in the county and historic railway hub)","Županja (On the Sava River)","Ilok (Easternmost town in Croatia, famous for vineyards)","Otok"],"Zadar":["Zadar (County Seat / Historic coastal city known for Roman and Venetian ruins)","Biograd na Moru (Historic royal city and major sailing hub)","Benkovac","Pag (Main settlement on Pag Island, famous for lace and cheese)","Gračac","Obrovac","Nin (Ancient royal town and sandy lagoon lagoon destination)"],"Zagreb County":["Velika Gorica (Largest city in the county / Location of Zagreb International Airport)","Samobor (Famous for medieval charm and gastronomy)","Zaprešić","Jastrebarsko","Sveta Nedelja","Dugo Selo","Vrbovec","Sveti Ivan Zelina","City of Zagreb *(Capital City)**:*","Donji Grad (Lower Town / Cultural and commercial center)","Gornji Grad–Medveščak (Upper Town / Historic government core)","Novi Zagreb (Modern expansion south of the Sava River)","Maksimir (Home to the historic park and stadium)","Trešnjevka","Črnomerec","Dubrava","Sesvete (Largest territorial city district)"]},"Cuba":{"Artemisa":["Artemisa (Province Capital)","Mariel (Major deep-water port and Special Development Zone)","San Antonio de los Baños (Known as the \"capital of humor\" and home to the international film school EICTV)","Guanajay","Bahía Honda","Bauta"],"Camagüey":["Camagüey (Province Capital / Large historic city with a UNESCO-listed maze-like colonial center)","Florida","Nuevitas (Important industrial and port city)","Guáimaro (Historic birthplace of the first Cuban constitution)","Santa Cruz del Sur","Vertientes"],"Ciego de Ávila":["Ciego de Ávila (Province Capital)","Morón (The gateway city to the popular Cayo Coco and Cayo Guillermo beach resorts)","Baraguá","Venezuela","Chambas","Primero de Enero"],"Cienfuegos":["Cienfuegos (Province Capital / Known as the \"Pearl of the South,\" featuring French colonial architecture and a UNESCO historic center)","Aguada de Pasajeros","Cruces","Cumanayagua (Gateway to the Escambray Mountains)","Rodas","Lajas (Birthplace of famous musician Beny Moré)"],"Granma":["Bayamo (Province Capital / Rich in revolutionary history and known as the \"city of horse carriages\")","Manzanillo (Major port city on the Gulf of Guacanayabo)","Jiguaní","Niquero (Near the landing site of the Granma yacht)","Pilón","Guisa"],"Guantánamo":["Guantánamo (Province Capital)","Baracoa (Cuba's oldest Spanish settlement, famous for chocolate, coconut, and isolated tropical landscapes)","Caimanera (Town bordering the US Naval Base)","Maisí (The easternmost tip of Cuba)","Imías","San Antonio del Sur"],"Holguín":["Holguín (Province Capital / Known as the \"city of parks\")","Gibara (Charming coastal town hosting the Poor Cinema Festival)","Banes (Often called the archaeological capital of Cuba)","Moa (A major nickel-mining and industrial center)","Mayarí","Rafael Freyre (Home to the Guardalavaca beach area)"],"La Habana *(Havana - Capital City)*":["Old Havana / Habana Vieja (UNESCO historic colonial core)","Plaza de la Revolución (Political heart, featuring the José Martí Memorial)","Vedado (Vibrant commercial, cultural, and nightlife district)","Miramar / Playa (Upscale neighborhood hosting foreign embassies and business centers)","Centro Habana (Densely populated central urban district)","Guanabacoa (Rich in Afro-Cuban traditions)","Regla (Historic maritime community across the bay)"],"Las Tunas":["Las Tunas (Province Capital / Known as the \"oriental balcony\" or capital of Cuban sculpture)","Puerto Padre (Port town known as the \"Blue City\")","Amancio","Colombia","Jobabo","Manatí"],"Matanzas":["Matanzas (Province Capital / Known as the \"Athens of Cuba\" for its poets and bridges)","Varadero (Cuba's premier beach resort peninsula, located within Cárdenas municipality)","Cárdenas (Historic industrial and port city)","Ciénaga de Zapata (Massive wetland biosphere reserve and home to Playa Girón / Bay of Pigs)","Colón","Jovellanos"],"Mayabeque":["San José de las Lajas (Province Capital)","Güines (Major agricultural center)","Jaruco (Famous for its scenic limestone hills, the Escaleras de Jaruco)","Santa Cruz del Norte (Home to a major rum distillery and seaside town)","Madruga","Batabanó (Main surge port for travel to the Isle of Youth)"],"Pinar del Río":["Pinar del Río (Province Capital)","Viñales (World-famous limestone karsts, tobacco farming, and UNESCO-recognized valley)","San Juan y Martínez (The epicenter of premium cigar tobacco cultivation)","Sandino","Consolación del Sur","Mantua"],"Sancti Spíritus":["Sancti Spíritus (Province Capital / One of Cuba's original seven Spanish cities)","Trinidad (Exquisitely preserved Spanish colonial town and UNESCO World Heritage Site)","Cabaiguán (Known for its Canary Islander heritage and tobacco)","Jatibonico","Fomento","Yaguajay"],"Santiago de Cuba":["Santiago de Cuba (Province Capital / Cuba's second-largest city, rich in musical heritage, Afro-Cuban culture, and revolutionary history)","Palma Soriano","Contramaestre","San Luis","Songo - La Maya","El Cobre (Home to the Sanctuary of the Virgen de la Caridad, Cuba's patron saint)"],"Villa Clara":["Santa Clara (Province Capital / Famous for the Che Guevara Mausoleum and university culture)","Caibarién (Coastal fishing town and gateway to the northern cayos via a long stone causeway)","Remedios (One of Cuba's oldest cities, famous for its historic *Las Parrandas* Christmas festival)","Sagua la Grande","Placetas","Manicaragua (Nestled in the tobacco and coffee-growing foothills)","Isla de la Juventud *(Isle of Youth)**:*","Nueva Gerona (Capital town and main administrative and economic hub)","Santa Fe / La Demajagua (Historic second-largest town, famous for mineral springs)","La Reforma","Cocodrilo (Isolated fishing village on the southern coast)"]},"Cyprus":{"Kyrenia *(Κερύνεια / Girne)*":["Kyrenia City (Main historic harbor town and castle hub)","Lapithos (Lapta)","Karavas (Alsancak)","Agios Amvrosios (Esentepe)","Bellapais (Famous for its historic abbey ruins)","Kythrea (Değirmenlik)","Myrtou (Çamlıbel)","Dikomo (Dikmen)"],"Larnaca *(Λάρνακα / Larnaka)*":["Larnaca City (Main urban coastal center / Location of Larnaca International Airport)","Aradippou","Livadia","Dromolaxia–Meneou","Athienou","Pano Lefkara (Famous for traditional lace and silverware crafts)","Kiti","Zygi (Known for its coastal fishing harbor and seafood)"],"Limassol *(Λεμεσός / Limasol or Leymosun)*":["Limassol City (District Capital / Cyprus's main commercial port, business, and marina hub)","Kato Polemidia","Mesa Geitonia","Agios Athanasios","Yermasoyia","Ypsonas","Platres (Major mountain resort village in the Troodos range)","Pisouri"],"Nicosia *(Λευκωσία / Lefkoşa)* — *Capital City*":["Nicosia City (The divided National Capital / Historic Venetian-walled old city center)","Strovolos (Most populous residential municipality)","Lakatamia","Aglandjia","Engomi (Major university and diplomatic hub)","Latsia","Dali (Idalium / Ancient kingdom site)","Morphou (Güzelyurt / Major agricultural citrus hub in the north)","Paphos *(Πάφος / Baf)**:*","Paphos City (District Capital / Coastal tourism hub famous for UNESCO Roman mosaics)","Yeroskipou (Known for traditional Cypriot delights / loukoumi)","Pegeia (Includes the popular Coral Bay resort area)","Polis chrysochous (Gateway to the Akamas Peninsula)","Peyia","Neo Chorio","Kathikas","Pomos"]},"Czech Republic":{"Central Bohemian Region *(Středočeský kraj)* — Administrative center: Prague":["Kladno (Largest city in the region, historically known for industrial development)","Mladá Boleslav (Major automotive hub, home to Škoda Auto)","Příbram (Historic mining city)","Kolín","Kutná Hora (Famous for its medieval silver mines and the Gothic St. Barbara's Church)","Mělník (Confluence of the Elbe and Vltava rivers)","Benešov","Beroun"],"Hradec Králové Region *(Královéhradecký kraj)*":["Hradec Králové (Regional Capital)","Trutnov (Gateway to the Krkonoše / Giant Mountains)","Náchod","Jičín (Known as the gateway to the Bohemian Paradise region)","Dvůr Králové nad Labem (Famous for its large safari park)","Vrchlabí","Jaroměř","Rychnov nad Kněžnou"],"Karlovy Vary Region *(Karlovarský kraj)*":["Karlovy Vary (Regional Capital / World-famous spa city)","Cheb (Historic border city with a well-preserved medieval core)","Mariánské Lázně (Prominent spa town within the West Bohemian Spa Triangle)","Sokolov","Ostrov","Aš","Chodov","Františkovy Lázně"],"Liberec Region *(Liberecký kraj)*":["Liberec (Regional Capital, located below Mount Ještěd)","Jablonec nad Nisou (Famous for traditional glass and jewelry manufacturing)","Česká Lípa","Turnov (Heart of the Bohemian Paradise / Český ráj)","Nový Bor","Semily","Hrádek nad Nisou","Frýdlant"],"Moravian-Silesian Region *(Moravskoslezský kraj)*":["Ostrava (Regional Capital / Major industrial, technological, and cultural hub)","Havířov","Karviná","Opava (Historic capital of Czech Silesia)","Frýdek-Místek","Třinec (Major steel manufacturing center)","Nový Jičín","Krnov"],"Olomouc Region *(Olomoucký kraj)*":["Olomouc (Regional Capital / Historic ecclesiastical and university center)","Přerov (Major railway and industrial hub)","Prostějov (Historically known for textile industries)","Šumperk","Hranice","Zábřeh","Šternberk","Jeseník (Spa town in the northern mountains)"],"Pardubice Region *(Pardubický kraj)*":["Pardubice (Regional Capital / Known for gingerbread manufacturing and horse racing)","Chrudim","Svitavy","Ústí nad Orlicí","Vysoké Mýto","Česká Třebová (One of the country's primary railway hubs)","Litomyšl (Famous for its Renaissance chateau, a UNESCO site)","Moravská Třebová"],"Plzeň Region *(Plzeňský kraj)*":["Plzeň (Regional Capital / Birthplace of Pilsner beer and home to Škoda machinery factories)","Klatovy","Rokycany","Tachov","Domažlice (Center of the traditional Chodsko cultural region)","Sušice","Stříbro","Přeštice"],"Prague *(Hlavní město Praha)* — Capital City Region":["Prague 1 (Staré Město / Malá Strana / Historic and tourist core)","Prague 2 (Nové Město / Vyšehrad)","Prague 3 (Žižkov)","Prague 4 (Large residential and business sector including Pankrác)","Prague 5 (Smíchov commercial hub)","Prague 6 (Dejnice / Diplomatic and university district)","Prague 7 (Holešovice / Letná cultural zone)","Prague 8 (Karlín business district)"],"South Bohemian Region *(Jihočeský kraj)*":["České Budějovice (Regional Capital / Original home of Budweiser Budvar beer)","Tábor (Historic fortress city founded by the Hussites)","Písek","Strakonice","Jindřichův Hradec","Český Krumlov (World-famous medieval town and UNESCO World Heritage site)","Prachatice","Třeboň (Center of the traditional Czech fishpond cultivation)","South Moravian Region *(Jihomoravský kraj)**:*","Brno (Regional Capital / Czechia's second-largest city and judicial center)","Znojmo (Historic town famous for winemaking and its Romanesque rotunda)","Hodonín","Břeclav (Key southern international railway junction)","Vyškov","Blansko (Gateway to the Moravian Karst caves)","Kyjov","Mikulov (Prominent wine tourism hub on the Austrian border)","Ústí nad Labem Region *(Ústecký kraj)**:*","Ústí nad Labem (Regional Capital / Major river port and chemical hub)","Most (Rebuilt modern city near major surface mining fields)","Teplice (One of the oldest spa towns in Central Europe)","Děčín (Major river gate and railway border town)","Chomutov","Litoměřice","Žatec (World-famous center for hop cultivation and brewing heritage)","Louny"],"Vysočina Region *(Kraj Vysočina)*":["Jihlava (Regional Capital / Historic silver mining city)","Třebíč (Features a well-preserved Jewish Quarter, a UNESCO site)","Havlíčkův Brod","Žďár nad Sázavou","Pelhřimov","Velké Meziříčí","Humpolec","Chotěboř","Zlín Region *(Zlínský kraj)**:*","Zlín (Regional Capital / Famous for functionalist architecture developed by the Baťa shoe company)","Kroměříž (Known as the \"Haná Athens,\" famous for its UNESCO Archbishop's Palace and gardens)","Uherské Hradiště (Cultural hub of Moravian Slovakia)","Vsetín (Heart of the Moravian Wallachia region)","Valašské Meziříčí","Otrokovice","Rožnov pod Radhoštěm (Home to a large open-air heritage museum)","Uherský Brod"]},"Democratic Republic of the Congo (Congo-Kinshasa)":{"Équateur":["Mbandaka (Province Capital / Major port city on the Congo River)","Bikoro (Located near Lake Tumba)","Lukolela","Basankusu","Makanza","Ingende"],"Haut-Katanga":["Lubumbashi (Province Capital / DRC's second-largest city and mining capital)","Likasi (Major mining and industrial center)","Kasumbalesa (Key international border town with Zambia)","Kipushi","Sakania","Kambove","Pweto (Located on Lake Mweru)"],"Haut-Lomami":["Kamina (Province Capital / Major railway junction and military airbase hub)","Bukama","Malemba-Nkulu","Kabongo","Kaniama"],"Haut-Uélé":["Isiro (Province Capital)","Watsa (Major gold mining hub, including the Kibali mine complex)","Dungu","Faradje","Rungu","Niangara"],"Ituri":["Bunia (Province Capital)","Mahagi (Important trading town near the Uganda border)","Aru (Major border trade hub)","Mambasa","Djugu","Kasenyi (Port town on Lake Albert)"],"Kasaï":["Tshikapa (Province Capital / Major diamond trading hub)","Ilebo (Important river port and railway terminus)","Luebo","Mweka","Dekese"],"Kasaï-Central":["Kananga (Province Capital)","Demba","Dibaya","Kazumba","Luiza","Dimbelenge"],"Kasaï-Oriental":["Mbuji-Mayi (Province Capital / Major industrial diamond mining megacity)","Miabi","Lupatapata","Katanda","Tshilenge"],"Kinshasa *(City-province / Capital)*":["Gombe (The administrative, diplomatic, and financial heart of the country)","Limete (Major industrial and residential commune)","Ngaliema","Kalamu (Includes the vibrant cultural area of Matonge)","Kasa-Vubu","Masina (Densely populated eastern hub)","N'djili (Location of N'djili International Airport)","Maluku (Massive rural-urban peripheral commune along the river)"],"Kongo Central":["Matadi (Province Capital / DRC's primary maritime deep-water port)","Boma (Historic former capital and major river port)","Muanda (DRC's sole Atlantic coastal resort and oil extraction town)","Mbanza-Ngungu (Major agricultural and historic railway hub)","Kasangulu","Kimpese","Tshela"],"Kwango":["Kenge (Province Capital)","Popokabaka","Kasongo-Lunda","Feshi","Kahemba"],"Kwilu":["Bandundu City (Historically the regional capital)","Kikwit (Province Capital / Largest commercial and economic city in the province)","Bulungu","Masi-Manimba","Gungu","Idiofa"],"Lomami":["Kabinda (Province Capital)","Mwene-Ditu (Major railway transport city and economic hub)","Ngandajika","Luilu","Kamiji"],"Lualaba":["Kolwezi (Province Capital / Major global copper and cobalt mining megacity)","Mutshatsha","Fungurume (Major mining concession hub)","Dilolo (Border post town with Angola)","Kapanga","Sandoa"],"Mai-Ndombe":["Inongo (Province Capital / Located on the shores of Lake Mai-Ndombe)","Kutu","Oshwe","Kwamouth (Confluence of the Kwa/Kasai and Congo rivers)","Yumbi","Mushie"],"Maniema":["Kindu (Province Capital / Major river port and rail hub)","Kasongo","Punia","Kibombo","Pangi","Lubutu"],"Mongala":["Lisala (Province Capital / Birthplace of Mobutu Sese Seko)","Bumba (Major river port and agricultural trading hub)","Bongandanga","Yakoma border sector"],"Nord-Kivu *(North Kivu)*":["Goma (Province Capital / Major economic center on Lake Kivu, near Mount Nyiragongo)","Beni (Important commercial hub near the Uganda border)","Butembo (Major trading and educational center in the highlands)","Oicha","Rutshuru","Masisi","Walikale (Rich in tin and artisanal mining resources)"],"Nord-Ubangi *(North Ubangi)*":["Gbadolite (Province Capital / Historic site of the palace of Mobutu)","Mobayi-Mbongo (Hydroelectric hub bordering CAR)","Businga","Bosobolo","Yakoma"],"Sankuru":["Lusambo (Province Capital / Historic administrative center)","Lodja (Largest commercial and transit hub in the province)","Kole","Katako-Kombe","Lomela","Lubefu"],"Sud-Kivu *(South Kivu)*":["Bukavu (Province Capital / Scenic city located at the southern tip of Lake Kivu)","Uvira (Major port city on the northern tip of Lake Tanganyika)","Baraka (Growing city on Lake Tanganyika)","Walungu","Kalehe","Shabunda","Mwenga","Fizi"],"Sud-Ubangi *(South Ubangi)*":["Gemena (Province Capital / Major regional commercial crossroads)","Zongo (River city directly facing Bangui, CAR)","Libenge","Budjala","Kungu"],"Tanganyika":["Kalemie (Province Capital / Major port city on Lake Tanganyika)","Moba (Important agricultural and port town on the lake)","Kongolo","Kabalo (Key river-rail transport junction)","Nyunzu","Manono (Historically known for tin and large lithium deposits)"],"Tshopo":["Kisangani (Province Capital / DRC's third-largest city and the ultimate navigable point of the Congo River)","Banalia","Isangi","Yangambi (Historic tropical forestry research center)","Ubundu","Opala","Basoko"],"Tshuapa":["Boende (Province Capital / Navigable river port)","Djolu","Ikela","Bokungu","Befale","Monkoto (Gateway to the Salonga National Park)"]},"Denmark":{"Capital Region of Denmark *(Region Hovedstaden)*":["Copenhagen (København / National Capital and major economic hub)","Frederiksberg (Autonomous enclave municipality within Copenhagen)","Hillerød (Regional Administrative Seat / Home to Frederiksborg Castle)","Helsingør (Elsinore / Historic port city with Kronborg Castle)","Høje-Taastrup (Major transport and logistics junction)","Gladsaxe","Lyngby-Taarbæk (Major technical university and innovation hub)","Rønne (Largest town on the offshore island of Bornholm)"],"Central Denmark Region *(Region Midtjylland)*":["Aarhus (Largest city in the region / Denmark's second-largest city and primary port)","Randers","Horsens","Herning (Major textile, exhibition, and industrial hub)","Silkeborg (Center of the Danish Lake District)","Viborg (Regional Administrative Seat / Historic judicial capital of Jutland)","Holstebro","Skive"],"North Denmark Region *(Region Nordjylland)*":["Aalborg (Regional Administrative Seat / Major industrial, cultural, and university city)","Hjørring","Frederikshavn (Important ferry port linking to Norway and Sweden)","Thisted (Major town in the Thy district)","Brønderslev","Skagen (Denmark's northernmost town, famous for its unique light and art history)","Nykøbing Mors","Hobro"],"Region of Southern Denmark *(Region Syddanmark)*":["Odense (Largest city on Funen Island / Birthplace of Hans Christian Andersen)","Esbjerg (Major North Sea offshore energy and maritime port city)","Vejle (Regional Administrative Seat)","Kolding (Key commercial and transport hub)","Sønderborg (Historic city near the German border)","Fredericia (Major railway junction and industrial port town)","Svendborg (Gateway to the South Funen Archipelago)","Haderslev","Region Zealand *(Region Sjælland):*","Roskilde (Historic cathedral city and former royal capital)","Næstved (Largest commercial town in south Zealand)","Slagelse","Holbæk","Køge (Rapidly growing port and suburban hub)","Ringsted (Geographical crossroads town of Zealand)","Sorø (Regional Administrative Seat)","Nykøbing Falster (Major hub for the southern islands)"],"The Faroe Islands":["Tórshavn (Capital City and primary economic port on Streymoy Island)","Klaksvík (Second-largest town and important fishing hub on Borðoy Island)","Runavík (Major maritime and industrial hub on Eysturoy Island)","Tvøroyri (Commercial center on the southern island of Suðuroy)","Miðvágur (Vágar Island hub near the international airport)","Vestmanna","Sandur (Main settlement on Sandoy Island)","Hvalba"],"Greenland":["Nuuk (Godthåb / Capital City and largest administrative and economic center)","Sisimiut (Holsteinsborg / Second-largest town, major fishing and education hub)","Ilulissat (Jakobshavn / Tourism hub famous for the UNESCO-listed Icefjord)","Qaqortoq (Julianehåb / Largest town in southern Greenland)","Aasiaat (Egedesminde)","Maniitsoq (Sukkertoppen)","Tasiilaq (Ammassalik / Most populous town on the eastern coast)","Upernavik"]},"Djibouti":{"Ali Sabieh Region *(Région d'Ali Sabieh)*":["Ali Sabieh (Regional Capital)","Holhol (Major historic railway town)","Dasbiyo","Ali Addeh (Location of a notable humanitarian area)","Assamo","Goubetto"],"Arta Region *(Région d'Arta)*":["Arta (Regional Capital / Renowned for its cooler highland climate)","We'a","Loyada (The sole official border crossing point between Djibouti and Somaliland)","Damerjog","Karta","Oueah"],"Dikhil Region *(Région de Dikhil)*":["Dikhil (Regional Capital / Known as the \"City of Unity\")","As Eyla (Gateway town near Lake Abbe and its limestone chimneys)","Galafi (Strategic border transit hub on the main highway to Ethiopia)","Yoboki","Bondara","Kouta Bouyya"],"Djibouti Region *(Ville de Djibouti)*":["Ras Dika (Central business district, administrative core, and Place Ménélik area)","Heron (Upscale residential and diplomatic quarter near the port)","Balbala (Massive, rapidly growing residential suburb southwest of the city center)","Boulaos","Gabode","Einguela"],"Obock Region *(Région d'Obock)*":["Obock (Regional Capital / Historic first French colonial outpost in the gulf)","Khor Angar (Coastal town near important mangrove ecosystems)","Alaili Dadda","Medeho","Moulhoule (Northern coastal outpost near the Bab-el-Mandeb strait)","Khôr ‘Ali","Tadjourah Region *(Région de Tadjourah**):*","Tadjourah (Regional Capital / The historic \"White City\" on the Gulf of Tadjourah)","Randa (Mountain town near the Day Forest National Park Eco-zone)","Dorra","Balho (Border transit post in the northern sector)","Assa Gaila","Guirrari"]},"Dominica":{"Saint Andrew":["Marigot (Largest settlement in the parish / Location of Douglas-Charles Airport)","Wesley","Woodford Hill","Calibishie (Major coastal tourism and expat hub)","Thibaud","Paix Bouche","Vieille Case (Itassi)","Penville","Saint David","Grand Fond","Rosalie","Good Hope","Petite Soufrière","Castle Bruce","San Sauveur","Atkinson (Includes part of the Kalinago Territory)","Salybia (Administrative center of the Kalinago Territory)"],"Saint George":["Roseau (National Capital and major commercial port city)","Goodwill (Major residential and hospital suburb of Roseau)","Potters Ville","Loubiere","Bellevue Chopin","Trafalgar (Famous for the Trafalgar Falls)","Wotten Waven (Known for natural hot springs)","Laudat (Gateway to Morne Trois Pitons National Park and the Boiling Lake)"],"Saint John":["Portsmouth (Parish Capital / Dominica's second-largest town and major yachting hub)","Glanvilla","Picard (Major student and commercial area)","Bornes","Capuchin (Le Capuchin)","Clifton","Cottage","Toucari"],"Saint Joseph":["Saint Joseph Town (Parish Capital)","Salisbury (Bawi / Major agricultural hub)","Coulibistrie","Mero (Famous for its black sand beach)","Layou","Warner","Bells","Pont Cassé (Strategic inland geographic crossroads)"],"Saint Luke":["Pointe Michel (Parish Capital / Major coastal settlement)","Michelaborough","Siboulie","Luke Town boundary sector"],"Saint Mark":["Soufrière (Parish Capital / Famous for marine reserves and hot springs)","Scotts Head (Cashacrou / Scenic peninsula village overlooking the Caribbean Sea and Atlantic Ocean)","Galion","Bagatelle"],"Saint Patrick":["Grand Bay (Berricoa / Parish Capital and major cultural hub)","Tete Morne","Pichelin","Geneva","Bagatelle","Fond St. Jean","Petite Savanne","La Plaine"],"Saint Paul":["Mahaut (Parish Capital / Major industrial and coastal town)","Massacre (Historic coastal settlement)","Cochrane (Highland agricultural village)","Canefield (Location of Dominica's secondary airport and industrial estate)","Campbell","Pont Cassé boundary area","Taraud"],"Saint Peter":["Colihaut (Parish Capital)","Dublanc","Bioche","Coulibistrie boundary sector"]},"Dominican Republic":{"Distrito Nacional":["Santo Domingo de Guzmán (National Capital / America's oldest European-founded city)","Ciudad Colonial (The historic colonial zone, a UNESCO World Heritage Site)","Piantini (Upscale commercial and residential financial district)","Naco","Bella Vista","Gazcue (Historic residential neighborhood)","Los Prados","Cristo Rey"],"Azua":["Azua de Compostela (Province Capital)","Las Yayas de Viajama","Padre Las Casas","Peralta","Sabana Yegua","Guayabal","Estebanía","Las Charcas"],"Baoruco":["Neiba (Province Capital / Famous for its vineyard and grape production)","Villa Jaragua","Galván","Los Ríos","Tamayo"],"Barahona":["Santa Cruz de Barahona (Province Capital / Major southern port and industrial center)","Cabral","Enriquillo","Vicente Noble","Paraíso (Scenic coastal tourism town)","Las Salinas (Known for its mineral salt deposits)","El Peñón","Jaquimeyes"],"Dajabón":["Dajabón City (Province Capital / Major international border market town with Haiti)","Loma de Cabrera","Restauración","Partido","El Pino"],"Duarte":["San Francisco de Macorís (Province Capital / Major commercial and agricultural hub for cocoa)","Villa Riva","Castillo","Pimentel","Las Guáranas","Arenoso"],"El Seibo":["Santa Cruz del Seibo (Province Capital / Known for its traditional bullfights and cattle industry)","Miches (Rapidly expanding luxury coastal tourism destination)","Pedro Sánchez","San Francisco-Vicentillo","Santa Lucía"],"Elías Piña":["Comendador (Province Capital / Primary border transit town)","Bánica (Historic colonial frontier town)","Pedro Santana","El Llano","Hondo Valle","Juan Santiago"],"Espaillat":["Moca (Province Capital / Major agricultural powerhouse and historic political hub)","Gaspar Hernández (Coastal tourism and agricultural town)","Jamao al Norte","Cayetano Germosén","San Víctor"],"Hato Mayor":["Hato Mayor del Rey (Province Capital / Heart of the eastern citrus and cattle industries)","Sabana de la Mar (Gateway port to Los Haitises National Park)","El Valle (Known for amber mining exploration fields)"],"Hermanas Mirabal":["Salcedo (Province Capital / Named after the historic Mirabal sisters)","Tenares (Major commercial center in the province)","Villa Tapia"],"Independencia":["Jimaní (Province Capital / Strategic international border crossing point along Lake Azuei route)","Duvergé (Largest municipality in the province)","La Descubierta (Gateway town to Lake Enriquillo)","Postrer Río","Mella","Cristóbal"],"La Altagracia":["Salvaleón de Higüey (Province Capital / Home to the monumental Basilica of Our Lady of Altagracia)","Punta Cana / Bávaro (World-famous resort area and major international tourism hub)","San Rafael del Yuma","Las Lagunas de Nisibón","Bayahíbe (Famous coastal fishing and resort village)"],"La Romana":["La Romana City (Province Capital / Home to the massive Central Romana sugar mill and Casa de Campo)","Guaymate","Villa Hermosa","Caleta"],"La Vega":["Concepción de La Vega (Province Capital / Famous for its vibrant traditional carnival)","Jarabacoa (Major mountain ecotourism hub in the Central Mountain Range)","Constanza (Highest altitude town in the Caribbean, known for vegetable and flower farming)","Jima Abajo"],"María Trinidad Sánchez":["Nagua (Province Capital / Coastal city known for rice and coconut production)","Cabrera (Popular coastal tourism town with natural attractions)","El Factor","Río San Juan (Famous for the Gri-Gri Lagoon)"],"Monseñor Nouel":["Bonao (Province Capital / Major mining industrial center and carnival hub)","Maimón","Piedra Blanca"],"Monte Cristi":["San Fernando de Monte Cristi (Province Capital / Historic northwestern port city with El Morro mountain)","Villa Vásquez","Guayubín","Las Matas de Santa Cruz","Pepillo Salcedo (Manzanillo / Strategic northern deep-water port town)","Castañuelas"],"Monte Plata":["Monte Plata City (Province Capital)","Bayaguana (Famous for its historic sanctuary of the Holy Christ)","Yamasá","Sabana Grande de Boyá","Peralvillo"],"Pedernales":["Pedernales City (Province Capital / Located on the southern border with Haiti)","Oviedo (Home to the hyper-saline Oviedo Lagoon)","Cabo Rojo (Major tourism infrastructure expansion area)"],"Peravia":["Baní (Province Capital / Capital of mango production and birthplace of Máximo Gómez)","Nizao","Matanzas","Sabana Buey"],"Puerto Plata":["San Felipe de Puerto Plata (Province Capital / Major Atlantic cruise port and historic fortress city)","Sosúa (Popular coastal tourism town famous for beaches and watersports)","Cabarete (World-renowned hub for windsurfing and kitesurfing)","Imbert","Altamira","Luperón (Renowned natural sailboat hurricane hole harbor)","Villa Montellano","Guananico"],"Samaná":["Santa Bárbara de Samaná (Province Capital / Famous for winter humpback whale watching)","Las Terrenas (Vibrant, internationally diverse coastal resort town)","Sánchez (Historic port town with Victorian architecture)","Las Galeras"],"San Cristóbal":["San Cristóbal City (Province Capital / Birthplace of the first Dominican Constitution)","Haina (Bajos de Haina / Major industrial port city)","San Gregorio de Nigua","Villa Altagracia","Yaguate","Cambita Garabitos","Sabana Grande de Palenque","Los Cacaos"],"San José de Ocoa":["San José de Ocoa (Province Capital / Important highland agricultural region)","Sabana Larga","Rancho Arriba"],"San Juan":["San Juan de la Maguana (Province Capital / Grain capital of the fertile San Juan Valley)","Las Matas de Farfán","El Cercado","Vallejuelo","Bohechío","Juan de Herrera"],"San Pedro de Macorís":["San Pedro de Macorís City (Province Capital / Historic sugar and industrial hub, famous for baseball talent)","Juan Dolio (Major coastal resort town)","Consuelo","Quisqueya","San José de los Llanos","Ramón Santana"],"Sánchez Ramírez":["Cotuí (Province Capital / One of the oldest cities in the Americas, known for the Pueblo Viejo gold mine)","Villa La Mata","Fantino","Cevicos"],"Santiago":["Santiago de los Caballeros (Province Capital / Colombia's second-largest city and primary economic hub of the Cibao region)","Villa González (Epicenter of the premium cigar tobacco processing industry)","Licey al Medio","Tamboril (Major manufacturing and cigar production center)","San José de las Matas (SAJOMA / Gateway to mountain tourism)","Bisonó (Navarrete)","Jánico","Puñal"],"Santiago Rodríguez":["San Ignacio de Sabaneta (Province Capital / Heart of the northwestern dairy industry)","Monción (Famous for its cassava bread production and large reservoir dam)","Los Almácigos"],"Santo Domingo *(Province surrounding the capital district)*":["Santo Domingo Este (Province Capital / Most populous municipality, home to the Columbus Lighthouse)","Santo Domingo Norte (Includes Villa Mella, celebrated for its Afro-Dominican musical heritage)","Santo Domingo Oeste","Boca Chica (Famous shallow-lagoon beach town near Las Américas International Airport)","San Antonio de Guerra","Los Alcarrizos","Pedro Brand"],"Valverde":["Santa Cruz de Mao (Province Capital / Core of the northwestern organic banana industry)","Esperanza","Laguna Salada"]},"Ecuador":{"Azuay":["Cuenca (Province Capital / UNESCO World Heritage Site famed for colonial architecture)","Gualaceo (Major artisan and handicraft center)","Chordeleg (Famous for filigree silver jewelry and pottery)","Paute (Home to a major hydroelectric infrastructure hub)","Girón","Santa Isabel","Sigsig","Nabón"],"Bolívar":["Guaranda (Province Capital / Famous for its vibrant indigenous and mestizo carnival)","San Miguel","Chimbo","Caluma (Major subtropical agricultural hub for oranges and cacao)","Echeandía","Chillanes","Las Naves"],"Cañar":["Azogues (Province Capital)","La Troncal (Largest and most economically active city in the province, located in the coastal lowlands)","Cañar City (Cultural heartland near the Ingapirca Inca ruins)","Biblián","El Tambo","Déleg","Suscal"],"Carchi":["Tulcán (Province Capital / Highest city in Ecuador, famous for its topiary cemetery and Colombia border transit)","San Gabriel (Designated a national magical town for its colonial architecture)","El Ángel (Gateway to the unique páramo ecosystem of the El Ángel Ecological Reserve)","Bolívar","Mira","Huaca"],"Chimborazo":["Riobamba (Province Capital / Historic regional transport hub known as the \"Sultan of the Andes\")","Alausí (Famous for the Devil's Nose railway switchback engineering feat)","Guano (Renowned for traditional carpet-weaving industries)","Chambo","Colta (Site of the first Spanish church built in Ecuador)","Guamote","Pallatanga","Penipe"],"Cotopaxi":["Latacunga (Province Capital / Gateway to Cotopaxi National Park, famous for the Mama Negra festival)","Pujilí (Celebrated for traditional ceramic art and dancers)","Salcedo (Famous across Ecuador for its artisanal layered fruit ice creams)","Saquisilí (Renowned for its massive, authentic weekly indigenous markets)","La Maná (Subtropical economic hub on the western slopes)","Sigchos","Pangua"],"El Oro":["Machala (Province Capital / Known globally as the \"Banana Capital of the World\")","Pasaje","Santa Rosa (Major shrimp farming and transport hub)","Huaquillas (Primary international border trade city with Peru)","Arenillas","Piñas (Orchid capital of the southern region)","Zaruma (Historic gold-mining mountain city famed for architecture and coffee)","Portovelo"],"Esmeraldas":["Esmeraldas City (Province Capital / Major Pacific port and oil refinery hub)","Atacames (Highly popular coastal beach resort town)","Quinindé (Rosa Zárate / Major agricultural center for palm oil and cacao)","San Lorenzo (Northern border port town near Colombia)","Muisne","Rioverde","Eloy Alfaro (Limones)"],"Galápagos":["Puerto Baquerizo Moreno (Province Capital / Administrative hub located on San Cristóbal Island)","Puerto Ayora (Largest city and primary tourism hub of the archipelago, located on Santa Cruz Island)","Puerto Villamil (Tranquil port settlement on Isabela Island)","Santa María (Puerto Velasco Ibarra / Small settlement on Floreana Island)","Cascajo (Highlands agricultural sector of Santa Cruz)","Bellavista"],"Guayas":["Guayaquil (Province Capital / Ecuador's largest city, economic engine, and principal maritime port)","Durán (Industrial hub connected to Guayaquil via the Unidad Nacional bridge)","Milagro (Major agricultural center focused on sugarcane production)","Daule (Heart of the nation's rice production fields)","Samborondón (Includes the highly upscale suburban and commercial district of La Puntilla)","El Empalme","Yaguachi","Playas (General Villamil / Popular coastal weekend beach destination)"],"Imbabura":["Ibarra (Province Capital / Known as the \"White City\" for its colonial design)","Otavalo (World-famous for its massive indigenous textiles and crafts market at the Plaza de Ponchos)","Cotacachi (Renowned center for premium leather craftsmanship)","Atuntaqui (Antonio Ante / Major textile and apparel manufacturing hub)","Pimampiro","Urcuquí (Home to the Yachay Tech experimental research community)"],"Loja":["Loja City (Province Capital / Celebrated as the cultural and musical capital of Ecuador)","Catamayo (Location of the primary airport serving the province)","Vilcabamba (World-renowned \"Valley of Longevity\" and expat hub)","Saraguro (Cultural center of the distinct indigenous Saraguro people)","Cariamanga (Calvas)","Macará (Important international border trading post with Peru)","Celica","Catacocha (Paltas)"],"Los Ríos":["Babahoyo (Province Capital / Agricultural river port city)","Quevedo (Largest city in the province / Major financial and hyper-productive agricultural powerhouse)","Ventanas (Known as the corn capital of Ecuador)","Vinces (Historically famous for premium heritage cacao estates)","Buena Fe","Valencia","Baba","Pueblo Viejo"],"Manabí":["Portoviejo (Province Capital / Major administrative and agricultural processing center)","Manta (Largest city in the province / Major Pacific port and global tuna fishing and processing hub)","Chone (Important livestock and agricultural center)","Montecristi (Historic birthplace of the authentic fine-woven \"Panama\" straw hat)","Bahía de Caráquez (Scenic coastal eco-city on the Chone River estuary)","Canoa (Popular surf and beach tourism village)","El Carmen","Jipijapa (Historically renowned for coffee production)"],"Morona Santiago":["Macas (Province Capital / Main gateway city to the southern Amazon lowlands)","Sucúa (Major center for the indigenous Shuar community)","Gualaquiza","Limón Indanza (General Plaza)","Palora (Major production hub for yellow dragon fruit / pitahaya)","San Juan Bosco","Tiwintza","Santiago de Méndez"],"Napo":["Tena (Province Capital / Major ecotourism, kayaking, and whitewater rafting capital of Ecuador)","Archidona (Rich in Kichwa culture and cavern systems)","El Chaco","Baeza (Historic Spanish settlement and transit crossroads in the cloud forest)","Carlos Julio Arosemena Tola","Misahuallí (Popular jungle river port town famous for free-roaming monkeys)"],"Orellana":["Puerto Francisco de Orellana / El Coca (Province Capital / Major oil industry hub at the Napo River confluence)","La Joya de los Sachas","Loreto","Aguarico (Nuevo Rocafuerte / Remote border outpost on the Peruvian frontier)","Tiputini (Gateway outpost to the megadiverse Yasuní National Park)"],"Pastaza":["Puyo (Province Capital / Major commercial trading center of the central Amazon region)","Mera (Gateway town from the Andean foothills to the lowlands)","Santa Clara","Arajuno","Shell (Historic aviation base hub for Amazonian remote transport and missions)","Sarayaku (Notable autonomous indigenous community)"],"Pichincha *(Contains the national capital, Quito)*":["Quito (Province Capital and National Capital of Ecuador / Exceptionally preserved UNESCO colonial old town)","Sangolquí (Rumiñahui / Rapidly growing suburban, culinary, and military academy hub in the Los Chillos Valley)","Cayambe (Famous for flower plantations, dairy industries, and traditional biscuits)","Machachi (Mejía / Heart of the highland dairy farming and volcanic mineral water bottling sectors)","Santo Domingo boundary sector / San Miguel de los Bancos","Pedro Vicente Maldonado","Puerto Quito","Tabacundo (Pedro Moncayo)"],"Santa Elena":["Santa Elena City (Province Capital)","La Libertad (Primary commercial, industrial, and oil refining hub of the peninsula)","Salinas (Major upscale coastal resort city and residential beach hub)","Montañita (World-famous surf culture, tourism, and nightlife village)","Olón (Growing coastal real estate and tranquil expat destination)","Manglaralto","Ayangue (Known for its protected horseshoe bay and seafood)"],"Santo Domingo de los Tsáchilas":["Santo Domingo de los Colorados (Province Capital / One of Ecuador's fastest-growing logistics and livestock trading megahubs)","La Concordia (Major palm oil and tropical agricultural center)","Valle Hermoso","Alluriquín (Famous for traditional milk sweets and sugar cane molasses treats)","Puerto Limón sector","El Esfuerzo"],"Sucumbíos":["Nueva Loja / Lago Agrio (Province Capital / The original historic cradle of Ecuador's Amazonian petroleum industry)","Shushufindi (Major oil extraction and palm oil industrial center)","El Dorado de Cáscales","Lumbaquí (Gonzalo Pizarro)","Tarapoa (Cuyabeno administrative access)","Putumayo (Puerto El Carmen de Putumayo / Border town on the Colombian frontier)","Cuyabeno area (Gateway to the flooded-forest Cuyabeno Wildlife Reserve)"],"Tungurahua":["Ambato (Province Capital / Major commercial, industrial, and leather-goods manufacturing hub, famed for fruits and flowers)","Baños de Agua Santa (World-famous adventure tourism capital featuring hot springs, waterfalls, and volcano views)","Pelileo (The industrial denim and blue-jean manufacturing capital of Ecuador)","Píllaro (Famous for its traditional *Diablada Pillareña* New Year devil dance festival)","Cevallos","Quero","Mocha","Tisaleo"],"Zamora Chinchipe":["Zamora City (Province Capital / Known as the \"City of Birds and Waterfalls\")","Yantzaza (The commercial and economic capital of the province)","El Pangui (Home to major large-scale copper mining concessions like Mirador)","Zumba (San Chinchipe / Southern border transit town near Peru)","Gualaquiza boundary sector","Palanda (Historic archaeological site showing the earliest known consumption of cacao)","Paquisha"]},"Egypt":{"Alexandria":["Alexandria City (Governorate Capital / Egypt's primary Mediterranean port and historic metropolis)","Borg El Arab (Major industrial city and location of Alexandria's primary international airport)","Abu Qir (Historic coastal town and commercial fishing port)","Al Agami","Al Amriya","El Alamein boundary sector"],"Aswan":["Aswan City (Governorate Capital / Major tourism and cultural hub on the Nile)","Kom Ombo (Famous for its unique double temple and major agricultural center)","Edfu (Home to the exceptionally preserved Temple of Horus)","Abu Simbel (Location of the monumental rock-cut temples of Ramesses II)","Nasr Al Nuba","Sebaiya"],"Asyut":["Asyut City (Governorate Capital / Major upper-Egyptian commercial, educational, and university hub)","Dairut","Manfalut","Al Qusiya","Abnoub","Abu Tig","El Badari","Sedfa"],"Beheira":["Damanhour (Governorate Capital)","Kafr El Dawar (Major industrial textile manufacturing hub)","Rosetta / Rashid (Historic port city where the Rosetta Stone was discovered)","Abu Hummus","Itay El Baroud","Kom Hamada","Edko (Major coastal gas liquefaction and distribution center)","Wadi El Natrun (Famous for its ancient Coptic Christian monasteries)"],"Beni Suef":["Beni Suef City (Governorate Capital)","Nasser (Bosh)","El Wasta","El Fashn","Beba","Somasta El Waqf","Ihnasia (Historic site of ancient Herakleopolis Magna)"],"Cairo *(Capital City Governorate)*":["Downtown Cairo / Wust El Balad (The historic 19th-century European-style commercial core)","Zamalek / Gezira Island (Upscale residential, diplomatic, and cultural district)","Maadi (Popular, leafy expat and residential neighborhood)","Heliopolis / Misr El Gedida (Historic, architecturally unique residential hub)","Nasr City (Massive, densely populated modern urban district)","New Cairo / Tagamoa (Rapidly growing modern extension, including the American University in Cairo)","Old Cairo / Coptic Cairo (Rich historic quarter featuring the Hanging Church and Babylon Fortress)","Islamic Cairo (UNESCO historic core containing the Citadel of Saladin and Khan El Khalili)"],"Dakahlia":["Mansoura (Governorate Capital / Major regional commercial and medical center)","Talkha (Industrial twin city directly across the Nile from Mansoura)","Mit Ghamr (Major center for aluminum manufacturing)","Dekernes","El Senbellawein","El Matareya (Fishing port city on Lake Manzala)","Belkas","Sherbin"],"Damietta":["Damietta City (Governorate Capital / Renowned center for premium furniture craftsmanship and logistics)","New Damietta (Modern extension featuring a major Mediterranean shipping port)","Ras El Bar (Popular resort town located at the confluence of the Nile and the Mediterranean Sea)","Faraskur","El Zarqa"],"Faiyum":["Faiyum City (Governorate Capital / One of the oldest continuously inhabited cities in the world)","Sinnuris","Ibshaway","Itsa","Tamia","Yusuf El Seddik (Gateway to Lake Qarun and the Wadi El Rayan waterfalls biosphere)"],"Gharbia":["Tanta (Governorate Capital / Major transport, commercial, and religious hub in the heart of the Delta)","El Mahalla El Kubra (Egypt's largest industrial textile and cotton processing city)","Kafr El Zayat (Major chemical industrial hub)","Zefta","Samanoud","Basyoun"],"Giza":["Giza City (Governorate Capital / Part of the Greater Cairo megacity, home to the Giza Pyramids and the Grand Egyptian Museum)","6th of October City (Massive industrial, educational, and residential satellite city)","Sheikh Zayed City (Upscale residential satellite suburb)","Al Hawamdiya","Al Badrashein (Located near the ancient ruins of Memphis and Saqqara)","Atfih","El Ayat","Al Wahat Al Bahariya (Bawiti / Major isolated desert oasis hub)"],"Ismailia":["Ismailia City (Governorate Capital / Known as the \"City of Gardens,\" located on the Suez Canal and Lake Timsah)","El Qantara West","El Tal El Kebir (Famous historic battlefield site)","Fayed (Popular lakeside resort area)","El Qassasin","Abu Suwir"],"Kafr El Sheikh":["Kafr El Sheikh City (Governorate Capital)","Desouk (Major cultural and religious hub on the Rosetta branch of the Nile)","Baltim (Coastal resort town on the Mediterranean)","Metoubes","Fuwa (Historically famous for traditional hand-woven kilim and carpet industries)","Qillin","El Hamool","Sidi Salem"],"Luxor":["Esna (Known for the Temple of Khnum and its historic Nile lock)","Armant","El Bayadiya","El Tod","El Alweat"],"Matrouh":["Marsa Matrouh (Governorate Capital / Famous Mediterranean resort city known for white-sand beaches)","Siwa Oasis (Isolated, world-renowned desert eco-tourism oasis rich in Amazigh culture and ancient springs)","El Alamein (Historic WWII battlefield site, now expanding into a massive modern coastal city)","Sidi Abdel Rahman (Premium luxury beach resort area)","El Dabaa (Site of Egypt's initial nuclear power infrastructure project)","Sallum (Strategic western border town near Libya)","Sidi Barrani"],"Minya":["Minya City (Governorate Capital / Often called the \"Bride of Upper Egypt\" for its grand architecture)","Mallawi","Bani Mazar","Maghagha","Samalut","Abu Qurqas","Deir Mawas","El Idwa"],"Monufia":["Shibin El Kom (Governorate Capital)","Sadat City (Major industrial and manufacturing satellite city)","Menouf","Ashmoun","Tala","Quesna (Important agricultural and industrial processing zone)","El Bagour","Berket El Sabea"],"New Valley *(El Wadi El Gedid)*":["Kharga Oasis (Governorate Capital / Major administrative and archaeological hub in the Western Desert)","Dakhla Oasis (Mut / Famed for its preserved medieval Islamic mudbrick towns)","Farafra Oasis (Qasr Farafra / Gateway to the surreal landscape of the White Desert National Park)","Baris Oasis","Balat"],"North Sinai":["El Arish (Governorate Capital / Largest city in the Sinai Peninsula, located on the Mediterranean coast)","Sheikh Zuweid","Rafah (Strategic international border crossing town with the Gaza Strip)","Bir El Abd","Nekhel","Al Hasana"],"Port Said":["Port Said City (Governorate Capital / Strategic Mediterranean entry port of the Suez Canal and historic free zone)","Port Fouad (Twin city located directly opposite the canal on the Asian/Sinai side)","Al Sharq District","Al Arab District","Al Manakh District","Al Zohour District"],"Qalyubia":["Banha (Governorate Capital / Known across Egypt for its premium agricultural production, especially grapes)","Shubra El Kheima (Massive, heavily populated industrial city on the northern edge of Greater Cairo)","El Qanater El Khayriya (Famous for the historic Nile Delta Barrages and gardens)","Khanka","Qalyub","Shibin El Qanater","Toukh"],"Qena":["Qena City (Governorate Capital)","Nag Hammadi (Major industrial center for aluminum smelting and sugar refining)","Deshna","Qus","Abu Tisht","Farshut","Qift (Historic ancient trading port gateway to the Red Sea)","Dendera (Home to the spectacularly preserved Temple of Hathor)"],"Red Sea *(Al Bahr Al Ahmar)*":["Hurghada (Governorate Capital / World-famous international beach resort city and diving hub)","Marsa Alam (Premier eco-tourism and pristine coral reef diving destination)","El Gouna (Upscale, privately developed luxury resort town)","Safaga (Important commercial cargo and passenger cruise port)","Al Qusayr (Historic Ottoman-era port town)","Ras Gharib (The primary center for Egypt's onshore petroleum extraction)","Shalateen (Important trading outpost near the southern border)","Halayeb"],"Sharqia":["Zagazig (Governorate Capital / Located near the ancient ruins of Bubastis)","10th of Ramadan City (One of Egypt's largest and most economically vital industrial manufacturing centers)","Bilbeis","Faqus","Abu Hammad","Minyat El Qamh","El Husseiniya","Kafr Saqr"],"Sohag":["Sohag City (Governorate Capital)","Akhmim (Famous for its ancient archaeological monuments and traditional textile hand-weaving)","Tahta","Jirja","Al Balyana (Gateway to the ancient holy city of Abydos and Temple of Seti I)","Monsha'a","Tema","Juhayna"],"South Sinai":["El Tor (Governorate Capital / Administrative center of the governorate)","Sharm El Sheikh (World-renowned resort city, international convention center, and diving capital)","Dahab (Laid-back coastal town famous for windsurfing and the Blue Hole diving site)","Nuweiba (Ferry port town linking Egypt to Jordan, featuring bedouin eco-lodges)","Taba (Border resort town facing Eilat)","Saint Catherine (Highland town at the foot of Mount Sinai and the historic UNESCO monastery)","Ras Sudr (Popular windsurfing and weekend beach destination closest to Cairo)"],"Suez":["Suez City (Governorate Capital / Strategic maritime port city at the southern terminus of the Suez Canal)","Ain Sokhna (Major industrial port and premier coastal resort destination along the Gulf of Suez)","El Arbaeen District (The densely populated cultural heart of Suez City)","El Ganayen District","Attaka District"]},"El Salvador":{"Ahuachapán":["Ahuachapán (Department Capital / Known for its geothermal energy and the nearby Ausoles)","Ataco (Concepción de Ataco / Major colorful town on the Ruta de las Flores)","Apaneca (High-altitude town famous for coffee plantations and adventure tourism)","San Francisco Menéndez (Includes the major coastal border crossing of La Hachadura)","Tacuba (Gateway to El Imposible National Park)","Guaymango","Jujutla","El Refugio"],"Santa Ana":["Santa Ana (Department Capital / El Salvador's second-largest city, famous for its neo-Gothic cathedral)","Chalchuapa (Home to the Tazumal Mayan archaeological site)","Metapán (Major center for cement manufacturing and gateway to Montecristo Cloud Forest)","Coatepeque (Located on the shores of the iconic Lake Coatepeque)","Texistepeque","San Sebastián Salitrillo","Candelaria de la Frontera (Important border town near Guatemala)","El Congo"],"Sonsonate":["Sonsonate (Department Capital / Major commercial and agricultural hub for western El Salvador)","Acajutla (The nation's principal commercial maritime cargo port)","Juayúa (Famous for its weekly food festival and waterfalls on the Ruta de las Flores)","Izalco (Located at the foot of the historic Izalco Volcano)","Nahuizalco (Renowned for traditional indigenous wicker and wood crafts)","Armenia","Caluco (Known for thermal rivers and local gastronomy)","San Julián"],"Cabañas":["Sensuntepeque (Department Capital / Historically known for pottery and agricultural trade)","Ilobasco (World-famous center for artisanal clay miniatures and pottery)","Victoria","Tejutepeque","Jutiapa","Cinquera (Known for its ecological forest reserve and civil war history)","San Isidro","Dolores"],"Chalatenango":["Chalatenango (Department Capital)","La Palma (Famous for the unique art style created by Fernando Llort and mountain tourism)","San Ignacio (Gateway to El Pital, the highest peak in El Salvador)","Dulce Nombre de María","Tejutla","Nueva Concepción (Major livestock and dairy agricultural center)","Arcatao","San José Las Flores"],"Cuscatlán":["Cojutepeque (Department Capital / Renowned for its traditional sausages and Cerro de las Pavas shrine)","Suchitoto (El Salvador's cultural capital, famous for colonial architecture and Lake Suchitlán)","San Pedro Perulapán","San Rafael Cedros","El Carmen","Tenancingo","Santa Cruz Michapa","Suchitoto boundary sector / San Bartolomé Perulapía"],"La Libertad":["Santa Tecla (Department Capital / Historically Nueva San Salvador, a major commercial and residential city)","Antiguo Cuscatlán (Highly upscale commercial, corporate, and university hub)","Puerto de La Libertad (Major coastal tourist pier and seafood market)","El Tunco / Sunzal (World-renowned surf resort and nightlife villages)","Colón (Lourdes / Rapidly expanding industrial and residential logistics hub)","San Juan Opico (Home to the San Andrés archaeological site)","Quezaltepeque","Zaragocita / Zaragoza"],"La Paz":["Zacatecoluca (Department Capital / Historic city located at the foot of San Vicente Volcano)","San Luis Talpa (Location of El Salvador International Airport / Monsignor Óscar Arnulfo Romero)","San Juan Nonualco","Olocuilta (World-famous birthplace of the pupusa made with rice flour)","San Pedro Masahuat","Santiago Nonualco","San Marcelino / Costa del Sol (Major upscale coastal beach resort peninsula)","Cuyultitán","San Salvador *(Contains the national capital, San Salvador)**:*","San Salvador (National Capital / The political, financial, and cultural heart of the country)","Soyapango (Heavily populated commercial and industrial manufacturing city)","Ilopango (Industrial center bordering the massive Ilopango volcanic caldera lake)","Mejicanos","San Marcos","Ciudad Delgado","Apopa (Major commercial crossroads and industrial zone to the north)","Tonacatepeque"],"San Vicente":["San Vicente (Department Capital / Famous for its historic Clock Tower and traditional sweets)","San Sebastián (Renowned nationwide for its traditional hand-loomed textile industries)","Apastepeque (Known for its scenic lagoon and annual festivals)","Tecoluca","Santo Domingo","Guadalupe","Verapaz","Tecoluca industrial corridor"],"La Unión":["La Unión (Department Capital / Port city on the Gulf of Fonseca)","Santa Rosa de Lima (The commercial capital of the north, known for currency exchange and cheese)","Conchagua (Home to the Conchagua Volcano panoramic viewpoint)","Pasaquina (Key international border town of El Amatillo near Honduras)","Anamorós","El Sauce","Intipucá","San Alejo"],"Morazán":["San Francisco Gotera (Department Capital)","Perquín (Historic base during the civil war, home to the Museum of the Revolution)","Corinto (Famous for the ancient Holy Holy Cave rock art drawings)","Cacaopera (Rich in distinct indigenous traditions)","Jocoro","Osicala","Torola","Guatajiagua (Known for its traditional black pottery)"],"San Miguel":["San Miguel (Department Capital / The economic and commercial powerhouse of eastern El Salvador)","Chinameca","El Tránsito","Ciudad Barrios (Birthplace of Saint Óscar Romero)","Moncagua (Famous for its natural stone pool water parks)","Lolotique","Chirilagua (Gateway to El Cuco beach)","Carolina"],"Usulután":["Usulután (Department Capital / Major commercial hub for the eastern agricultural lowlands)","Jiquilisco (Gateway to the pristine mangrove biosphere of the Jiquilisco Bay)","Santiago de María (Important highland coffee processing town)","Berlin (Known for coffee farms and geothermal power generation views)","Puerto El Triunfo (Primary eco-tourism port on Jiquilisco Bay)","Jucuapa","Santa Elena","San Agustín"]},"Equatorial Guinea":{"Annobón":["San Antonio de Palé (Province Capital / Remote volcanic island community in the South Atlantic)","Mabana","Anganchi","Aual"],"Bioko Norte *(Contains the current capital, Malabo)*":["Malabo (National and Province Capital / Major political, financial, and commercial hub located on a sunken volcanic crater)","Baney","Rebola (Historic Bubi community known for its traditional architecture)","Luba boundary sector","Basupú","Elá Nguema (Major urban district within the Malabo metropolitan area)"],"Bioko Sur":["Luba (Province Capital / Major logging and secondary port city on the west coast of Bioko Island)","Riaba","Moka (High-altitude town famous for its cool volcanic climate, wildlife research, and crater lakes)","Ureka (Renowned for its pristine beaches, waterfalls, and sea turtle nesting sites)","Baho Pequeño"],"Centro Sur":["Evinayong (Province Capital / Strategic crossroads mountain town in the geographical center of Rio Muni)","Akurenam","Niefang (Major commercial transit hub linking the coast to the continental interior)","Bikurga","Nkimi"],"Djibloho *(Administrative city province containing Ciudad de la Paz, the future capital)*":["Ciudad de la Paz / Oyala (Province Capital & Planned Future National Capital / Modern high-tech administrative city built inside the rainforest)","Mbere (The primary engineering and residential support zone for the capital's construction)"],"Kié-Ntem":["Ebebiyín (Province Capital / Vital triple-border commercial city connecting Equatorial Guinea, Cameroon, and Gabon)","Micomeseng","Nsoc-Nsomo","Bidjabidjan","NCue"],"Litoral":["Bata (Province Capital / Equatorial Guinea's largest city, economic engine, and primary continental maritime port)","Mbini (Coastal town located at the mouth of the Benito River, known for its long bridge and seafood)","Cogo (Historic, scenic colonial-era port town on the Muni estuary)","Machinda","Bitika","Rio Campo (Strategic northern border outpost adjacent to Cameroon)"],"Wele-Nzas":["Mongomo (Province Capital / Prominent political and commercial hub on the eastern border with Gabon)","Añisoc","Nsork (Gateway to the densely forested Nsork National Park)","Akonibe","Mengomeyén (Location of the major international airport serving the continental interior)"]},"Eritrea":{"Anseba":["Keren (Region Capital / Eritrea's second-largest city, famed for its scenic mountain setting, historic fort, and vibrant livestock market)","Hagaz (Major agricultural processing and commercial trade hub)","Elabered (Known for its extensive agro-industrial estate and historic fruit orchards)","Adi Tekelezan (Strategic highland transit town on the primary highway linking Asmara and Keren)","Halhal","Geleb","Asmat","Sel'a"],"Central *(Maekel)*":["Asmara (National and Region Capital / UNESCO World Heritage site globally renowned for its exceptionally preserved Modernist and Futurist Italian colonial architecture)","Berik","Ghala Nefhi","Serejeka","Sela Da'ero","Himbrti","Adi Guadad","Paradizo (Major urban residential and industrial district within the northern Asmara metropolitan area)"],"Gash-Barka":["Barentu (Region Capital / Rapidly growing commercial center primarily inhabited by the Nara and Kunama peoples)","Agordat (Historic commercial trading hub on the Barka River, famous for its grand mosque and date palms)","Tessenei (Vital economic border city and major cargo transit hub adjacent to the Sudanese border)","Haikota","Molqi","Shambuko","Gogne","Omhajer (Strategic southwestern border settlement near the Tekeze River)"],"Northern Red Sea *(Semienawi Keyih Bahri)*":["Massawa (Region Capital / Historic coral-block port city on the Red Sea with distinct Ottoman-style architecture)","Ghinda (Highland agricultural town noted for its lush green valleys and citrus farming)","Nefasit (Scenic mountain town situated at the base of the historic Debre Bizen monastery)","Afabet (Historically significant town and former military strategic stronghold)","Nakfa (The historic birthplace of Eritrea's independence movement, which gave its name to the national currency)","Dahlak Kebir (The largest island of the pristine Dahlak Archipelago, famed for marine biodiversity)","Zula (Coastal town located near the historic ancient trading port of Adulis)","Karura (Remote northern international border outpost facing Sudan)"],"Southern *(Debub)*":["Mendefera (Region Capital / Bustling commercial market hub rich in local manufacturing and farming)","Adi Keyh (Highland cultural center located near the ancient archaeological ruins of Qohaito)","Segeneiti (Famous for the massive, historic sycamore trees dotting its highland landscape)","Dekemhare (Historically developed industrial and agricultural town known for its European-style layout)","Adi Quala (Strategic southern commercial marketplace located near the Mereb River border sector)","Senafe (Situated at the foot of Mount Metera, adjacent to ancient Aksumite ruins)","Areza","Emni Haili"],"Southern Red Sea *(Debubawi Keyih Bahri)*":["Assab (Region Capital / Strategic, large-scale deepwater maritime port city on the Bab-el-Mandeb strait)","Edd (Historic, traditional Afar fishing port village along the arid coast)","Tiyo","Beylul (Ancient coastal settlement rich in maritime history)","Rahaita (Historic seat of the traditional Afar Sultanate near the southern border)","Bure (Strategic international border checkpoint route facing Ethiopia)"]},"Estonia":{"Ida-Viru":["Jõhvi (County Capital / Administrative center bridging the industrial mining towns of the region)","Narva (Estonia's third-largest city, situated on the border with Russia, dominated by the Hermann Castle)","Kohtla-Järve (Major industrial city center historically centered on oil shale extraction and processing)","Narva-Jõesuu (Historic and popular seaside resort town famous for its long sandy beach and pine forests)","Sillamäe (Known for its striking Soviet Stalinist architecture and deep-water commercial port)","Kiviõli (Industrial town features an adventure tourism center built on a repurposed oil shale semi-coke hill)","Toila (Scenic coastal village home to Oru Park and a major spa resort)","Alutaguse (Gateway to vast bog landscapes and the pristine Kurtna lake district)"],"Jõgeva":["Jõgeva (County Capital / Famous as the \"cold capital\" of Estonia, featuring agricultural research fields)","Põltsamaa (Known for its historic castle ruins, rose gardens, and traditional Estonian wine production)","Mustvee (The main cultural hub of the Old Believers community on the shores of Lake Peipus)","Palamuse (Famous cultural site immortalized in Estonian literature by Oskar Luts)","Kuremaa (Home to a classic classicist manor house and a popular beach lake)","Torma","Avinurme (Traditionally famous for its woodworking and wooden handicraft heritage)","Laiuse (Features the ruins of a 14th-century Livonian Order castle)"],"Järva":["Paide (County Capital / Known as the \"Heart of Estonia,\" famous for its historic Wittenstein limestone castle tower)","Türi (The official \"Spring Capital\" of Estonia, celebrated for its annual flower fair and railway heritage)","Järva-Jaani (Famous for its unique vintage vehicle museum and community safety center)","Koeru (Home to Aruküla manor and the highest broadcasting tower in Estonia)","Ambla","Imavere (Host to the Estonian Dairy Museum and major timber manufacturing industries)","Aravete","Roosna-Alliku"],"Lääne":["Haapsalu (County Capital / Romantic seaside resort famous for its mud spas, wooden lace architecture, and Haapsalu Castle)","Lääne-Nigula (Taebla / Expanding rural municipality rich in historic manors and agricultural landscapes)","Vormsi (Scenic Baltic island with a rich Estonian-Swedish cultural heritage and unique ringed coral stones)","Rohuküla (The vital ferry port village connecting the mainland to Hiiumaa and Vormsi islands)","Virtsu boundary corridor (Northern highway link toward the Saaremaa ferry crossing)","Palivere","Risti","Noarootsi (Peninsula characterized by traditional coastal Swedish culture and pine forests)"],"Lääne-Viru":["Rakvere (County Capital / Renowned for its massive 14th-century castle ruins and the iconic Tarvas aurochs statue)","Tapa (A major national railway junction and home to an important Estonian military base)","Kunda (Industrial port town historically famous for its cement manufacturing facility)","Väike-Maarja (Agricultural hub situated in the Pandivere upland water catchment area)","Kadrina (Historic settlement focused on timber processing and close cultural ties to Rakvere)","Haljala","Vinni","Võsu (Popular northern sandy beach resort village located inside Lahemaa National Park)"],"Põlva":["Põlva (County Capital / Built in a scenic river valley, famous for its cultural song festival grounds and artificial lake)","Räpina (Home to the oldest working paper mill in Europe and a prestigious horticultural school)","Kanepi (Known for its historical churches and beautiful rolling hill landscapes)","Ahja (Birthplace of writer Friedebert Tuglas, featuring an iconic white estate house)","Mooste (Remarkable for its fully restored, historic vodka distillery and vibrant artistic manor complex)","Värska (The cultural heart of the Seto indigenous people, renowned for mineral waters and therapeutic mud)","Kooraste","Peri","Pärnu *(The largest county by land area)**:*","Pärnu (County Capital / The official \"Summer Capital\" of Estonia, globally famous for its sandy bay, health spas, and nightlife)","Sindi (Historic industrial town built around a 19th-century textile factory on the Pärnu River)","Kilingi-Nõmme (Quiet forest-enclosed town serving as a major forestry and wood industry hub)","Lihula (Historic settlement featuring a medieval castle mound and serving as the gateway to Matsalu National Park)","Vändra (Historic cultural hub known for its early industrial glassworks and timber businesses)","Tori (Famous for its sandstone cave system, historic stud farm, and the Estonian Soldiers' Memorial Church)","Audru","Häädemeeste (Coastal strip municipality known for bird migration watching and nature tourism along the Latvian border)"],"Rapla":["Rapla (County Capital / Known for its unique twin-spire stone church and strong choir music traditions)","Kohila (Growing northern hub historically centered around its prominent paper mill facility)","Märjamaa (The largest transit municipal center in the county, positioned directly along the Via Baltica highway)","Järvakandi (The official glass capital of Estonia, boasting glass blowing studios and an industrial glass museum)","Juuru","Kehtna (Major agricultural vocational training center featuring an expansive manor park)","Kaiu","Alu (Home to the historic Alu manor, a prominent administrative training base)","Saare *(Island county)**:*","Kuressaare (County Capital / Famous for its exceptionally preserved medieval Episcopal Castle and high density of wellness spas)","Orissaare (Eastern island hub celebrated for its iconic oak tree standing directly in the middle of a football stadium)","Muhu (Liiva / Independent island linked by a causeway, famous for colorful traditional embroidery and luxury tourism)","Leisi (Northern coastal town overlooking the Soela strait toward Hiiumaa)","Salme (Discovered archaeological site of ancient pre-Viking ship burials on the Sõrve peninsula)","Kihelkonna","Valjala (Home to the oldest stone church building remaining on Estonian territory)","Ruhnu (Remote, isolated island community in the Gulf of Riga with an exceptional wooden church from 1644)"],"Tartu":["Tartu (County Capital / Estonia's intellectual heart, home to the prestigious 1632 University of Tartu and the National Museum)","Elva (Known as a pine-forested wellness town built around peaceful swimming lakes and sports infrastructure)","Kallaste (Seaside red sandstone cliff town populated by traditional Old Believer communities on Lake Peipus)","Ülenurme (Suburban hub housing the Estonian Agricultural Museum)","Luunja (Major logistics and greenhouse agricultural center positioned on the Emajõgi river)","Nõo","Alatskivi (Famous for its fairytale-style white neo-Gothic castle modeled after Balmoral)","Kambja"],"Valga":["Valga (County Capital / Unique twin international border town seamlessly integrated with Valka, Latvia)","Otepää (The official \"Winter Capital\" of Estonia, a world-class training ground for cross-country skiing and biathlon)","Tõrva (Scenic southern town built around pristine lakes and the historic Wagenküll castle spa)","Puka","Sangaste (Famous for its red-brick Windsor-style romantic manor castle and local rye cultivation)","Tsirguliina","Hargla","Lüllemäe (Centering the picturesque Karula National Park dome topography landscape)"],"Viljandi":["Viljandi (County Capital / Famous for its scenic castle hills overlooking a deep lake and its massive international Folk Music Festival)","Suure-Jaani (The cultural northern gateway to the vast wetland wilderness of Soomaa National Park)","Karksi-Nuia (Southern mountain valley town known for its leaning church tower within a medieval castle ruin)","Mõisaküla (Estonia's smallest official city, historically thriving as a major railway repair hub)","Võhma (Historically famous as a meat processing city, now known for artisanal candle manufacturing)","Mustla","Olustvere (Home to a beautifully preserved estate complex and a notable food sciences vocational college)","Ramsi"],"Võru":["Võru (County Capital / Founded by decree of Catherine the Great, situated on Lake Tamula, preserving the unique Võro language)","Antsla (Host to the famous Hauka Fair, the largest traditional regional market gathering in Estonia)","Rõuge (Known for the deep Nightingale Valley and the unique \"Egg Hill\" observation tower overlooking Estonia's deepest lakes)","Vastseliina (Famous for the ruins of its 14th-century border castle, historically a prominent pilgrimage site)","Misso","Obinitsa (A principal cultural center of the Seto minority group, celebrated for traditional polyphonic singing)","Mõniste (Location of the oldest open-air heritage museum in Estonia showcasing traditional rural life)","Haanja (The highest geographic sector in the Baltic States, containing the peak of Suur Munamägi)"]},"Eswatini":{"Hhohho":["Mbabane","Piggs Peak","Ngwenya","Bhunya","Entfonjeni","Mhlume","Lobamba","Bulembu"],"Lubombo":["Siteki","Big Bend","Simunye","Matata","Lomahasha","Siphofaneni","Mpaka","Vuvulane"],"Manzini":["Manzini","Matsapha","Malkerns","Mankayane","Mhlambanyatsi","Luve","Sidvokodvo","Ngwempisi"],"Shiselweni":["Nhlangano","Hlatikulu","Hluti","Lavumisa","Gege","Matsanjeni","Somntongo","Mhlosheni"]},"Ethiopia":{"Dire Dawa":["Dire Dawa City","Gurgura","Melka Jebdu","Jeldesa","Bishan Beche","Tone"],"Afar":["Semera","Asayita","Chifra","Awash Sebat Kilo","Gewane","Aba'ala","Dallol","Yalo"],"Amhara":["Bahir Dar","Gondar","Dessie","Kombolcha","Lalibela","Debre Markos","Debre Birhan","Woldiya"],"Benishangul-Gumuz":["Assosa","Kamashi","Gilgel Beles","Metekel","Bambasi","Bulen","Dibate","Guba","Central Ethiopia Regional State *(Formed following the split of the SNNPR)**:*","Hosaina","Wolkite","Butajira","Alaba Kulito","Durame","Agena","Silti","Kebet"],"Gambela":["Gambela City","Itang","Abobo","Fugnido","Lare","Jikawo","Kuri","Gog"],"Harari":["Harar City","Sofi","Erer Budena","Dire Teyara","Jin'Ella","Aboker"],"Oromia":["Adama (Nazret)","Jimma","Bishoftu (Debre Zeyit)","Shashemene","Nekemte","Ambo","Asella","Robe"],"Sidama":["Hawassa","Yirgalem","Aleta Wendo","Leku","Bona Ramos","Daye","Hula","Awada"],"Somali":["Jijiga","Gode","Kebridehar","Degehabur","Dolo Odo","Warder","Shinile","Tog Wajale","South Ethiopia Regional State *(Formed following the split of the SNNPR)**:*","Arba Minch","Wolaita Sodo","Jinka","Dila","Karat Konso","Sawla","Turmi","Weyto"],"Southwest Ethiopia Peoples' Region":["Bonga","Mizan Teferi","Tepi","Tercha","Chena","Decha","Gesha","Kaffa"],"Tigray":["Mekelle","Shire (Inda Selassie)","Axum","Adigrat","Adwa","Alamata","Maychew","Humera"]},"Fiji":{"Central Division":["Suva","Nausori","Lami","Nasinu","Navua","Korovou","Vunidawa","Pacific Harbour"],"Eastern Division":["Levuka","Vunisea","Lomaloma","Tubou","Naroi","Kavala","Gau","Koro"],"Northern Division":["Labasa","Savusavu","Seaqaqa","Nabouwalu","Taveuni (Waiyevo)","Tukavesi","Saqani","Dreketi"],"Western Division":["Lautoka","Nadi","Ba","Sigatoka","Rakiraki","Tavua","Vatukoula","Keyasi"],"Rotuma Dependency":["Ahau","Motusa","Oinafa","Malhaha","Lopta","Noatau","Juju","Pepjei"]},"Finland":{"Åland *(Ahvenanmaa)*":["Mariehamn (Maarianhamina)","Jomala","Finström","Lemland","Saltvik","Hammarland","Central Finland *(Keski-Suomi)**:*","Jyväskylä","Jämsä","Äänekoski","Keuruu","Saarijärvi","Laukaa","Muurame","Central Ostrobothnia *(Keski-Pohjanmaa)**:*","Kokkola","Kannus","Kaustinen","Toholampi","Veteli","Kronoby (Kruunupyy)"],"Kainuu":["Kajaani","Kuhmo","Suomussalmi","Sotkamo","Puolanka","Hyrynsalmi"],"Kymenlaakso":["Kouvola","Kotka","Hamina","Pyhtää","Virolahti","Miehikkälä","Lapland *(Lappi)**:*","Rovaniemi","Tornio","Kemi","Kemijärvi","Kittilä","Inari","Sodankylä","Kuusamo boundary sector","North Karelia *(Pohjois-Karjala)**:*","Joensuu","Kitee","Lieksa","Nurmes","Outokumpu","Ilomantsi","Kontiolahti","North Ostrobothnia *(Pohjois-Pohjanmaa)*","Oulu","Raahe","Ylivieska","Kuusamo","Kalajoki","Pudasjärvi","Nivala","Haapajärvi","North Savo *(Pohjois-Savo)**:*","Kuopio","Varkaus","Iisalmi","Siilinjärvi","Kiuruvesi","Suonenjoki","Leppävirta","Ostrobothnia *(Pohjanmaa)**:*","Vaasa (Vasa)","Jakobstad (Pietarsaari)","Mustasaari (Korsholm)","Nykarleby (Uusikaarlepyy)","Närpes (Närpiö)","Laihia"],"Päijät-Häme":["Lahti","Heinola","Hollola","Orimattila","Asikkala","Kärkölä"],"Pirkanmaa":["Tampere","Nokia","Ylöjärvi","Kangasala","Lempäälä","Sastamala","Valkeakoski","Jämsä boundary sector"],"Satakunta":["Pori","Rauma","Ulvila","Kankaanpää","Huittinen","Eura","Harjavalta","South Karelia *(Etelä-Karjala)**:*","Lappeenranta","Imatra","Parikkala","Ruokolahti","Luumäki","Taipalsaari","South Ostrobothnia *(Etelä-Pohjanmaa)**:*","Seinäjoki","Kurikka","Lapua","Kauhava","Alavus","Kauhajoki","South Savo *(Etelä-Savo)**:*","Mikkeli","Savonlinna","Pieksämäki","Juva","Kangasniemi","Mäntyharju","Southwest Finland *(Varsinais-Suomi)**:*","Turku (Åbo)","Salo","Kaarina","Raisio","Naantali","Loimaa","Uusikaupunki","Pargas (Parainen)","Tavastia Proper *(Kanta-Häme)**:*","Hämeenlinna","Riihimäki","Forssa","Janakkala","Hausjärvi","Loppi"],"Uusimaa":["Helsinki (Helsingfors)","Espoo (Esbo)","Vantaa (Vanda)","Porvoo (Borgå)","Raasepori (Raseborg)","Lohja (Lojo)","Järvenpää","Hyvinkää"]},"France":{"Auvergne-Rhône-Alpes":["Lyon","Saint-Étienne","Grenoble","Villeurbanne","Clermont-Ferrand","Annecy","Vénissieux","Valence","Bourgogne-Franche-Comté *(Burgundy-Franche-Comté)**:*","Dijon","Besancon","Belfort","Chalon-sur-Saône","Nevers","Auxerre","Mâcon","Sens","Bretagne *(Brittany)**:*","Rennes","Brest","Quimper","Lorient","Vannes","Saint-Malo","Saint-Brieuc","Lanester"],"Centre-Val de Loire":["Tours","Orléans","Bourges","Blois","Châteauroux","Chartres","Joué-lès-Tours","Dreux"],"Corse *(Corsica)*":["Ajaccio","Bastia","Porto-Vecchio","Borgo","Biguglia","Corte","Calvi","Propriano"],"Grand Est":["Strasbourg","Reims","Metz","Mulhouse","Nancy","Colmar","Troyes","Charleville-Mézières"],"Hauts-de-France":["Lille","Amiens","Roubaix","Tourcoing","Dunkerque","Calais","Villeneuve-d'Ascq","Saint-Quentin"],"Île-de-France":["Paris","Boulogne-Billancourt","Saint-Denis","Argenteuil","Montreuil","Nanterre","Vitry-sur-Seine","Créteil","Normandie *(Normandy)**:*","Le Havre","Rouen","Caen","Cherbourg-en-Cotentin","Évreux","Dieppe","Saint-Lô","Alençon"],"Nouvelle-Aquitaine":["Bordeaux","Limoges","Poitiers","Pau","La Rochelle","Mérignac","Pessac","Niort"],"Occitanie":["Toulouse","Montpellier","Nîmes","Perpignan","Béziers","Montauban","Narbonne","Albi"],"Pays de la Loire":["Nantes","Angers","Le Mans","Saint-Nazaire","La Roche-sur-Yon","Cholet","Laval","Rezé"],"Provence-Alpes-Côte d'Azur":["Marseille","Nice","Toulon","Aix-en-Provence","Avignon","Antibes","Cannes","La Seyne-sur-Mer","French Guiana *(Guyane)**:*","Cayenne","Saint-Laurent-du-Maroni","Kourou","Matoury","Remire-Montjoly","Mana","Macouria","Maripasoula"],"Guadeloupe":["Les Abymes","Baie-Mahault","Le Gosier","Sainte-Anne","Petit-Bourg","Le Moule","Pointe-à-Pitre","Basse-Terre"],"Martinique":["Fort-de-France","Le Lamentin","Le Robert","Schœlcher","Sainte-Marie","Ducos","Saint-Joseph","La Trinité"],"Mayotte":["Mamoudzou","Koungou","Dzaoudzi","Dembeni","Tsingoni","Pamandzi","Bandraboua","Sada"],"Réunion":["Saint-Denis","Saint-Paul","Saint-Pierre","Le Tampon","Saint-André","Saint-Louis","Le Port","Saint-Benoît"]},"Gabon":{"Estuaire":["Libreville","Owendo","Akanda","Ntoum","Kango","Cocobeach","Ndjolé boundary sector","Santa Clara"],"Haut-Ogooué":["Franceville","Moanda","Mounana","Akieni","Leconi","Okondja","Boumango","Bakoumba"],"Moyen-Ogooué":["Lambaréné","Ndjolé","Bifoun","Makouke","Ashouka","Ezanga","Nsilé","Mbel"],"Ngounié":["Mouila","Ndendé","Fougamou","Lébamba","Mbigou","Mimongo","Ndougou","Mandji"],"Nyanga":["Tchibanga","Mayumba","Ndindi","Moabi","Mabanda","Nyali","Mourindi","Mongonsi"],"Ogooué-Ivindo":["Makokou","Koulamoutou boundary sector","Booué","Ovan","Mékambo","Zadie","Mvadi","Belinga"],"Ogooué-Lolo":["Koulamoutou","Lastoursville","Pana","Iboundji","Popa","Dienga","Matsatsa","Ndangui"],"Ogooué-Maritime":["Port-Gentil","Gamba","Mandji","Omboué","Ndougou","Batanga","Ozouri","Mpaga"],"Woleu-Ntem":["Oyem","Bitam","Mitzic","Minvoul","Médouneu","Lalara","Eboro","Meyo-Kye"]},"Gambia":{"Kanifing":["Serekunda","Kanifing Municipal Area","Bakau","Fajara","Sukuta","Kotu","Kololi","Abuko"],"Central River":["Janjanbureh (Georgetown)","Bansang","Kuntaur","Brikama Ba","Kerewan Samba Sira","Lamin Koto","Dankunku","Sami Karantaba"],"Lower River":["Mansa Konko","Soma","Jarra West","Kiang West","Kwinella","Toniataba","Kaiaf","Bureng"],"North Bank":["Kerewan","Farafenni","Barra","Essau","Ndofan","Salikenni","Illiassa","Juffureh (Albreda)"],"Upper River":["Basse Santa Su","Garawol","Koina","Sabi","Gambissara","Numuyel","Fatoto","Diabugu","Western *(West Coast Region)**:*","Brikama","Lamin","Yundum","Brufut","Tanji","Gunjur","Sanyang","Kartong"]},"Georgia":{"Tbilisi":["Old Tbilisi (Historic district, sulfur baths, Narikala Fortress)","Vake (Upscale residential and commercial district)","Saburtalo (Densely populated residential and university hub)","Vera","Chugureti (Marjanishvili area, Fabrika hub)","Gldani","Isani","Samgori"],"Abkhazia":["Sukhumi","Gagra","Pitsunda","Gudauta","Ochamchire","Tkvarcheli","Gali","New Athos (Akhali Atoni)"],"Adjara":["Batumi","Kobuleti","Khelvachauri","Chakvi","Keda","Shuakhevi","Khulo","Sarpi"],"Guria":["Ozurgeti","Laituri","Naruja","Ureki","Chokhatauri","Lanchkhuti","Bakhmaro","Gomismta"],"Imereti":["Kutaisi","Samtredia","Zestafoni","Chiatura","Tskaltubo","Tkibuli","Khoni","Sachkhere"],"Kakheti":["Telavi","Signagi","Kvareli","Gurjaani","Sagarejo","Dedoplistskaro","Akhmeta","Tsnori"],"Kvemo Kartli":["Rustavi","Marneuli","Gardabani","Bolnisi","Dmanisi","Tsalka","Tetritskaro","Bediani"],"Mtskheta-Mtianeti":["Mtskheta","Stepantsminda (Kazbegi)","Gudauri","Dusheti","Pasanauri","Tianeti","Shatili","Ananuri"],"Racha-Lechkhumi and Kvemo Svaneti":["Ambrolauri","Oni","Tsageri","Lentekhi","Nikortsminda","Shovi","Kvanchkara","Ghebi"],"Samegrelo-Zemo Svaneti":["Zugdidi","Poti","Mestia","Senaki","Martvili","Anaklia","Tsalenjikha","Khobi"],"Samtskhe-Javakheti":["Akhaltsikhe","Borjomi","Akhalkalaki","Bakuriani","Ninotsminda","Vale","Adigeni","Aspindza"],"Shida Kartli":["Gori","Khashuri","Kaspi","Kareli","Tskhinvali","Java","Akhalgori","Surami"]},"Germany":{"Baden-Württemberg":["Stuttgart","Mannheim","Karlsruhe","Freiburg im Breisgau","Heidelberg","Ulm","Heilbronn","Pforzheim"],"Bavaria *(Bayern)*":["Munich (München)","Nuremberg (Nürnberg)","Augsburg","Regensburg","Ingolstadt","Würzburg","Fürth","Erlangen"],"Brandenburg":["Potsdam","Cottbus","Brandenburg an der Havel","Frankfurt (Oder)","Oranienburg","Falkensee","Eberswalde","Königs Wusterhausen"],"Hesse *(Hessen)*":["Frankfurt am Main","Wiesbaden","Kassel","Darmstadt","Offenbach am Main","Hanau","Gießen","Marburg"],"Lower Saxony *(Niedersachsen)*":["Hanover (Hannover)","Braunschweig","Oldenburg","Osnabrück","Wolfsburg","Göttingen","Hildesheim","Salzgitter"],"Mecklenburg-Western Pomerania *(Mecklenburg-Vorpommern)*":["Rostock","Schwerin","Neubrandenburg","Stralsund","Greifswald","Wismar","Güstrow","Waren (Müritz)"],"North Rhine-Westphalia *(Nordrhein-Westfalen)*":["Cologne (Köln)","Düsseldorf","Dortmund","Essen","Duisburg","Bochum","Wuppertal","Bielefeld"],"Rhineland-Palatinate *(Rheinland-Pfalz)*":["Mainz","Ludwigshafen am Rhein","Koblenz","Trier","Kaiserslautern","Worms","Neuwied","Neustadt an der Weinstraße"],"Saarland":["Saarbrücken","Neunkirchen","Homburg","Völklingen","Saarlouis","Merzig","St. Ingbert","Dillingen"],"Saxony *(Sachsen)*":["Leipzig","Dresden","Chemnitz","Zwickau","Plauen","Görlitz","Bautzen","Freiberg"],"Saxony-Anhalt *(Sachsen-Anhalt)*":["Halle (Saale)","Magdeburg","Dessau-Roßlau","Bitterfeld-Wolfen","Stendal","Halberstadt","Weißenfels","Lutherstadt Wittenberg"],"Schleswig-Holstein":["Kiel","Lübeck","Flensburg","Neumünster","Norderstedt","Elmshorn","Pinneberg","Wedel","Thuringia *(Thüringen)**:*","Erfurt","Jena","Gera","Weimar","Gotha","Nordhausen","Eisenach","Suhl"],"Berlin":["Mitte","Pankow","Charlottenburg-Wilmersdorf","Friedrichshain-Kreuzberg","Tempelhof-Schöneberg","Neukölln","Lichtenberg","Spandau"],"Bremen":["Bremen City","Bremerhaven","Vegesack","Blumenthal","Burglesum","Hemelingen","Neustadt","Findorff"],"Hamburg":["Altona","Bergedorf","Eimsbüttel","Hamburg-Mitte","Hamburg-Nord","Harburg","Wandsbek","St. Pauli"]},"Ghana":{"Ahafo":["Goaso","Mim","Hwidiem","Bechem","Kenyasi","Duayaw Nkwanta","Kukuom","Yamfo"],"Ashanti":["Kumasi","Obuasi","Mampong","Konongo","Tafo","Ejura","Bekwai","Offinso"],"Bono":["Sunyani","Berekum","Sampa","Dormaa Ahenkro","Drobo","Wamfie","Nsuatre","Jinijini"],"Bono East":["Techiman","Kintampo","Nkoranza","Yeji","Atebubu","Prang","Tuobodom","Kwame Danso"],"Central":["Cape Coast","Winneba","Kasoa","Mankessim","Elmina","Agona Swedru","Dunkwa-on-Offin","Saltpond"],"Eastern":["Koforidua","Nkawkaw","Suhum","Oda (Akim Oda)","Asamankese","Manya Krobo (Odumase Krobo)","Nsawam","Somanya"],"Greater Accra":["Accra","Tema","Madina","Ashaiman","Dome","Lashibi","Teshie","Ada Foah"],"North East":["Nalerigu","Gambaga","Walewale","Bunkpurugu","Chereponi","Yagaba","Langbinsi","Wulugu"],"Northern":["Tamale","Yendi","Savelugu","Karaga","Gushiegu","Bimbilla","Kumbungu","Saboba"],"Oti":["Dambai","Jasikan","Kete Krachi","Nkwanta","Kadjebi","Chinderi","Likpe Mate","Worawora"],"Savannah":["Damongo","Bole","Salaga","Buipe","Mpaha","Tuna","Daboya","Sawla"],"Upper East":["Bolgatanga","Navrongo","Bawku","Paga","Tongo","Sandema","Zebilla","Fumbisi"],"Upper West":["Wa","Tumu","Jirapa","Lawra","Nandom","Gwollu","Issa","Funsi"],"Volta":["Ho","Hohoe","Kpando","Aflao","Keta","Sogakope","Anloga","Dzodze"],"Western":["Sekondi-Takoradi","Tarkwa","Axim","Elubo","Dixcove","Shama","Prestea","Agona Nkwanta"],"Western North":["Sefwi Wiawso","Enchi","Bia Essam","Sefwi Bekwai","Juaboso","Dadieso","Bibiani","Bodie"]},"Greece":{"Attica":["Athens","Piraeus","Peristeri","Kallithea","Acharnes","Nea Smyrni","Marousi","Lavrio"],"Central Greece":["Lamia","Chalcis (Chalkida)","Thebes (Thiva)","Livadeia","Amfissa","Karpenisi","Aliartos","Atalanti"],"Central Macedonia":["Thessaloniki","Serres","Katerini","Veria","Giannitsa","Kilkis","Edessa","Polygyros"],"Crete":["Heraklion","Chania","Rethymno","Agios Nikolaos","Ierapetra","Sitia","Kissamos","Moires"],"Eastern Macedonia and Thrace":["Komotini","Alexandroupoli","Kavala","Xanthi","Drama","Orestiada","Didymoteicho","Thasos"],"Epirus":["Ioannina","Arta","Preveza","Igoumenitsa","Metsovo","Konitsa","Paramythia","Parga"],"Ionian Islands":["Corfu (Kerkyra)","Argostoli (Kefalonia)","Zakynthos","Lefkada","Vathy (Ithaca)","Gaios (Paxos)","Lixouri","Kythira boundary sector"],"North Aegean":["Mytilene (Lesbos)","Chios","Vathy (Samos)","Myrina (Lemnos)","Evdilos (Ikaria)","Plomari","Karlovasi","Psara"],"Peloponnese":["Kalamata","Tripoli","Corinth","Argos","Sparta","Nafplio","Kiato","Gytheio"],"Southern Aegean":["Ermoupoli (Syros)","Rhodes","Kos","Naxos","Mykonos","Thira (Santorini)","Parikia (Paros)","Kalymnos"],"Thessaly":["Larissa","Volos","Trikala","Karditsa","Tyrnavos","Elassona","Kalabaka (Meteora)","Skiathos"],"Western Greece":["Patras","Agrinio","Pyrgos","Missolonghi","Aigio","Nafpaktos","Amfilochia","Amaliada"],"Western Macedonia":["Kozani","Ptolemaida","Kastoria","Florina","Grevena","Siatista","Amyntaio","Deskati","Mount Athos *(Autonomous Monastic State)**:*","Karyes","Dafni","Great Lavra sector","Vatopedi sector","Iviron sector","Chilandariou sector","Agiou Pavlou sector","Simonopetra sector"]},"Grenada":{"Saint Andrew":["Grenville","Soubise","Marquis","Clabony","Chruisand","Dunfermline","Moyah","Tivoli"],"Saint David":["Saint David's","Westerhall","Calivigny","Perdmontemps","Crochu","Vincennes","Syracuse","Marlmount"],"Saint George":["St. George's","Grand Anse","Calliste","Belmont","Woburn","Willis","New Hampshire","Fontenoy"],"Saint John":["Gouyave","Grand Roy","Marigot","Concord","Florida","Brothers","Clozier","Palmiste"],"Saint Mark":["Victoria","Waltham","Nonpareil","Duquesne","Castle Hill","Maran","Tufton Hall","Crayfish"],"Saint Patrick":["Sauteurs","Chantimelle","Morne Fendue","Rose Hill","River Sallee","Hermitage","Mt. Craven","Levera"]},"Guatemala":{"Alta Verapaz":["Cobán","San Pedro Carchá","San Juan Chamelco","Chisec","Fray Bartolomé de las Casas","Tactic","Senahú","Cahabón"],"Baja Verapaz":["Salamá","San Jerónimo","Purulhá","Rabinal","Cubulco","Granados","El Chol","San Miguel Chicaj"],"Chimaltenango":["Chimaltenango","El Tejar","Tecpán Guatemala","Patzún","Patzicía","San Martín Jilotepeque","Yepocapa","Zaragoza"],"Chiquimula":["Chiquimula","Esquipulas","Jocotán","Camotán","Ipala","Quezaltepeque","San Jacinto","Olopa"],"El Progreso":["Guastatoya","Sanarate","San Antonio La Paz","El Jícaro","Sansare","Morazán","San Agustín Acasaguastlán","San Cristóbal Acasaguastlán"],"Escuintla":["Escuintla","Santa Lucía Cotzumalguapa","Puerto San José","Tiquisate","Palín","Masagua","La Gomera","Siquinalá"],"Guatemala":["Guatemala City","Mixco","Villa Nueva","San Juan Sacatepéquez","Villa Canales","Amatitlán","Chinautla","Santa Catarina Pinula"],"Huehuetenango":["Huehuetenango","Chiantla","San Pedro Soloma","Jacaltenango","Barillas (Santa Cruz Barillas)","Todos Santos Cuchumatán","Cuilco","Aguacatán"],"Izabal":["Puerto Barrios","Morales","Livingston","Los Amates","El Estor","Santo Tomás de Castilla","Mariscos","Entre Ríos"],"Jalapa":["Jalapa","San Pedro Pinula","San Luis Jilotepeque","Monjas","Mataquescuintla","San Manuel Chaparrón","San Carlos Alzatate","El Paraíso"],"Jutiapa":["Jutiapa","Asunción Mita","Moyuta","Jalpatagua","Quesada","El Progreso (Jutiapa)","Pasaco","Agua Blanca"],"Petén":["Flores","Santa Elena de la Cruz","San Benito","Poptún","Sayaxché","Melchor de Mencos","La Libertad","San Luis"],"Quetzaltenango":["Quetzaltenango (Xela)","Coatepeque","Salcajá","Olintepeque","San Juan Ostuncalco","Cantel","Colomba Costa Cuca","Almolonga"],"Quiché":["Santa Cruz del Quiché","Chichicastenango","Nebaj (Santa Maria Nebaj)","Joyabaj","Zacualpa","Sacapulas","Uspantán","Cunén"],"Retalhuleu":["Retalhuleu","Champerico","San Andrés Villa Seca","Nuevo San Carlos","El Asintal","San Felipe","San Martín Zapotitlán","Santa Cruz Muluá"],"Sacatepéquez":["Antigua Guatemala","Ciudad Vieja","Jocotenango","Sumpango","Santiago Sacatepéquez","San Lucas Sacatepéquez","Pastores","Alotenango"],"San Marcos":["San Marcos","San Pedro Sacatepéquez","Malacatán","Ayutla (Tecún Umán)","Catarina","Tajumulco","Tejutla","El Tumbador"],"Santa Rosa":["Cuilapa","Barberena","Chiquimulilla","Taxisco","San Rafael Las Flores","Guazacapán","Casillas","Santa Rosa de Lima"],"Sololá":["Sololá","Panajachel","Santiago Atitlán","San Pedro La Laguna","San Lucas Tolimán","Santa Catarina Palopó","San Juan La Laguna","Nahualá"],"Suchitepéquez":["Mazatenango","Cuyotenango","Chicacao","Patulul","Samayac","San Antonio Suchitepéquez","Rio Bravo","Santo Domingo Suchitepéquez"],"Totonicapán":["Totonicapán","San Francisco El Alto","Momostenango","Santa María Chiquimula","San Cristóbal Totonicapán","San Andrés Xecul","San Bartolo","Santa Lucía La Reforma"],"Zacapa":["Zacapa","Gualán","Teculután","Estanzuela","Río Hondo","San Diego","Usumatlán","Cabañas"]},"Guinea":{"Boké":["Boké","Kamsar","Sangarédi","Fria","Koundara","Gaoual","Boffa","Kolaboui"],"Conakry":["Ratoma","Matoto","Dixinn","Kaloum","Matam","Kassa (Loos Islands)"],"Faranah":["Faranah","Kissidougou","Dabola","Dinguiraye","Banian","Albadariah","Maréla","Gnaléah"],"Kankan":["Kankan","Siguiri","Kouroussa","Mandiana","Kérouané","Norassoba","Banankoro","Tokounou"],"Kindia":["Kindia","Coyah","Dubréka","Forécariah","Télimélé","Manya","Souguéta","Kolenté"],"Labé":["Labé","Mali","Tougué","Koubia","Lélouma","Popodara","Yambering","Diari"],"Mamou":["Mamou","Dalaba","Pita","Timbo","Ouré-Kaba","Porédaka","Konkouré","Kegneko"],"Nzérékoré":["Nzérékoré","Macenta","Guéckédou","Beyla","Lola","Yomou","Diecké","Boola"]},"Guinea-Bissau":{"Bafatá":["Bafatá","Bambadinca","Galomaro","Gã-Mamudo","Xitole","Contuboel","Cosse"],"Biombo":["Quinhámel","Safim","Prabis","Suru","Ondame","Dorse"],"Bissau *(Autonomous Sector)*":["Bissau City","Praça sector","Ajuda","Bandim","Santa Luzia","Mindará","Cuntum","Antula"],"Bolama":["Bolama","Bubaque","Uno","Caravela","Formosa","Galinhas","Rubane"],"Cacheu":["Cacheu","Canchungo","São Domingos","Bigene","Bula","Caió","Pirada sector boundary"],"Gabú":["Gabú","Pirada","Pitche","Medina do Boé","Sonaco","Buruntuma","Contuboel boundary sector"],"Oio":["Farim","Mansôa","Bissorã","Nhacra","Mansabá","Cuor","Jata"],"Quinara":["Buba","Empada","Fulacunda","Tite","Batambalo"],"Tombali":["Catió","Bedanda","Cacine","Quebo","Komo","Gandembel"]},"Guyana":{"Barima-Waini":["Mabaruma","Port Kaituma","Matthews Ridge","Morawhanna","Santa Rosa","Kumaka","Kwebanna","Baramita"],"Cuyuni-Mazaruni":["Bartica","Kamarang","Issano","Kartabo","Imbaimadai","Kurupung","Itaballi","Kako"],"Demerara-Mahaica":["Georgetown","Buxton","Enmore","Triumph","Beterverwagting","Mahaica Village","Plaisance","Eccles"],"East Berbice-Corentyne":["New Amsterdam","Corriverton","Rose Hall","Skeldon","Albion","Port Mourant","Mara","Orealla"],"Essequibo Islands-West Demerara":["Vreed-en-Hoop","Parika","Leonora","Uitvlugt","Wakenaam","Leguan","Zeelugt","Meten-Meer-Zorg"],"Mahaica-Berbice":["Fort Wellington","Rosignol","Mahaicony Village","Weldaad","Belladrum","Bush Lot","Bath","Abary"],"Pomeroon-Supenaam":["Anna Regina","Charity","Suddie","Aurora","Danielstown","Queenstown","Mainstay","Marlborough"],"Potaro-Siparuni":["Mahdia","Tumatumari","Kangaruma","Chenapau","Paramakatoi","Campbelltown","Princeville","Saveretik"],"Upper Demerara-Berbice":["Linden","Ituni","Kwakwani","Rockstone","Christianburg","Wismar","Silvercity","Great Falls"],"Upper Takutu-Upper Essequibo":["Lethem","Aishalton","St. Ignatius","Annai","Shulinab","Dadanawa","Sand Creek","Konashen"]},"Haiti":{"Artibonite":["Gonaïves","Saint-Marc","Petite Rivière de l'Artibonite","Verrettes","Gros-Morne","Anse-Rouge","Ennery","Desdunes"],"Centre":["Hinche","Mirebalais","Lascahobas","Maïssade","Cerca-la-Source","Thomassique","Belladère","Boucan-Carré"],"Grand'Anse":["Jérémie","Anse-d'Hainault","Pestel","Corail","Dame-Marie","Les Irois","Moron","Chambellan"],"Nippes":["Miragoâne","Anse-à-Veau","Petite-Rivière-de-Nippes","Fond-des-Nègres","Paillant","Plaisance-du-Sud","Arnaud","L'Asile"],"Nord":["Cap-Haïtien","Limbé","Milot","Saint-Raphaël","Grande-Rivière-du-Nord","Plaisance","Pilate","Quartier-Morin"],"Nord-Est":["Fort-Liberté","Ouanaminthe","Trou-du-Nord","Terrier-Rouge","Carice","Sainte-Suzanne","Ferrier","Montorganisé"],"Nord-Ouest":["Port-de-Paix","Saint-Louis-du-Nord","Jean-Rabel","Môle-Saint-Nicolas","Anse-à-Foleur","Bombardopolis","Baie-de-Henne","Chansolme"],"Ouest":["Port-au-Prince","Delmas","Pétion-Ville","Carrefour","Cité Soleil","Tabarre","Léogâne","Arcahaie"],"Sud":["Les Cayes","Aquin","Torbeck","Port-Salut","Camp-Perrin","Coteaux","Chardonnières","Saint-Louis-du-Sud"],"Sud-Est":["Jacmel","Cayes-Jacmel","Marigot","Belle-Anse","Thiotte","Bainet","Grand-Gosier","Anse-à-Pitre"]},"Honduras":{"Atlántida":["La Ceiba","Tela","El Porvenir","San Francisco","Jutiapa","La Masica","Arizona","Esparta"],"Choluteca":["Choluteca","San Marcos de Colón","Pespire","El Triunfo","Namasigüe","Marcovia","Orocuina","Duyure"],"Colón":["Trujillo","Tocoa","Sonaguera","Bonito Oriental","Saba","Iriona","Limón","Santa Rosa de Aguán"],"Comayagua":["Comayagua","Siguatepeque","Taulabé","Ajuterique","El Rosario","Meámbar","Villa de San Antonio","Ojo de Agua"],"Copán":["Santa Rosa de Copán","Copán Ruinas","Entrada de Copán (Nueva Arcadia)","Cucuyagua","Corquín","Florida","San Pedro de Copán","Cabañas"],"Cortés":["San Pedro Sula","Choloma","Puerto Cortés","El Progreso boundary sector","Villanueva","La Lima","San Manuel","Omoa"],"El Paraíso":["Danlí","El Paraíso","Yuscarán","Teupasenti","Morocelí","Jacaleapa","San Antonio de Flores","Soledad"],"Francisco Morazán":["Tegucigalpa","Comayagüela","Valle de Ángeles","Santa Lucía","Ojojona","Talanga","Sabanagrande","Marale"],"Gracias a Dios":["Puerto Lempira","Brus Laguna","Ahuas","Juan Francisco Bulnes","Villeda Morales","Wampusirpi","Raya","Barra Patuca"],"Intibucá":["La Esperanza","Intibucá","Yamaranguila","Jesús de Otoro","San Juan","Masaguara","Camasca","San Antonio"],"Islas de la Bahía":["Roatán","Utila","Guanaja","Jose Santos Guardiola","Coxen Hole","French Harbour","West End","Sandy Bay"],"La Paz":["La Paz","Marcala","Yarula","Santa Elena","Cabañas","San Pedro de Tutule","Santiago de Puringla","Guajiquiro"],"Lempira":["Gracias","Lepaera","Erandique","San Andrés","La Campa","Candelaria","Mapulaca","Piraera"],"Ocotepeque":["Ocotepeque (Nueva Ocotepeque)","Sinuapa","San Marcos de Ocotepeque","Mercedes","Sensenti","Santa Fé","Belén Gualcho","Fraternidad"],"Olancho":["Juticalpa","Catacamas","Dulce Nombre de Culmí","San Esteban","Gualaco","Campamento","Salamá","Manto"],"Santa Bárbara":["Santa Bárbara","Trinidad","Quimistán","Azacualpa","Las Vegas","Ilama","San Marcos","Macuelizo"],"Valle":["Nacaome","San Lorenzo","Amapala","Goascorán","Langue","Jícaro Galán","Alianza","Caridad"],"Yoro":["Yoro","El Progreso","Olanchito","Morazán","Santa Rita","Sulaco","Victoria","El Negrito"]},"Hungary":{"Bács-Kiskun":["Kecskemét","Baja","Kiskunfélegyháza","Kiskunhalas","Kalocsa","Kiskőrös","Jánoshalma","Tiszakécske"],"Baranya":["Pécs","Komló","Mohács","Szigetvár","Siklós","Szentlőrinc","Kozármisleny","Harkány"],"Békés":["Békéscsaba","Gyula","Orosháza","Békés","Szarvas","Gyomaendrőd","Mezőberény","Sarkad"],"Borsod-Abaúj-Zemplén":["Miskolc","Ózd","Kazincbarcika","Mezőkövesd","Tiszaújváros","Sátoraljaújhely","Sárospatak","Sajószentpéter","Budapest *(Capital City)**:*","District I (Várkerület / Castle District)","District III (Óbuda-Békásmegyer)","District V (Belváros-Lipótváros / Downtown)","District XI (Újbuda)","District XIII (Angyalföld)","District XIV (Zugló)","District XXII (Budafok-Tétény)","District XXIII (Soroksár)"],"Csongrád-Csanád":["Szeged","Hódmezővásárhely","Szentes","Makó","Csongrád","Sándorfalva","Kistelek","Mindszent"],"Fejér":["Székesfehérvár","Dunaújváros","Mór","Sárbogárd","Bicske","Gárdony","Ercsi","Martonvásár"],"Győr-Moson-Sopron":["Győr","Sopron","Mosonmagyaróvár","Csorna","Kapuvár","Jánossomorja","Pannonhalma","Fertőd"],"Hajdú-Bihar":["Debrecen","Hajdúböszörmény","Hajdúszoboszló","Balmazújváros","Hajdúnánás","Berettyóújfalu","Püspökladány","Hajdúhadház"],"Heves":["Eger","Gyöngyös","Hatvan","Heves","Füzesabony","Lőrinci","Pétervására","Bélapátfalva"],"Jász-Nagykun-Szolnok":["Szolnok","Jászberény","Törökszentmiklós","Karcag","Mezőtúr","Tiszafüred","Kisújszállás","Jászapáti"],"Komárom-Esztergom":["Tatabánya","Esztergom","Tata","Komárom","Oroszlány","Dorog","Nyergesújfalu","Kisbér"],"Nógrád":["Salgótarján","Balassagyarmat","Bátonyterenye","Pásztó","Szécsény","Rétság","Tarján boundary sector","Somoskőújfalu"],"Pest":["Érd","Dunakeszi","Cegléd","Vác","Gödöllő","Szigetszentmiklós","Budaörs","Szentendre"],"Somogy":["Kaposvár","Siófok","Marcali","Barcs","Nagyatád","Balatonboglár","Fonyód","Csurgó"],"Szabolcs-Szatmár-Bereg":["Nyíregyháza","Mátészalka","Kisvárda","Újfehértó","Nyírbátor","Tiszavasvári","Fehérgyarmat","Vásárosnamény"],"Tolna":["Szekszárd","Paks","Bonyhád","Dombóvár","Tolna","Tamási","Dunaföldvár","Simontornya"],"Vas":["Szombathely","Sárvár","Kőszeg","Körmend","Celldömölk","Szentgotthárd","Vasvár","Bük"],"Veszprém":["Veszprém","Pápa","Ajka","Várpalota","Tapolca","Balatonfüred","Balatonalmádi","Zirc"],"Zala":["Zalaegerszeg","Nagykanizsa","Keszthely","Lenti","Zalaszentgrót","Hévíz","Letenye","Zalalövő"]},"Iceland":{"Capital Region (Höfuðborgarsvæðið)":["Reykjavík","Kópavogur","Hafnarfjörður","Garðabær","Mosfellsbær","Seltjarnarnes","Kjósarhreppur"],"Southern Peninsula (Suðurnes)":["Reykjanesbær (Keflavík)","Grindavík","Sandgerði","Garður","Vogar"],"Western Region (Vesturland)":["Akranes","Borgarnes","Stykkishólmur","Grundarfjörður","Snæfellsbær"],"Westfjords (Vestfirðir)":["Ísafjörður","Bolungarvík","Patreksfjörður","Tálknafjörður","Reykhólahreppur"],"Northwestern Region (Norðurland Vestra)":["Sauðárkrókur","Blönduós","Skagaströnd","Hvammstangi"],"Northeastern Region (Norðurland Eystra)":["Akureyri","Húsavík","Dalvík","Siglufjörður","Ólafsfjörður"],"Eastern Region (Austurland)":["Egilsstaðir","Seyðisfjörður","Neskaupstaður","Reyðarfjörður","Fáskrúðsfjörður"],"Southern Region (Suðurland)":["Selfoss","Hveragerði","Þorlákshöfn","Vík í Mýrdal","Höfn"]},"India":{"Andhra Pradesh":["Visakhapatnam","Vijayawada","Guntur","Tirupati","Kurnool","Nellore"],"Arunachal Pradesh":["Itanagar","Tawang","Pasighat","Naharlagun"],"Assam":["Guwahati","Dispur","Dibrugarh","Silchar","Jorhat"],"Bihar":["Patna","Gaya","Bhagalpur","Muzaffarpur","Darbhanga"],"Chhattisgarh":["Raipur","Bilaspur","Bhilai","Korba","Raigarh"],"Goa":["Panaji","Margao","Vasco da Gama","Mapusa"],"Gujarat":["Ahmedabad","Surat","Vadodara","Rajkot","Gandhinagar"],"Haryana":["Chandigarh (shared)","Gurugram","Faridabad","Panipat","Ambala"],"Himachal Pradesh":["Shimla","Dharamshala","Manali","Mandi","Solan"],"Jharkhand":["Ranchi","Jamshedpur","Dhanbad","Bokaro","Deoghar"],"Karnataka":["Bengaluru","Mysuru","Hubballi-Dharwad","Mangaluru","Belagavi"],"Kerala":["Thiruvananthapuram","Kochi","Kozhikode","Thrissur","Kollam"],"Madhya Pradesh":["Bhopal","Indore","Jabalpur","Gwalior","Ujjain"],"Maharashtra":["Mumbai","Pune","Nagpur","Nashik","Aurangabad"],"Manipur":["Imphal","Churachandpur","Thoubal","Bishnupur"],"Meghalaya":["Shillong","Tura","Jowai","Nongpoh"],"Mizoram":["Aizawl","Lunglei","Saiha","Champhai"],"Nagaland":["Kohima","Dimapur","Mokokchung","Tuensang"],"Odisha":["Bhubaneswar","Cuttack","Rourkela","Berhampur","Sambalpur"],"Punjab":["Chandigarh (shared)","Ludhiana","Amritsar","Jalandhar","Patiala"],"Rajasthan":["Jaipur","Jodhpur","Udaipur","Kota","Ajmer"],"Sikkim":["Gangtok","Namchi","Geyzing","Mangan"],"Tamil Nadu":["Chennai","Coimbatore","Madurai","Tiruchirappalli","Salem"],"Telangana":["Hyderabad","Warangal","Nizamabad","Khammam","Karimnagar"],"Tripura":["Agartala","Udaipur","Dharmanagar","Kailasahar"],"Uttar Pradesh":["Lucknow","Kanpur","Varanasi","Agra","Prayagraj"],"Uttarakhand":["Dehradun","Haridwar","Rishikesh","Haldwani","Nainital"],"West Bengal":["Kolkata","Siliguri","Durgapur","Asansol","Howrah"],"Andaman and Nicobar Islands":["Port Blair","Diglipur","Rangat"],"Chandigarh":["Chandigarh City"],"Dadra and Nagar Haveli and Daman and Diu":["Daman","Diu","Silvassa"],"Delhi (National Capital Territory)":["New Delhi","North Delhi","South Delhi","East Delhi","West Delhi"],"Jammu and Kashmir":["Srinagar","Jammu","Anantnag","Baramulla"],"Ladakh":["Leh","Kargil"],"Lakshadweep":["Kavaratti","Minicoy","Agatti"],"Puducherry":["Puducherry City","Karaikal","Mahe","Yanam"]},"Indonesia":{"Aceh":["Banda Aceh","Lhokseumawe","Sabang","Langsa","Meulaboh"],"Bali":["Denpasar","Ubud","Singaraja","Kuta","Sanur"],"Bangka Belitung Islands":["Pangkalpinang","Tanjung Pandan","Sungailiat","Manggar"],"Banten":["Serang","Tangerang","Cilegon","Pandeglang"],"Bengkulu":["Bengkulu City","Curup","Arga Makmur","Manna"],"Central Java":["Semarang","Surakarta (Solo)","Magelang","Tegal","Pekalongan"],"Central Kalimantan":["Palangka Raya","Sampit","Pangkalan Bun","Muara Teweh"],"Central Papua":["Nabire","Timika","Enarotali"],"Central Sulawesi":["Palu","Luwuk","Poso","Toli-Toli"],"East Java":["Surabaya","Malang","Kediri","Jember","Banyuwangi"],"East Kalimantan":["Samarinda","Balikpapan","Bontang","Tenggarong"],"East Nusa Tenggara":["Kupang","Maumere","Ende","Labuan Bajo"],"Gorontalo":["Gorontalo City","Limboto","Marisa"],"Jakarta (Special Capital Region)":["Central Jakarta","South Jakarta","West Jakarta","East Jakarta","North Jakarta"],"Jambi":["Jambi City","Sungai Penuh","Bungo","Kuala Tungkal"],"Lampung":["Bandar Lampung","Metro","Kotabumi","Kalianda"],"Maluku":["Bandar Lampung","Metro","Kotabumi","Kalianda"],"North Kalimantan":["Tanjung Selor","Tarakan","Nunukan"],"North Maluku":["Ternate","Sofifi","Tidore","Tobelo"],"North Sulawesi":["Manado","Bitung","Tomohon","Kotamobagu"],"North Sumatra":["Medan","Pematangsiantar","Binjai","Sibolga"],"Highland Papua":["Wamena","Oksibil","Dekai"],"Papua":["Jayapura","Merauke (historically, though now distinct)","Sentani","Sarmi"],"Riau":["Pekanbaru","Dumai","Bengkalis","Rengat"],"Riau Islands":["Tanjungpinang","Batam","Ranai","Tanjung Balai Karimun"],"South Kalimantan":["Banjarmasin","Banjarbaru","Martapura","Kotabaru"],"South Papua":["Merauke","Kepi","Tanah Merah"],"South Sulawesi":["Makassar","Parepare","Palopo","Watampone"],"South Sumatra":["Palembang","Prabumulih","Lubuklinggau","Baturaja","Southeast Sulawesi","Kendari","Baubau","Kolaka","Raha"],"Southwest Papua":["Sorong","Aimas","Teminabuan"],"West Java":["Bandung","Bekasi","Depok","Bogor","Cirebon"],"West Kalimantan":["Pontianak","Singkawang","Sintang","Ketapang"],"West Nusa Tenggara":["Mataram","Bima","Praya","Selong"],"West Papua":["Manokwari","Fakfak","Kaimana"],"West Sulawesi":["Mamuju","Polewali","Majene"],"West Sumatra":["Padang","Bukittinggi","Payakumbuh","Solok"],"Yogyakarta (Special Region)":["Yogyakarta City","Sleman","Bantul","Wates"]},"Iran":{"Ardabil":["Ardabil City","Meshginshahr","Parsabad"],"Bushehr":["Bushehr City","Borazjan","Bandar Ganaveh"],"Chaharmahal and Bakhtiari":["Shahrekord","Borujen","Lordegan","East Azerbaijan;","Tabriz","Maragheh","Marand"],"Fars":["Shiraz","Marvdasht","Jahrom"],"Gilan":["Rasht","Bandar-e Anzali","Lahijan"],"Golestan":["Gorgan","Gonbad-e Kavus","Bandar Torkaman"],"Hamadan":["Hamadan City","Malayer","Nahavand"],"Hormozgan":["Bandar Abbas","Qeshm","Minab"],"Ilam":["Ilam City","Dehloran","Eyvan"],"Isfahan":["Isfahan City","Kashan","Najafabad"],"Kerman":["Kerman City","Sirjan","Rafsanjan"],"Kermanshah":["Kermanshah City","Eslamabad-e Gharb","Kangavar"],"Khuzestan":["Ahvaz","Dezful","Abadan"],"Kohgiluyeh and Boyer-Ahmad":["Yasuj","Gachsaran","Dehdasht"],"Kurdistan":["Sanandaj","Saqqez","Marivan"],"Lorestan":["Khorramabad","Borujerd","Dorud"],"Markazi":["Arak","Saveh","Khomein"],"Mazandaran":["Sari","Babol","Amol"],"North Khorasan":["Bojnurd","Shirvan","Esfarayen"],"Qazvin":["Qazvin City","Takestan","Alvand"],"Qom":["Qom City","Jafarieh"],"Razavi Khorasan":["Mashhad","Neyshabur","Sabzevar"],"Semnan":["Semnan City","Shahrud","Damghan"],"Sistan and Baluchestan":["Zahedan","Zabol","Chabahar"],"South Khorasan":["Birjand","Qaen","Tabas"],"Tehran":["Tehran (Capital)","Shahriar","Varamin"],"West Azerbaijan":["Urmia","Khoy","Miandoab"],"Yazd":["Yazd City","Meybod","Ardakan"],"Zanjan":["Zanjan City","Abhar","Khorramdarreh"]},"Iraq":{"Al-Anbar":["Ramadi","Fallujah","Haditha","Hit"],"Al-Qadisiyyah":["Diwaniyah","Afak","Al-Hamza"],"Babil":["Hilla","Al-Musayyib","Al-Mahawil"],"Baghdad":["Baghdad (Capital)","Kadhimiya","Sadr City","Al-Mansour"],"Basra":["Basra City","Az Zubayr","Al-Faw"],"Dhi Qar":["Nasiriyah","Suq Al-Shuyukh","Shatrah"],"Diyala":["Baqubah","Khanaqin","Muqdadiya"],"Duhok":["Duhok City","Zakho","Amedi"],"Erbil":["Erbil City (Hawler)","Koya","Shaqlawa"],"Halabja":["Halabja City","Khurmal","Sirwan"],"Karbala":["Karbala City","Al-Hindiya","Ain Al-Tamr"],"Kirkuk":["Kirkuk City","Hawija","Dibis"],"Maysan":["Amarah","Al-Majar Al-Kabir","Ali Al-Gharbi"],"Muthanna":["Samawa","Rumaitha","Salman"],"Najaf":["Najaf City","Kufa","Al-Manathera"],"Nineveh":["Mosul","Tal Afar","Sinjar","Hamdaniya"],"Salah Al-Din":["Tikrit","Samarra","Baiji","Balad"],"Sulaymaniyah":["Sulaymaniyah City","Ranya","Kalar"],"Wasit":["Kut","Al-Hayy","Badra"]},"Ireland":{"Carlow":["Carlow Town","Tullow","Bagenalstown (Muine Bheag)"],"Cavan":["Cavan Town","Belturbet","Virginia"],"Clare":["Ennis","Shannon","Kilrush"],"Cork":["Cork City","Cobh","Mallow","Kinsale"],"Donegal":["Lifford (County Town)","Letterkenny","Donegal Town"],"Dublin":["Dublin City (Capital)","Dún Laoghaire","Swords","Tallaght"],"Galway":["Galway City","Loughrea","Tuam"],"Kerry":["Tralee","Killarney","Dingle"],"Kildare":["Naas","Newbridge","Maynooth"],"Kilkenny":["Kilkenny City","Callan","Graiguenamanagh"],"Laois":["Portlaoise","Mountmellick","Abbeyleix"],"Leitrim":["Carrick-on-Shannon","Manorhamilton","Mohill"],"Limerick":["Limerick City","Newcastle West","Abbeyfeale"],"Longford":["Longford Town","Edgeworthstown","Granard"],"Louth":["Dundalk","Drogheda","Ardee"],"Mayo":["Castlebar","Ballina","Westport"],"Meath":["Navan","Trim","Kells","Monaghan","Monaghan Town","Carrickmacross","Castleblayney"],"Offaly":["Tullamore","Birr","Edenderry"],"Roscommon":["Roscommon Town","Boyle","Castlerea"],"Sligo":["Sligo Town","Tubbercurry","Ballymote","Tipperary","Clonmel","Nenagh","Thurles"],"Waterford":["Waterford City","Dungarvan","Tramore"],"Westmeath":["Mullingar","Athlone","Moate"],"Wexford":["Wexford Town","Enniscorthy","Gorey"],"Wicklow":["Wicklow Town","Bray","Arklow"]},"Israel":{"Central":["Petah Tikva","Rishon LeZion","Netanya","Ramat Gan"],"Haifa":["Haifa City","Kiryat Ata","Kiryat Motzkin","Nesher"],"Jerusalem":["Jerusalem (Capital)","Beit Shemesh","Mevaseret Zion"],"Northern":["Nazareth","Safed","Tiberias","Karmiel"],"Southern":["Beersheba","Ashdod","Ashkelon","Eilat"],"Tel Aviv":["Tel Aviv-Yafo","Holon","Bat Yam","Bnei Brak"]},"Italy":{"Abruzzo":["L'Aquila","Pescara","Chieti","Teramo","Aosta Valley","Aosta"],"Apulia":["Bari","Lecce","Foggia","Taranto"],"Basilicata":["Potenza","Matera"],"Calabria":["Catanzaro","Reggio Calabria","Cosenza"],"Campania":["Naples","Salerno","Caserta"],"Emilia-Romagna":["Bologna","Parma","Modena","Rimini"],"Friuli-Venezia Giulia":["Trieste","Udine"],"Lazio":["Rome (Capital)","Latina","Frosinone"],"Liguria":["Genoa","La Spezia","Savona"],"Lombardy":["Milan","Bergamo","Brescia"],"Marche":["Ancona","Pesaro","Ascoli Piceno"],"Molise":["Campobasso","Isernia"],"Piedmont":["Turin","Novara","Alessandria"],"Sardinia":["Cagliari","Sassari","Nuoro"],"Sicily":["Palermo","Catania","Messina"],"Trentino-Alto Adige":["Trento","Bolzano"],"Tuscany":["Florence","Pisa","Siena"],"Umbria":["Perugia","Terni"],"Veneto":["Venice","Verona","Padua"]},"Jamaica":{"Clarendon":["May Pen","Chapelton","Spaldings"],"Hanover":["Lucea","Sandy Bay","Green Island"],"Kingston":["Kingston (Capital City)","Port Royal"],"Manchester":["Mandeville","Christiana","Porus"],"Portland":["Port Antonio","Buff Bay","Manchioneal"],"Saint Andrew":["Half Way Tree","Gordon Town","Stony Hill"],"Saint Ann":["Saint Ann's Bay","Ocho Rios","Brown's Town"],"Saint Catherine":["Spanish Town","Portmore","Linstead"],"Saint Elizabeth":["Black River","Santa Cruz","Malvern"],"Saint James":["Montego Bay","Adelphi","Catadupa"],"Saint Mary":["Port Maria","Annotto Bay","Oracabessa"],"Saint Thomas":["Morant Bay","Yallahs","Seaforth"],"Trelawny":["Falmouth","Duncans","Clark's Town"],"Westmoreland":["Savanna-la-Mar","Negril","Frome"]},"Japan":{"Aichi":["Nagoya","Toyota","Toyohashi"],"Akita":["Akita City","Yokote","Daisen"],"Aomori":["Aomori City","Hachinohe","Hirosaki"],"Chiba":["Chiba City","Funabashi","Matsudo"],"Ehime":["Matsuyama","Imabari","Niihama"],"Fukui":["Fukui City","Echizen","Tsuruga"],"Fukuoka":["Fukuoka City","Kitakyushu","Kurume"],"Fukushima":["Fukushima City","Koriyama","Iwaki"],"Gifu":["Gifu City","Ogaki","Takayama"],"Gunma":["Maebashi","Takasaki","Ota"],"Hiroshima":["Hiroshima City","Fukuyama","Kure"],"Hokkaido":["Sapporo","Hakodate","Asahikawa"],"Hyogo":["Kobe","Himeji","Amagasaki"],"Ibaraki":["Mito","Tsukuba","Hitachi"],"Ishikawa":["Kanazawa","Hakusan","Komatsu"],"Iwate":["Morioka","Hanamaki","Kitakami"],"Kagawa":["Takamatsu","Marugame","Sakaide"],"Kagoshima":["Kagoshima City","Kirishima","Kanoya"],"Kanagawa":["Yokohama","Kawasaki","Sagamihara"],"Kochi":["Kochi City","Nankoku","Shimanto"],"Kumamoto":["Kumamoto City","Yatsushiro","Amakusa"],"Kyoto":["Kyoto City","Uji","Kameoka"],"Mie":["Tsu","Yokkaichi","Matsusaka"],"Miyagi":["Sendai","Ishinomaki","Osaki"],"Miyazaki":["Miyazaki City","Miyakonojo","Nobeoka"],"Nagano":["Nagano City","Matsumoto","Ueda"],"Nagasaki":["Nagasaki City","Sasebo","Isahaya"],"Nara":["Nara City","Kashihara","Ikoma"],"Niigata":["Niigata City","Nagaoka","Joetsu"],"Oita":["Oita City","Beppu","Nakatsu"],"Okayama":["Okayama City","Kurashiki","Tsuyama"],"Okinawa":["Naha","Okinawa City","Uruma"],"Osaka":["Osaka City","Sakai","Higashiosaka"],"Saga":["Saga City","Karatsu","Tosu"],"Saitama":["Saitama City","Kawaguchi","Kawagoe"],"Shiga":["Otsu","Hikone","Kusatsu"],"Shimane":["Matsue","Izumo","Hamada"],"Shizuoka":["Shizuoka City","Hamamatsu","Numazu"],"Tochigi":["Utsunomiya","Ashikaga","Oyama"],"Tokushima":["Tokushima City","Naruto","Anan"],"Tokyo":["Shinjuku (Metropolitan Gov)","Hachioji","Tachikawa"],"Tottori":["Tottori City","Yonago","Kurayoshi"],"Toyama":["Toyama City","Takaoka","Imizu"],"Wakayama":["Wakayama City","Tanabe","Kinokawa"],"Yamagata":["Yamagata City","Tsuruoka","Sakata"],"Yamaguchi":["Yamaguchi City","Shimonoseki","Ube"],"Yamanashi":["Kofu","Fujiyoshida","Minami-Alps"]},"Jordan":{"Ajloun":["Ajloun City","Anjara","Kufranja"],"Amman":["Amman (Capital)","Sahab","Al-Jiza"],"Aqaba":["Aqaba City","Quweira"],"Balqa":["Salt","Fuheis","Deir Alla"],"Irbid":["Irbid City","Ramtha","Bani Kenanah"],"Jerash":["Jerash City","Burma"],"Karak":["Karak City","Mazar","Ghawr al-Safi"],"Ma'an":["Ma'an City","Petra (Wadi Musa)","Shobak"],"Madaba":["Madaba City","Dhiban"],"Mafraq":["Mafraq City","Ruwaished"],"Tafilah":["Tafilah City","Busira","Hasa"],"Zarqa":["Zarqa City","Russeifa","Azraq"]},"Kazakhstan":{"Abai":["Semey","Ayagoz"],"Akmola":["Kokshetau","Stepnogorsk"],"Aktobe":["Aktobe City","Alga"],"Almaty":["Konaev","Taldykorgan (former center)"],"Almaty (City)":["Almaty (Largest city)","Astana (City)","Astana (Capital)"],"Atyrau":["Atyrau City","Kulsary"],"East Kazakhstan":["Oskemen (Ust-Kamenogorsk)","Ridder"],"Jambyl":["Taraz","Shu"],"Jetisu":["Taldykorgan","Sarkand"],"Karaganda":["Karaganda City","Temirtau"],"Kostanay":["Kostanay City","Rudny"],"Kyzylorda":["Kyzylorda City","Baikonur (administered by Russia)"],"Mangystau":["Aktau","Zhanaozen"],"North Kazakhstan":["Petropavl","Tayynsha"],"Pavlodar":["Pavlodar City","Ekibastuz","Shymkent (City)","Shymkent (Major hub)"],"Turkistan":["Turkistan City","Kentau"],"Ulytau":["Zhezkazgan","Satpayev"],"West Kazakhstan":["Oral (Uralsk)","Aksay"]},"Kenya":{"Baringo":["Kabarnet","Eldama Ravine"],"Bomet":["Bomet Town","Sotik"],"Bungoma":["Bungoma Town","Webuye"],"Busia":["Busia Town","Malaba","Elgeyo-Marakwet","Iten","Embu","Embu Town","Garissa","Garissa Town"],"Homa Bay":["Homa Bay Town","Mbita","Isiolo","Isiolo Town"],"Kajiado":["Kajiado Town","Kitengela"],"Kakamega":["Kakamega Town","Mumias","Kericho","Kericho Town","Kiambu","Kiambu Town","Thika"],"Kilifi":["Kilifi Town","Malindi","Kirinyaga","Kerugoya","Kisii","Kisii Town","Kisumu","Kisumu City","Kitui","Kitui Town"],"Kwale":["Kwale Town","Diani","Laikipia","Nanyuki","Lamu","Lamu Town","Machakos","Machakos Town","Makueni","Wote","Mandera","Mandera Town","Marsabit","Marsabit Town","Meru","Meru Town","Migori","Migori Town","Mombasa","Mombasa City","Murang'a","Murang'a Town","Nairobi","Nairobi City (Capital)","Nakuru","Nakuru City","Nandi","Kapsabet","Narok","Narok Town","Nyamira","Nyamira Town","Nyandarua","Ol Kalou","Nyeri","Nyeri Town","Samburu","Maralal","Siaya","Siaya Town","Taita-Taveta","Mwatate","Tana River","Hola","Tharaka-Nithi","Chuka","Trans-Nzoia","Kitale","Turkana","Lodwar","Uasin Gishu","Eldoret","Vihiga","Mbale","Wajir","Wajir Town","West Pokot","Kapenguria"]},"Kiribati":{"Line Islands":["Kiritimati (Christmas Island)","Tabuaeran (Fanning Island)","Teraina (Washington Island)"],"Northern Kiribati":["Butaritari","Makin","Abaiang","Marakei"],"Southern Kiribati":["Tabiteuea","Onotoa","Tamana","Arorae"],"Tarawa":["South Tarawa (National Capital)","North Tarawa"]},"Kuwait":{"Al Ahmadi":["Ahmadi City","Fahaheel","Mangaf"],"Al Asimah (Capital)":["Kuwait City","Dasman","Sharq"],"Al Farwaniyah":["Farwaniyah City","Khaitan","Jleeb Al-Shuyoukh"],"Al Jahra":["Jahra City","Sulaibiya","Abdali","Al Mahbulah","Mahboula"],"Hawalli":["Hawalli City","Salmiya","Jabriya"],"Mubarak Al-Kabeer":["Mubarak Al-Kabeer City","Adan","Qurain"]},"Kyrgyzstan":{"Batken":["Batken City","Isfana","Kadamjay","Bishkek (City)","Bishkek (Capital)","Chuy","Tokmok","Kant","Kara-Balta"],"Issyk-Kul":["Cholpon-Ata","Karakol","Balykchy","Jalal-Abad","Jalal-Abad City","Tash-Kumyr","Mailuu-Suu"],"Naryn":["Naryn City","At-Bashy","Osh","Uzgen","Nookat","Osh (City)","Osh (Second largest city)","Talas","Talas City"]},"Laos":{"Attapeu":["Attapeu (Samakhisai)","Sanamsay"],"Bokeo":["Ban Houayxay","Tonpheung"],"Bolikhamsai":["Paksan","Pakkading"],"Champasak":["Pakse","Champasak Town"],"Houaphanh":["Samneua","Viengxay"],"Khammouane":["Thakhek","Mahaxay"],"Luang Namtha":["Luang Namtha","Viengphoukha"],"Luang Prabang":["Luang Prabang (UNESCO site)","Chomphet"],"Oudomxay":["Muang Xay (Oudomxay)","Pakbeng"],"Phongsaly":["Phongsaly","Bounneua"],"Salavan":["Salavan","Vapi"],"Savannakhet":["Kaysone Phomvihane (Savannakhet City)","Sepon"],"Sekong":["Sekong (Lamam)","Kaleum"],"Vientiane (Capital)":["Vientiane (Capital City)","Sikhottabong"],"Vientiane (Province)":["Phonhong","Vang Vieng"],"Xaignabouli":["Xaignabouli","Hongsa"],"Xaisomboun":["Phaxai","Anouvong"],"Xieng Khouang":["Phonsavan","Khoun"]},"Latvia":{"Aizkraukle":["Aizkraukle","Pļaviņas"],"Alūksne":["Alūksne"],"Augšdaugava":["Daugavpils (administrative center)","Ilūkste"],"Balvi":["Balvi","Viļaka"],"Bauska":["Bauska","Iecava"],"Cēsis":["Cēsis","Līgatne"],"Dienvidkurzeme":["Grobiņa","Aizpute","Pāvilosta"],"Dobele":["Dobele","Auce","Gulbene","Gulbene"],"Jēkabpils":["Jēkabpils","Viesīte"],"Jelgava":["Jelgava (Regional center)","Kalnciems"],"Krāslava":["Krāslava","Dagda"],"Kuldīga":["Kuldīga","Skrunda"],"Ķekava":["Ķekava","Baloži"],"Limbaži":["Limbaži","Staicele","Līvāni","Līvāni"],"Ludza":["Ludza","Kārsava"],"Madona":["Madona","Lubāna"],"Mārupe":["Mārupe","Skulte"],"Ogre":["Ogre","Ikšķile","Lielvārde","Olaine","Olaine","Preiļi","Preiļi"],"Rēzekne":["Rēzekne (Regional center)","Viļāni"],"Ropaži":["Ulbroka","Vangaži"],"Salaspils":["Salaspils"],"Saldus":["Saldus","Brocēni","Saulkrasti","Saulkrasti","Sigulda","Sigulda","Smiltene","Smiltene","Ape"],"Talsi":["Talsi","Stende"],"Tukums":["Tukums","Kandava","Valka","Valka"],"Valmiera":["Valmiera","Mazsalaca","Rūjiena","Varakļāni","Varakļāni","Ventspils","Ventspils (Regional center)","Piltene"]},"Lebanon":{"Akkar":["Halba","Al-Qoubaiyat"],"Baalbek-Hermel":["Baalbek","Hermel"],"Beqaa":["Zahle","Western Beqaa (Jeb Jenin)"],"Beirut":["Beirut (Capital)","Keserwan-Jbeil","Jounieh","Byblos (Jbeil)","Mount Lebanon","Baabda","Aley","Chouf (Beiteddine)","Nabatieh","Nabatieh","Marjeyoun","Bint Jbeil"],"North":["Tripoli","Zgharta","Koura (Amioun)"],"South":["Sidon (Saida)","Tyre (Sour)","Jezzine"]},"Lesotho":{"Berea":["Teyateyaneng","Maputsoe"],"Butha-Buthe":["Butha-Buthe Town"],"Leribe":["Hlotse (Leribe)","Pitseng","Mafeteng","Mafeteng Town"],"Maseru":["Maseru (Capital)","Roma","Mohale's Hoek","Mohale's Hoek Town","Mokhotlong","Mokhotlong Town","Qacha's Nek","Qacha's Nek Town","Quthing","Moyeni (Quthing)","Thaba-Tseka","Thaba-Tseka Town"]},"Liberia":{},"Libya":{"Al Butnan":["Tobruk","Jaghbub"],"Al Jabal al Akhdar":["Bayda","Shahhat"],"Al Jabal al Gharbi":["Gharyan","Yafran","Al Jafarah","Aziziya"],"Al Jufrah":["Hun","Waddan","Al Kufrah","Al Jawf","Al Marj","Marj","Al Marqab","Khoms","Zliten"],"Al Wahat":["Ajdabiya","Awjila","An Nuqat al Khams","Zuwarah","Az Zawiyah","Zawiya","Benghazi","Benghazi","Darnah","Derna","Ghat","Ghat","Misratah","Misrata","Murzuq","Murzuq","Nalut","Nalut","Sabha","Sabha","Surt","Sirte","Tarabulus (Tripoli)","Tripoli (Capital)","Wadi al Hayat","Awbari","Wadi al Shatii","Brak"]},"Liechtenstein":{"Balzers":["Balzers (Main village)","Mäls"],"Eschen":["Eschen","Nendeln"],"Gamprin":["Gamprin","Bendern"],"Mauren":["Mauren","Schaanwald"],"Planken":["Planken"],"Ruggell":["Ruggell","Schaan","Schaan","Schellenberg","Schellenberg","Triesen","Triesen","Triesenberg","Triesenberg","Malbun (Alpine resort)","Steg","Vaduz","Vaduz (Capital)"]},"Lithuania":{"Alytus":["Alytus City","Druskininkai","Varėna"],"Kaunas":["Kaunas City","Jonava","Kėdainiai"],"Klaipėda":["Klaipėda City","Palanga","Neringa"],"Marijampolė":["Marijampolė City","Vilkaviškis","Šakiai","Panevėžys","Panevėžys City","Rokiškis","Biržai","Šiauliai","Šiauliai City","Radviliškis","Kelmė"],"Tauragė":["Tauragė City","Šilutė","Jurbarkas"],"Telšiai":["Telšiai City","Mažeikiai","Plungė"],"Utena":["Utena City","Anykščiai","Visaginas"],"Vilnius":["Vilnius (Capital)","Trakai","Ukmergė"]},"Luxembourg":{"Capellen":["Mamer","Kehlen"],"Clervaux":["Clervaux","Troisvierges"],"Diekirch":["Diekirch","Ettelbruck"],"Echternach":["Echternach","Rosport-Mompach"],"Esch-sur-Alzette":["Esch-sur-Alzette","Dudelange"],"Grevenmacher":["Grevenmacher","Manternach"],"Luxembourg":["Luxembourg City (Capital)","Hesperange"],"Mersch":["Luxembourg City (Capital)","Hesperange"],"Redange":["Redange-sur-Attert","Préizerdaul"],"Remich":["Remich","Mondorf-les-Bains","Vianden","Vianden"],"Wiltz":["Wiltz","Lac de la Haute-Sûre"]},"Madagascar":{"Alaotra-Mangoro":["Ambatondrazaka","Amparafaravola","Andilamena","Anosibe An'ala","Moramanga"],"Ambatosoa":["Maroantsetra","Mananara Avaratra"],"Amoron'i Mania":["Ambatofinandrahana","Ambositra","Fandriana","Manandriana"],"Analamanga":["Ambohidratrimo","Andramasina","Anjozorobe","Ankazobe","Antananarivo-Atsimondrano","Antananarivo-Avaradrano","Antananarivo-Renivohitra","Manjakandriana"],"Analanjirofo":["Fenerive Est (Fenoarivo Atsinanana)","Mananara Avaratra","Maroantsetra","Sainte-Marie","Soanierana Ivongo","Vavatenina"],"Androy":["Ambovombe","Bekily","Beloha","Tsihombe"],"Anosy":["Amboasary","Betroka","Tolanaro"],"Atsimo-Andrefana":["Ampanihy","Ankazoabo","Benenitra","Beroroha","Betioky","Morombe","Sakaraha","Toliara I","Toliara II"],"Atsimo-Atsinanana":["Befotaka","Farafangana","Midongy-Atsimo","Vangaindrano","Vondrozo"],"Atsinanana":["Antanambao-Manampotsy","Brickaville","Mahanoro","Marolambo","Toamasina I","Toamasina II","Vatomandry","Betsiboka","Kandreho","Maevatanana","Tsaratanana","Boeny","Ambato-Boeni","Mahajanga I","Mahajanga II","Marovoay","Mitsinjo","Soalala","Bongolava","Fenoarivobe","Tsiroanomandidy","Diana","Ambanja","Ambilobe","Antsiranana I","Antsiranana II","Nosy-Be","Fitovinany","Ikongo","Manakara","Vohipeno","Haute-Matsiatra","Ambalavao","Ambohimahasoa","Fianarantsoa","Ikalamavony","Isandra","Lalangina","Vohibato","Ihorombe","Iakora","Ihosy","Ivohibe","Itasy","Arivonimamo","Miarinarivo","Soavinandriana"],"Melaky":["Antsalova","Besalampy","Maintirano","Morafenobe"],"Menabe":["Belo sur Tsiribihina","Mahabo","Manja","Miandrivazo","Morondava"],"Sava":["Andapa","Antalaha","Sambava","Vohemar"],"Sofia":["Analalava","Antsohihy","Bealanana","Befandriana-Nord","Mampikony","Mandritsara","Port-Bergé"],"Vakinankaratra":["Ambatolampy","Antsirabe I","Antsirabe II","Betafo","Faratsiho","Mandoto"],"Vatovavy":["Ifanadiana","Mananjary","Nosy-Varika"]},"Malaysia":{"Johor":["  Johor Bahru (JB)","  Tebrau","  Pasir Gudang","  Skudai","  Iskandar Puteri","  Kulai","  Batu Pahat","  Muar","  Kluang","  Segamat","  Pontian","  Kota Tinggi","  Mersing","  Tangkak","Kedah","  Alor Setar","  Sungai Petani","  Kulim","  Langkawi","  Kubang Pasu (Jitra)","  Baling","  Sik","  Padang Terap","  Yan","  Pendang","  Bandar Baharu","  Pokok Sena"],"Kelantan":["  Kota Bharu","  Pasir Mas","  Tumpat","  Bachok","  Pasir Puteh","  Machang","  Tanah Merah","  Jeli","  Kuala Krai","  Gua Musang"],"Kuala Lumpur (Federal Territory)":["  Bukit Bintang","  Bangsar","  Damansara Heights","  Mont Kiara","  Segambut","  Kepong","  Cheras","  Setapak","  Wangsa Maju","  Sentul","  Titiwangsa","  Brickfields","  Seputeh","  Bandar Tun Razak","  Ampang (KL side)"],"Labuan (Federal Territory)":["Victoria (Bandar Labuan)","Layang-Layangan","Kampung Jawa","Lubok Temiang","Pohon Batu","Batu Manikar","Tanjung Aru","Sungai Lada"],"Malacca":["  Melaka Tengah (Melaka City)","  Jonker Street area","  Klebang","  Ayer Keroh","  Batu Berendam","  Alor Gajah","  Masjid Tanah","  Jasin","  Merlimau","Negeri Sembilan","  Seremban","  Senawang","  Nilai","  Port Dickson","  Lukut","  Rembau","  Tampin","  Jelebu","  Kuala Pilah","  Jempol (Bahau)","Pahang","  Kuantan","  Temerloh","  Bentong","  Genting Highlands","  Cameron Highlands (Brinchang, Tanah Rata)","  Mentakab","  Pekan","  Raub","  Jerantut","  Maran","  Rompin","  Lipis","  Bera"],"Penang":["  George Town","  Bayan Lepas","  Gelugor","  Air Itam","  Tanjung Bungah","  Batu Ferringhi","  Butterworth","  Bukit Mertajam","  Perai","  Kepala Batas","  Nibong Tebal","  Balik Pulau"],"Perak":["Ipoh","Taiping","Teluk Intan","Sitiawan","Seri Manjung","Lumut","Pangkor Island","Kuala Kangsar","Kampar","Batu Gajah","Tapah","Bidor","Parit Buntar","Gerik","Tanjung Malim","Perlis","  Kangar","  Arau","  Kuala Perlis","  Padang Besar","  Simpang Empat","  Kaki Bukit"],"Putrajaya (Federal Territory)":["  Precinct 1 (Government core)","  Precinct 2 to 4 (Mixed/Commercial)","  Precinct 5 to 11 (Residential zones)","  Precinct 14 to 18 (Residential/Diplomatic)","  Cyberjaya border areas"],"Sabah":["  Kota Kinabalu (KK)","  Sandakan","  Tawau","  Lahad Datu","  Keningau","  Penampang","  Inanam","  Tuaran","  Papar","  Kudat","  Ranau","  Semporna","  Beaufort","  Kota Belud"],"Sarawak":["  Kuching","  Miri","  Sibu","  Bintulu","  Samarahan","  Sri Aman","  Sarikei","  Kapit","  Limbang","  Mukah","  Lawas","  Serian","  Bau"],"Selangor":["  Shah Alam","  Petaling Jaya (PJ)","  Subang Jaya","  Puchong","  Klang","  Damansara","  Cheras (Selangor side)","  Ampang (Selangor side)","  Kajang","  Bangi","  Rawang","  Cyberjaya","  Sepang","  Selayang","  Gombak","  Banting","  Kuala Selangor"],"Terengganu":["  Kuala Terengganu","  Kuala Nerus","  Chukai (Kemaman)","  Dungun","  Marang","  Jerteh (Besut)","  Hulu Terengganu (Kuala Berang)","  Setiu","  Redang Island","  Perhentian Islands"]},"Maldives":{"Alif Alif (North Ari Atoll)":["Rasdhoo","Ukulhas","Thoddoo","Mathiveri","Feridhoo","Maalhos","Himandhoo","Bodufolhudhoo"],"Alif Dhaal (South Ari Atoll)":["Mahibadhoo","Maamigili","Dhidhdhoo","Dhigurah","Fenfushi","Haggnaameedhoo","Kunburudhoo","Mandhoo","Omadhoo"],"Baa (South Maalhosmadulu Atoll)":["Eydhafushi","Dharavandhoo","Thulhaadhoo","Kendhoo","Kamadhoo","Kudarikilu","Kihaadhoo","Dhonfanu","Maalhos","Fehendhoo","Fulhadhoo","Goidhoo"],"Dhaalu (South Nilandhe Atoll)":["Kudahuvadhoo","Hulhudheli","Meedhoo","Bandidhoo","Rinbudhoo"],"Faafu (North Nilandhe Atoll)":["Nilandhoo","Dharanboodhoo","Magoodhoo","Bilehdhoo","Feeali"],"Gaafu Alif (North Huvadhu Atoll)":["Villingili","Maamendhoo","Nilandhoo","Dhaandhoo","Kondey","Gemanafushi","Kanduhulhudhoo"],"Gaafu Dhaal (South Huvadhu Atoll)":["Thinadhoo","Madaveli","Hoandeddhoo","Nadellaa","Gadhdhoo","Rathafandhoo","Vaadhoo","Fiyoaree"],"Gnaviyani (Fuvahmulah)":["Fuvahmulah City (including Fariqede, Dhiguvaando, Huvadhoo, Horafadu, Miskimmagu, Genandhoo, Bandaara Kilhi areas)"],"Haa Alif (North Thiladhunmathi Atoll)":["Dhidhdhoo","Hoarafushi","Ihavandhoo","Kelaa","Baarah","Filladhoo","Vashafaru","Thakandhoo","Utheemu","Muraidhoo","Maarandhoo","Turakunu","Uligan","Molhadhoo"],"Haa Dhaal (South Thiladhunmathi Atoll)":["Kulhudhuffushi City","Hanimaadhoo","Nolhivaranfaru","Nolhivaram","Kurinbi","Finey","Naivaadhoo","Makunudhoo","Vaikaradhoo","Neykurendhoo","Kattalafushi","Kumundhoo","Hirimaradhoo"],"Kaafu (Male Atoll)":["Malé City (Capital - including Hulhumalé and Villingili/Vilimalé)","Maafushi","Guraidhoo","Thulusdhoo","Huraa","Himmafushi","Gulhi","Dhiffushi","Gaafaru","Kaashidhoo"],"Laamu (Haddhunmathi Atoll)":["Fonadhoo","Gan","Isdhoo","Kalaidhoo","Dhanbidhoo","Maabaidhoo","Mundoo","Maamendhoo","Hithadhoo","Kunahandhoo"],"Lhaviyani (Faadhippolhu Atoll)":["Naifaru","Hinnavaru","Kurendhoo","Olhuvelifushi"],"Meemu (Mulaku Atoll)":["Muli","Mulah","Dhiggaru","Madifushi","Veyvah","Naalaafushi","Kolhufushi","Raiymandhoo"],"Noonu (South Miladhunmadulu Atoll)":["Manadhoo","Velidhoo","Holhudhoo","Kendhikulhudhoo","Miladhoo","Magoodhoo","Lhohi","Landhoo","Maafaru","Kudafaree","Fohdhoo","Henbandhoo","Hebadhoo"],"Raa (North Maalhosmadulu Atoll)":["Ungoofaaru","Dhuvaafaru","Meedhoo","Maduvvari","Alifushi","Vaadhoo","Rasgetheemubey","Angolhitheemu","Fainu","Kinolhas","Rasmaadhoo","Innamaadhoo","Maakurathu"],"Seenu (Addu Atoll)":["Hithadhoo","Maradhoo","Maradhoo-Feydhoo","Feydhoo","Hulhudhoo","Meedhoo"],"Shaviyani (North Miladhunmadulu Atoll)":["Funadhoo","Milandhoo","Foakaidhoo","Kanditheemu","Komandoo","Goidhoo","Lhaimagu","Feydhoo","Feevah","Noomaraa","Maroshi","Narudhoo","Bileffahi"],"Thaa (Kolhumadulu Atoll)":["Veymandoo","Thimarafushi","Guraidhoo","Kinbidhoo","Omadhoo","Hirilandhoo","Vandhoo","Dhiyamigili","Madifushi","Vilufushi","Burunee","Gaadhiffushi"],"Vaavu (Felidhu Atoll)":["Felidhoo","Keyodhoo","Thinadhoo","Rakeedhoo","Fulidhoo"]},"Mali":{"Bamako (Capital District)":["Commune I (Korofina, Banconi)","Commune II (Niaréla, Bagadadji, Medina Coura)","Commune III (Badalabougou, Centre Ville, N'Tomikorobougou)","Commune IV (Hamdallaye, Lafiabougou, Sébénikoro)","Commune V (Baco-Djicoroni, Badalabougou Sema, Torokorobougou)","Commune VI (Sogoniko, Faladié, Niamakoro)"],"Gao":["Gao Cercle (Gao City, Gounzoureye, Anchawadi)","Ansongo Cercle (Ansongo, Bara, Bourra)","Bourem Cercle (Bourem, Bamba, Temera)"],"Kayes":["Kayes Cercle (Kayes City, Khouloum, Kouniakary)","Bafoulabé Cercle (Bafoulabé, Mahina, Oualia)","Diéma Cercle (Diéma, Diangounté Camara)","Kita Cercle (Kita, Boudofo, Kokofata)","Kéniéba Cercle (Kéniéba, Dialafara, Faléa)","Nioro Cercle (Nioro du Sahel, Yéréré)","Yélimané Cercle (Yélimané, Diafounou Diongaga)"],"Kidal":["Kidal Cercle (Kidal City, Anefif, Essouk)","Abeïbara Cercle (Abeïbara, Boghassa)","Tin-Essako Cercle (Tin-Essako, Intadjedite)","Tessalit Cercle (Tessalit, Aguelhok, Timiaouine)"],"Koulikoro":["Koulikoro Cercle (Koulikoro City, M'Périba)","Banamba Cercle (Banamba, Boron, Sebete)","Bankass Cercle (Bankass, Diallassagou)","Dioïla Cercle (Dioïla, Massigui, Fana)","Kangaba Cercle (Kangaba, Benkadi, Maramandougou)","Kolokani Cercle (Kolokani, Didieni, Guihoyo)","Kati Cercle (Kati, Kalabancoro, Moribabougou, Sanankoroba)"],"Ménaka":["Ménaka Cercle (Ménaka City, Infoureritan)","Andéramboukane Cercle (Andéramboukane)","Inékar Cercle (Inékar)","Tidermène Cercle (Tidermène)"],"Mopti":["Mopti Cercle (Mopti City, Sévaré, Fatoma)","Bandiagara Cercle (Bandiagara, Sangha)","Bankass Cercle (Bankass, Kani Bonzon)","Djenné Cercle (Djenné, Femaye, Pondori)","Douentza Cercle (Douentza, Hombori, Kerena)","Koro Cercle (Koro, Dioungani, Koporo Pen)","Tenenkou Cercle (Tenenkou, Diafarabé)","Youwarou Cercle (Youwarou, Deboye)"],"Nioro":["Nioro du Sahel Cercle (Nioro City, Diabigué, Gavinané)","Diéma Cercle border areas","Sandaré","Troungoumbé"],"Sikasso":["Sikasso Cercle (Sikasso City, Finkolo, Klela)","Bougouni Cercle (Bougouni, Koumantou, Garalo)","Kadiolo Cercle (Kadiolo, Fourou, Loulouni)","Kolondiéba Cercle (Kolondiéba, Kebila)","Koutiala Cercle (Koutiala, M'Pessoba, Zangasso)","Yanfolila Cercle (Yanfolila, Kalana, Wassoulou-Ballé)","Yorosso Cercle (Yorosso, Koury)"],"Taoudénit":["Taoudénit Cercle (Taoudéni)","Araouane Cercle (Araouane)","Foum Alba Cercle","Achouratt Cercle"],"Tombouctou (Timbuktu)":["Tombouctou Cercle (Timbuktu City, Alafia)","Diré Cercle (Diré, Kondi, Binga)","Goundam Cercle (Goundam, Tonka, Bintagoungou)","Gourma-Rharous Cercle (Gourma-Rharous, Bambara Maoudé, Gossas)","Niafunké Cercle (Niafunké, Soumpi, Léré)"]},"Malta":{"Attard":["Misraħ Kola","Ta' Qali","Tal-Mirakli","Żenqa","Hal Warda"],"Balzan":["Ta' Ganu","Tal-Herba","Wied Celendi"],"Birgu (Vittoriosa)":["Collacchio","Wharf area","Il-Gżira","Tal-Hawli"],"Birkirkara":["Fleur-de-Lys","Swatar","Ta' Paris","Mrieħel (Industrial Estate)","Is-Sliema Point area","Tal-Klerku"],"Birżebbuġa":["Pretty Bay area","Qajjenza","Hal Far","Kalafrana","Bengħajsa","Tal-Papa"],"Bormla (Cospicua)":["Verdala","San Ġwann t'Għuxa","Santa Margerita","Dockyard Creek area"],"Dingli":["Dingli Cliffs area","Misraħ Suffara","Ta' l-Abatija"],"Fgura":["Tal-Liedna","Il-Lofor","Tax-Xewk"],"Floriana":["Sa Maison","Balzunetta","Spencer Hill","Vilhena"],"Għajnsielem (Gozo)":["Mgarr Harbour area","Fort Chambray","Mgarr ix-Xini area"],"Għarb (Gozo)":["Ta' Pinu area","Birbuba","Il-Knisja"],"Għargħur":["Tat-Tarġa","Xwieki","Hal Gharghur"],"Għaxaq":["Tal-Barrani","Bir id-Deheb (part)","Il-Mielah"],"Gudja":["Bir Miftuħ","Tal-Paċi","Xatba"],"Gżira":["Manoel Island","Strand area","Savoy","Tax-Xbiex border"],"Ħamrun":["Blata l-Bajda","Rabbat","Tas-Samra"],"Iklin":["Misraħ l-Iklin","Ta' Ġorġi","Tal-Balal border"],"Kalkara":["Rinella","Bighi","SmartCity Malta","Ta' Melita"],"Kerċem (Gozo)":["Santa Luċija (Gozo village)","Lunzjata Valley area"],"Kirkop":["Menqa","Tal-Abeżin","Safi border area"],"Lija":["Iklin border area","Hal Lija","Tal-Mirakli border"],"Luqa":["Malta International Airport area","Hal Farrug","Ta' l-Avjazzjoni"],"Marsa":["Albert Town","Menqa","Marsa Sports Ground area"],"Marsaskala (Wied il-Għajn)":["Zonqor","St. Thomas Bay area","Bellavista","Ta' Monita","Bidni"],"Marsaxlokk":["Delimara","Tas-Silġ","Il-Magħluq","Qrajten"],"Mdina":["Bastion area","Greeks Gate area","St. Paul’s Square area"],"Mellieħa":["Ghadira (Mellieħa Bay)","Cirkewwa","Marfa","Selmun","Manikata","Santa Maria Estate","Popeye Village area"],"Mġarr":["Binġemma","Żebbiegħ","Fomm ir-Riħ area","Gnejna"],"Mosta":["Santa Margerita","Tarġa Gap","Ta' Żokkrija","Bidnija (part)","Blata l-Għolja"],"Mqabba":["Hal Millieri","Tax-Xatba","Tal-Landrijiet"],"Msida":["University of Malta area","Skate Park area","Tal-Qroqq","Ta' Xbiex wharf border"],"Mtarfa":["Binġemma border","Military Barracks area"],"Munxar (Gozo)":["Xlendi","Sannat border area"],"Nadur (Gozo)":["Ramla Bay area","San Blas","Ta' Hondoq"],"Naxxar":["San Pawl tat-Tarġa","Birguma","Magħtab","Salina","Baħar iċ-Ċagħaq"],"Paola (Raħal Ġdid)":["Corradino","Għajn Dwieli","Addolorata area"],"Pembroke":["St. Andrews","White Rocks","St. George's Bay border"],"Pietà":["Gwardamanġa","Marina area"],"Qala (Gozo)":["Hondoq ir-Rummien area","Simar","Ta' Kassja"],"Qormi (Hal Fornaro)":["San Ġorġ","San Bastjan","Tal-Ħandaq","Mrieħel (part)"],"Qrendi":["Hagar Qim & Mnajdra area","Wied iż-Żurrieq (part)","Misraħ San Niklaw"],"Rabat":["Baħrija","Virtù","Tal-Virtù","Landrijiet","Kunċizzjoni","Buskett (part)"],"Safi":["Hal Safi","Ta' Amparell"],"San Ġiljan (St. Julian's)":["Paceville","Spinola Bay area","Balluta Bay area","Ta' Giorni","St. George's Bay"],"San Ġwann":["Kappara","Mensija","Misraħ Lewża","Ta' Żwejt"],"San Lawrenz (Gozo)":["Dwejra","Ta' Jiene"],"Sannat (Gozo)":["Ta' Ċenċ Cliffs area","Mgarr ix-Xini (part)"],"Santa Luċija":["Binja Buqana","Garnaw"],"Santa Venera":["Romeo Romano area","Hal Kaprat"],"Siġġiewi":["Ghar Lapsi","Fawwara","Buskett (part)","Kirċippu"],"Sliema":["Tigné Point","Tower Road promenade","Fond Għadir","Savoy area"],"Swieqi":["Madliena","Ibraġ (Tal-Ibraġ)","Ta' Stronka"],"Ta' Xbiex":["Marina area","Embassy district"],"Tarxien":["Hal Tarxien","Neolithic Temples area"],"Valletta":["Republic Street area","Merchants Street area","Lower Barrakka area","Marsamxett side"],"Xagħra (Gozo)":["Ramla Bay (part)","Ggantija area","Calypso Cave area"],"Xewkija (Gozo)":["Mgarr road area","Ta' Għajn Toffieha"],"Xgħajra":["Coastal promenade area","SmartCity border"],"Żabbar (Città Hompesch)":["St. Peter's","Bubaqra","Misraħ Kola border"],"Żebbuġ (Gozo)":["Marsalforn","Qbajjar","Xwejni"],"Żebbuġ (Malta)":["Hal Mula","Hal Dwin","Tal-Grazzja"],"Żejtun (Città Beland)":["Hal Tmiem","Hal Bisbut","Gebel San Martin"],"Żurrieq":["Bubaqra","Wied iż-Żurrieq (part)","Hal Far (part)"]},"Marshall Islands":{"Ailinginae":["Sifo","Ribon","Mogiri","Eniwetak (Ailinginae)"],"Ailinglaplap":["Woja","Jeh","Airok","Bouj","Tobal","Mejej"],"Ailuk":["Ailuk islet","Aliej","Enejabrok","Enejela","Kapen","Marib"],"Arno":["Ine","Arno islet","Jado","Kilange","Tinak","Langor","Bikarej"],"Aur":["Aur islet","Tabal","Biej","Togujen"],"Bikar":["Bikar islet","Jabwelo","Almani"],"Bikini":["Bikini islet","Eneu","Nam","Enidrik","Aerokoj"],"Bokak (Taongi)":["Bokak islet","Kamwome","Shanz"],"Ebon":["Ebon islet","Toke","Enekoion","Meyon"],"Enewetak":["Enewetak islet","Medren (Parry)","Japtan","Enjebi (Janet)"],"Erikub":["Erikub islet","Boggen","Loj","Gibawe"],"Jabat":["Jabat Island (single inhabited village area)"],"Jaluit":["Jabor","Jaluit islet","Imroj","Elizabeth","Mende"],"Jemo":["Jemo Island (uninhabited wildlife refuge area)"],"Kwajalein":["Ebeye","Kwajalein islet","Roi-Namur","Enubuj","Gugeegue","Carlson (Ennylabegan)","Meck"],"Lae":["Lae islet","Lweton","Ribong"],"Lib":["Lib Island (single village lagoon area)"],"Likiep":["Likiep islet","Mato","Lado","Lukonor","Jebal"],"Majuro":["Delap-Uliga-Djarrit (DUD area)","Laura","Rairok","Ajeltake","Woja (Majuro)","Amata Kabua International Airport area"],"Maloelap":["Taroa","Kaben","Airuk","Olmej"],"Mejit":["Mejit Island (main village and plantation areas)"],"Mili":["Mili islet","Nallu","Tokowa","Wau","Lukonor (Mili)"],"Nadikdik (Knox Atoll)":["Nadikdik islet","Nariktik","Jejen"],"Namorik":["Namorik islet","Matamat"],"Namu":["Namu islet","Mae","Leuen","Majkin"],"Rongelap":["Rongelap islet","Naen","Eniaetok","Kabelle"],"Rongerik":["Rongerik islet","Eniwetak (Rongerik)","Jedan"],"Toke (Taka)":["Toke islet","Lere","Eluk"],"Ujae":["Ujae islet","Bock","Enylamiej"],"Ujelang":["Ujelang islet","Kalo","Einiman"],"Utirik":["Utirik islet","Aon","Bikrak"],"Wotho":["Wotho islet","Medjekon","Kaben (Wotho)"],"Wotje":["Wotje islet","Ormed","Wodmej","Enibuk"]},"Mauritania":{"Adrar":["Atar","Chinguetti","Ouadane","Aoujeft","Tawaz","Ain Ehel Taya"],"Assaba":["Kiffa","Barkéol","Boumdeid","Guerou","Kankossa","Hamed","El Melgue"],"Brakna":["Aleg","Boghé","Bababé","M'Bagne","Magta-Lahjar","Dar El Barka","Aghchorguitt"],"Dakhlet Nouadhibou":["Nouadhibou City","Chami","Boulenouar","Inal","Tmeimichat","Nouamghar"],"Gorgol":["Kaédi","M'Bout","Maghama","Monguel","Lexeiba","Tokomadji","Djéol"],"Guidimaka":["Sélibaby","Ould Yengé","Ghabou","Wompou","Tachott","Gouraye"],"Hodh Ech Chargui":["Néma","Amourj","Bassikounou","Djiguenni","Timbedra","Oualata","Bousteila","Adel Bagrou"],"Hodh El Gharbi":["Aioun El Atrouss","Kobenni","Tamchekett","Tintane","Doueiraré","Egjert"],"Inchiri":["Akjoujt","Bennechab","Mheijrat"],"Nouakchott-Nord":["Dar-Naim","Teyarett","Toujouonine"],"Nouakchott-Ouest":["Ksar","Sebkha","Tevragh-Zeina"],"Nouakchott-Sud":["Arafat","El Mina","Riyad"],"Tagant":["Tidjikja","Moudjéria","Tichitt","N'Beika","Rachid"],"Tiris Zemmour":["Zouérat","F'Dérik","Bir Moghrein","Ain Ben Tili"],"Trarza":["Rosso","Boutilimit","Mederdra","Ouad Naga","R'Kiz","Tékane","Nimjatt"]},"Mauritius":{"Agaléga":["North Island (Vingt-Cinq, La Fourche, Sainte Rita)","South Island ( there are no permanent larger villages, primarily coconut plantations)"],"Black River (Rivière Noire)":["Bambous","Flic-en-Flac","Tamarin","Grande Rivière Noire","Le Morne","La Gaulette","Chamarel","Albion","Case Noyale"],"Cargados Carajos (St. Brandon)":["Raphaël Island (main settlement base)","Avocaire Island","Coco Island","South Island"],"Flacq":["Centre de Flacq","Bel Air Rivière Sèche","Lalmatie","Post de Flacq","Trou d'Eau Douce","Brisée Verdière","Bon Accueil","Central Flacq","Sebastopol","Mare La Chaux"],"Grand Port":["Mahebourg","Rose Belle","Plaine Magnien","New Grove","Nouvelle France","Old Grand Port","Bois Chéri","Trois Boutiques","Cluny"],"Moka":["Quartier Militaire","Saint Pierre","Moka Village","Montagne Blanche","Pailles","Providence","Dagotière","Verdun","Dubreuil"],"Plaines Wilhems":["Curepipe","Vacoas-Phoenix","Quatre Bornes","Rose Hill","Beau Bassin","Midlands","Floréal","Ebene (Cybercity)"],"Port Louis":["Port Louis Centre (Capital)","Cassis","Sainte Croix","Roche Bois","Vallée des Prêtres","Plaine Verte","Bell Village","Grand River North West"],"Rivière du Rempart":["Mapou","Grand Baie (part)","Goodlands","Roches Noires","Pamplemousses border areas","Cap Malheureux","Grand Gaube","Petit Raffray","Piton"],"Rodrigues":["Port Mathurin (Capital)","Grande Montagne","Oyster Bay (Baie aux Huîtres)","La Ferme","Saint Gabriel","Petit Gabriel","Rivière Cocos"],"Savanne":["Souillac","Chemin Grenier","Mahebourg border areas","Riviere des Anguilles","Tyack","Bois Chéri (part)","Grand Bois","Bel Ombre","Surinam"]},"Mexico":{"Aguascalientes":["Aguascalientes (Capital City)","Jesús María","Calvillo","Rincón de Romos","San Francisco de los Romo","Pabellón de Arteaga","Asientos","Cosío"],"Baja California":["Tijuana","Mexicali","Ensenada","Playas de Rosarito","Tecate","San Quintín","San Felipe"],"Baja California Sur":["La Paz","Los Cabos (Cabo San Lucas, San José del Cabo)","Loreto","Comondú (Ciudad Constitución)","Mulegé (Santa Rosalía, Guerrero Negro)","Todos Santos"],"Campeche":["Campeche (Capital City)","Ciudad del Carmen","Champotón","Escárcega","Calkiní","Hecelchakán","Hopelchén","Candelaria"],"Chiapas":["Tuxtla Gutiérrez","San Cristóbal de las Casas","Tapachula","Palenque","Comitán de Domínguez","Chiapa de Corzo","Ocosingo","Tonalá"],"Chihuahua":["Chihuahua (Capital City)","Ciudad Juárez","Delicias","Cuauhtémoc","Hidalgo del Parral","Nuevo Casas Grandes","Camargo","Creel (Barrancas del Cobre area)"],"Ciudad de México (CDMX)":["Miguel Hidalgo (Polanco, Lomas de Chapultepec)","Cuauhtémoc (Centro Histórico, Roma, Condesa, Juárez)","Benito Juárez (Del Valle, Narvarte, Coyoacán border)","Coyoacán (Centro de Coyoacán, Pedregal)","Álvaro Obregón (Santa Fe, San Ángel)","Tlalpan","Xochimilco","Cuajimalpa","Gustavo A. Madero","Iztapalapa"],"Coahuila":["Saltillo","Torreón","Monclova","Piedras Negras","Ciudad Acuña","Parras de la Fuente","Sabinas","Ramos Arizpe"],"Colima":["Colima (Capital City)","Manzanillo","Villa de Álvarez","Tecomán","Comala","Armería","Cuauhtémoc"],"Durango":["Durango (Capital City)","Gómez Palacio","Lerdo","Santiago Papasquiaro","El Salto (Pueblo Nuevo)","Guadalupe Victoria","Vicente Guerrero"],"Guanajuato":["León","Guanajuato (Capital City)","San Miguel de Allende","Celaya","Irapuato","Salamanca","Silao","Dolores Hidalgo"],"Guerrero":["Acapulco de Juárez","Chilpancingo de los Bravo","Zihuatanejo / Ixtapa","Taxco de Alarcón","Iguala de la Independencia","Tlapa de Comonfort","Ometepec"],"Hidalgo":["Pachuca de Soto","Tula de Allende","Tulancingo de Bravo","Ixmiquilpan","Mineral del Monte (Real del Monte)","Huejutla de Reyes","Tizayuca","Actopan"],"Jalisco":["Guadalajara","Zapopan","Tlaquepaque","Tonalá","Tlajomulco de Zúñiga","Puerto Vallarta","Lagos de Moreno","Tequila","Ciudad Guzmán (Zapotlán el Grande)","Chapala (Ajijic)"],"México (Edoméx)":["Toluca de Lerdo","Ecatepec de Morelos","Nezahualcóyotl (Neza)","Naucalpan de Juárez","Tlalnepantla de Baz","Chimalhuacán","Cuautitlán Izcalli","Huixquilucan (Interlomas)","Metepec","Valle de Bravo","Texcoco"],"Michoacán":["Morelia","Uruapan","Lázaro Cárdenas","Zamora de Hidalgo","Pátzcuaro","Zitácuaro","Apatzingán","Cotija"],"Morelos":["Cuernavaca","Jiutepec","Cuautla","Temixco","Tepoztlán","Yautepec","Jojutla"],"Nayarit":["Tepic","Bahía de Banderas (Nuevo Vallarta/Nuevo Nayarit, Sayulita, San Pancho)","San Blas","Compostela","Acaponeta","Santiago Ixcuintla","Ixtlán del Río"],"Nuevo León":["Monterrey","San Pedro Garza García","San Nicolás de los Garza","Guadalupe","Apodaca","Escobedo","Santa Catarina","Santiago","Linares"],"Oaxaca":["Oaxaca de Juárez","Santa Cruz Xoxocotlán","San Juan Bautista Tuxtepec","Salina Cruz","Juchitán de Zaragoza","Puerto Escondido","Bahías de Huatulco","Heroica Ciudad de Tlaxiaco"],"Puebla Puebla":["Puebla (Capital City)","Heroica Puebla de Zaragoza","San Andrés Cholula","San Pedro Cholula","Atlixco","Tehuacán","San Martín Texmelucan","Zacatlán de las Manzanas","Cuetzalan"],"Querétaro":["Santiago de Querétaro","San Juan del Río","El Marqués","Corregidora","Tequisquiapan","Jalpan de Serra (Sierra Gorda)","Ezequiel Montes (Peña de Bernal area)"],"Quintana Roo":["Cancún (Benito Juárez)","Playa del Carmen (Solidaridad)","Tulum","Cozumel","Chetumal (Othón P. Blanco)","Isla Mujeres","Bacalar","Mahahual"],"San Luis Potosí":["San Luis Potosí (Capital City)","Soledad de Graciano Sánchez","Ciudad Valles (Huasteca Potosina)","Matehuala","Rioverde","Xilitla","Tamasopo"],"Sinaloa":["Culiacán Rosales","Mazatlán","Los Mochis (Ahome)","Guasave","Guamúchil (Salvador Alvarado)","Navolato","El Fuerte"],"Sonora":["Hermosillo","Ciudad Obregón (Cajeme)","Heroica Nogales","San Luis Río Colorado","Guaymas","San Carlos","Puerto Peñasco (Rocky Point)","Navojoa","Cananea"],"Tabasco":["Villahermosa (Centro)","Cárdenas","Comalcalco","Huimanguillo","Macuspana","Paraíso","Tenosique"],"Tamaulipas":["Reynosa","Heroica Matamoros","Nuevo Laredo","Ciudad Victoria","Tampico","Ciudad Madero","Altamira","El Mante"],"Tlaxcala":["Tlaxcala de Xicohténcatl","Apizaco","Huamantla","San Pablo del Monte","Calpulalpan","Zacatelco"],"Veracruz":["Veracruz (City)","Boca del Río","Xalapa-Enríquez","Coatzacoalcos","Orizaba","Córdoba","Poza Rica de Hidalgo","Minatitlán","Tuxpan","Papantla"],"Yucatán":["Mérida","Valladolid","Progreso","Tizimín","Umán","Kanasín","Izamal","Ticul"],"Zacatecas":["Zacatecas (Capital City)","Fresnillo","Guadalupe","Jerez de García Salinas","Sombrerete","Río Grande","Jalpa"]},"Micronesia":{"Chuuk":["Weno (Capital Island/District)","Faichuk (Tol, Paata, Polle, Wonei)","Southern Namoneas (Fefan, Tonoas, Uman, Paran)","Northern Namoneas (Piis-Panewu, Fonoton)","Mortlocks (Nomwin, Murilo, Ruo, Fananu)","Northwest Islands (Houk, Polowat, Tamatam, Pulap)","Halls Islands"],"Kosrae":["Lelu (Capital area)","Malem","Utwe","Tafunsak","Walung"],"Pohnpei":["Kolonia (Capital town)","Palikir (Federal Capital area)","Net","Sokehs","Kitti","Madolenihmw","Kapingamarangi (Outlying atoll)","Nukuoro (Outlying atoll)","Sapwuahfik"],"Yap":["Colonia (Capital town)","Tamil","Weloy","Gagil","Fanif","Rull","Dalipebinaw","Kanifay","Giliman","Maap","Outer Islands (Ulithi, Woleai, Fais, Satawal, Ngulu)"]},"Moldova":{"Anenii Noi":[],"Basarabeasca":[],"Briceni":[],"Cahul":[],"Cantemir":[],"Călărași":[],"Căușeni":[],"Cimișlia":[],"Criuleni":[],"Dondușeni":[],"Drochia":[],"Dubăsari":[],"Edineț":[],"Fălești":[],"Florești":[],"Glodeni":[],"Hîncești":[],"Ialoveni":[],"Leova":[],"Nisporeni":[],"Ocnița":[],"Orhei":[],"Rezina":[],"Rîșcani":[],"Sîngerei":[],"Soroca":[],"Strășeni":[],"Șoldănești":[],"Ștefan Vodă":[],"Taraclia":[],"Telenești":[],"Ungheni":[],"Gagauzia (Autonomous Territorial Unit)":[],"Chișinău (Municipality)":[],"Bălți (Municipality)":[],"Bender (Municipality)":[],"Transnistria (Territorial Unit / Disputed Region)":[]},"Monaco":{"Fontvieille":["Port de Fontvieille area","Stade Louis II area","Parc Paysager & Roseraie Princesse Grace","Heliport area","Avenue Albert II industrial/commercial zone"],"La Colle":["Centre Hospitalier Princesse Grace (CHPG) area","Jardin Exotique upper border","Avenue de Pasteur sector","Boulevard Charles III (western end)"],"La Condamine":["Port Hercule waterfront","Place d'Armes","Rue Grimaldi commercial strip","Rue de Millo","Place Sainte-Dévote border"],"La Gare":["Monaco-Monte Carlo Railway Station complex","Pont Sainte-Dévote sector","Boulevard de Belgique (lower section)"],"La Rascasse (Le Port / Fort Antoine sector)":["Virage de la Rascasse (Grand Prix corner area)","Quai Antoine 1er","Fort Antoine open-air theater area","Route de la Piscine (eastern side)"],"Les Révoires":["Jardin Exotique de Monaco (main park area)","Chemin des Révoires","Vistaero border zone","Boulevard du Jardin Exotique (upper section)"],"Monaco-Ville (The Rock)":["Prince's Palace (Palais Princier) area","Place du Palais","Saint Nicholas Cathedral area","Oceanographic Museum (Musée Océanographique) sector","Les Jardins Saint-Martin","Rue Basse","Rue Comte Félix Gastaldi"],"Monte Carlo":["Place du Casino (Casino Square)","Casino de Monte-Carlo complex","Carré d'Or (Golden Square shopping district)","Boulevard des Moulins","Avenue de la Costa","Avenue Princesse Alice","Larvotto beach border"],"Moneghetti":["Boulevard de Belgique","Avenue Hector Otto","Place des Moneghetti","Boulevard Rainier III","Franco-Monégasque border streets (adjacent to Beausoleil)"],"Saint-Roman (La Rousse)":["Tour Odéon area","Boulevard d'Italie","Boulevard du Larvotto (eastern section)","Saint-Roman interchange / French border zone","Monte-Carlo Country Club border"],"Saint-Michel":["Boulevard Princesse Charlotte","Rue Sainte-Cécile","Avenue Saint-Michel","Boulevard d'Italie (western section)","Église Saint-Charles neighborhood"]},"Mongolia":{"Arkhangai":["Tsetserleg (Capital Center)","Battsengel","Bulgan (Arkhangai)","Chuluunt","Erdenebulgan","Erdenemandal","Ikhtamir","Jargalant","Khangai","Khashaat","Khairkhan","Tsenkher","Tariat (Khorgo-Terkhiin Tsagaan Nuur area)","Ögii Nuur","Ulziit"],"Bayan-Ölgii":["Ölgii (Capital Center)","Altai (Bayan-Ölgii)","Altantsögts","Bayannuur","Bugat","Bulgan (Bayan-Ölgii)","Buyant","Delüün","Nogoonnuur","Sagsai","Tsengel","Ulaankhus"],"Bayankhongor":["Bayankhongor (Capital Center)","Baatsagaan","Bayan-Ovoo","Bayan-Öndör","Bayanbulag","Bayangovi","Bayanlig","Buutsagaan","Erdenetsogt","Galuut","Jinst","Khüreemaral","Shinjinst","Zag"],"Bulgan":["Bulgan (Capital Center)","Bayan-Agt","Bayannuur","Büregkhangai","Dashinchilen","Gurvanbulag","Khangal","Khishig-Öndör","Khutag-Öndör","Mogod","Saikhan","Selenge","Teshig"],"Darkhan-Uul":["Darkhan (Capital Center)","Khongor","Sharyngol","Orkhon (Darkhan)"],"Dornod":["Choibalsan (Capital Center)","Bayandun","Bayantümen","Bayan-Uul","Dashbalbar","Gurvanzagal","Khalkhgol","Kherlen","Matad","Sergelen","Tsagaan-Ovoo"],"Dornogovi":["Sainshand (Capital Center)","Airag","Altanshiree","Dalanjargalan","Erdene","Khatanbulag","Khuvsgul (Dornogovi)","Mandakh","Saikhandulaan","Ulaanbadrakh","Zamyn-Üüd (Border city)"],"Dundgovi":["Mandalgovi (Capital Center/Saintsagaan)","Adaatsag","Bayanjargalan","Delgerkhangai","Delgertsogt","Deren","Erdenedalai","Govi-Ugtaal","Gurvansaikhan","Khuld","Luus","Olziit","Tsagaandelger"],"Govi-Altai":["Altai (Capital Center/Yesonbulag)","Biger","Bugat","Chandmani","Darvi","Delger","Erdene","Khaliun","Khantaishir","Sharga","Tonkhil","Tseel","Tsogt"],"Govisümber":["Choyr (Capital Center/Sümber)","Bayantal","Shiveegovi"],"Khentii":["Öndörkhaan (Capital Center/Kherlen)","Batnorov","Batshireet","Bayan-Adarga","Bayankhutag","Bayanmönkh","Binder","Dadal","Darkhan","Galshar","Jargaltkhaan","Mörön","Norovlin","Tsenkhermandal"],"Khovd":["Khovd (Capital Center/Jargalant)","Altai (Khovd)","Bulgan (Khovd)","Buyant","Chandmani","Darvi","Duut","Erdeneburen","Mankhan","Munkhkhairkhan","Must","Myangad","Tsetseg","Zereg"],"Khövsgöl":["Mörön (Capital Center)","Alag-Erdene (Khatgal & Khövsgöl Nuur area)","Arbulag","Bayanzurkh","Burentogtokh","Chandmani-Öndör","Erdenebulgan","Galt","Jargalant","Rashaant","Renchinlkhümbe","Shine-Ider","Tarialan","Tosontsengel","Tsagaan-Uul","Tsagaan-Nuur (Tsaatan/Reindeer area)","Ulaan-Uul"],"Ömnögovi (South Gobi)":["Dalanzadgad (Capital Center)","Bayan-Ovoo","Bayandalai","Bulgan (Ömnögovi)","Gurvantes","Khanbogd (Oyu Tolgoi mine area)","Khan Khongor","Manlai","Noyon","Sevrei (Khongoryn Els area)","Tsogt-Ovoo","Tsogttsetsii (Tavan Tolgoi mine area)"],"Orkhon":["Erdenet (Capital Center)","Jargalant (Orkhon)"],"Övörkhangai":["Arvaikheer (Capital Center)","Baruun Bayan-Ulaan","Bat-Ölzii (Orkhon Valley area)","Bayangol","Bogd","Bürd","Khairkhandulaan","Khujirt","Kharkhorin (Karakorum center)","Nariinteel","Sant","Taragt","Tongor","Uyanga","Yesönzüil"],"Selenge":["Sükhbaatar (Capital Center)","Altanbulag","Baruunburen","Bayangol","Javkhlant","Khuder","Khushaat","Mandal (Züünkharaa)","Orkhon (Selenge)","Sant","Shaamar","Tsagaannuur","Tushig","Yeröö"],"Sükhbaatar":["Baruun-Urt (Capital Center)","Asgat","Bayandelger","Dariganga","Erdenetsagaan","Khalzan","Munkhkhaan","Naran","Ongon","Sukhbaatar (Süm)","Tüvshinshiree","Uulbayan"],"Töv":["Zuunmod (Capital Center)","Altanbulag","Arkhust","Batsümber","Bayan","Bayanchandmani","Bayandelger","Bayanjargalan","Bayankhangai","Bayantsogt","Bornuur","Erdene (Gorkhi-Terelj area)","Jargalant","Lun","Sergelen","Ugtaaltsaidam","Zaamar"],"Ulaanbaatar (Capital City)":["Sukhbaatar (District)","Chingeltei (District)","Bayanzurkh (District)","Bayangol (District)","Khan-Uul (District)","Songinokhairkhan (District)","Nalaikh (Satellite District)","Baganuur (Satellite District)","Bagakhangai (Satellite District)"],"Uvs":["Ulaangom (Capital Center)","Baruunturuun","Bukhmurun","Davst","Khovd (Uvs)","Khyargas","Malchin","Naranbulag","Ölgii","Ömnögovi (Uvs)","Sagil","Tarialan","Tes","Tsagaankhairkhan","Turgen","Züüngovi"],"Zavkhan":["Uliastai (Capital Center)","Aldarkhaan","Asgat","Bayankhairkhan","Bayantes","Dörvöljin","Erdenekhairkhan","Ider","Nomrog","Otgon (Otgentenger area)","Santmargats","Shilüustei","Songino","Telmen","Tes","Tosontsengel","Tsagaanchuluut","Tsagaankhairkhan","Tudevtsei","Yaruu"]},"Montenegro":{"Andrijevica":["Andrijevica Town","Trešnjevik","Krstac","Slatina","Gnjili Potok","Kralje","Košutići"],"Bar":["Stari Bar (Old Town)","Novi Bar (City Center)","Šušanj","Sutomore","Dobra Voda","Utjeha","Virpazar (Skadar Lake hub)","Čanj","Zaljevo"],"Berane":["Berane Town","Dolac","Hareme","Lužac","Pešca","Polimska","Kaludra","Lubnice"],"Bijelo Polje":["Bijelo Polje Town","Nikoljac","Pruška","Rasovo","Nedakusi","Rakonje","Lozna","Zatrijebač"],"Budva":["Stari Grad (Old Town Budva)","Slovenska Plaža area","Bečići","Rafailovići","Pržno","Sveti Stefan","Petrovac","Jaz","Maine"],"Cetinje":["Cetinje Town (Historic Center)","Bajice","Humci","Donji Kraj","Lovćen (National Park area)","Rijeka Crnojevića","Njeguši"],"Danilovgrad":["Danilovgrad Town","Spuž","Pažići","Glava Zete","Ostrog Monastery area","Martinići","Ždrebaonik"],"Gusinje":["Gusinje Town","Vusanje","Ali-Pasha Springs area","Grebaje Valley area","Kruševo","Martinaj"],"Herceg Novi":["Stari Grad (Old Town Herceg Novi)","Igalo","Topla","Savina","Meljine","Zelenika","Kumbor","Đenovići","Baošići","Bijela"],"Kolašin":["Kolašin Town","Smailagića Polje","Breza","Jezerine (Ski resort area)","Mateševo","Biogradska Gora area","Lipovo"],"Kotor":["Stari Grad (Old Town Kotor)","Dobrota","Muo","Prčanj","Stoliv","Škaljari","Risan","Perast","Orahovac","Radanovići (Grbalj area)"],"Mojkovac":["Mojkovac Town","Podbišće","Polja","Lepenac","Štitarica","Žari"],"Nikšić":["Nikšić Town","Kličevo","Straševina","Humci (Nikšić)","Dragova Luka","Vidrovan","Župa Nikšićka","Grahovo"],"Petnjica":["Petnjica Town","Bor","Savin Bor","Trpezi","Vrbica","Javorova"],"Plav":["Plav Town","Murino","Brezojevice","Vojno Selo","Prnjavor","Hoti"],"Plužine":["Plužine Town","Piva Lake area","Trsa","Goransko","Mratinje","Borkovići"],"Pljevlja":["Pljevlja Town","Moćevac","Ševari","Guke","Odžak","Gradac","Kosanica"],"Podgorica":["Centar (Nova Varoš)","Preko Morace","Blok 5 / Blok 6","City Kvart","Zabjelo","Stari Aerodrom","Konik","Masline","Tološi","Donja Gorica","Gorica C"],"Rožaje":["Rožaje Town","Ibarac","Bandžov","Kalače","Bać","Seošnica"],"Šavnik":["Šavnik Town","Boan","Bukovica","Duži","Pošćenje","Komarnica"],"Tivat":["Tivat Town Center","Porto Montenegro","Donja Lastva","Seljanovo","Kalimanj","Gradiošnica","Lepetane","Radovići (Luštica Bay area)","Krašići"],"Tuzi":["Tuzi Town","Dinoša","Milješ","Vuksanlekaj","Sukuruć","Vranj"],"Ulcinj":["Stari Grad (Old Town Ulcinj)","Mala Plaža area","Velika Plaža (Long Beach area)","Pinješ","Totoši","Donji Štoj","Ada Bojana","Vladimir"],"Žabljak":["Žabljak Town","Pitomine","Borje","Razvršje","Motički Gaj","Njegovuđa","Tepca (Tara Canyon area)"],"Zeta":["Golubovci (Center)","Mahala","Mojanovići","Mataguži","Balabani","Vukovci","Botun"]},"Morocco":{"Béni Mellal-Khénifra":["Béni Mellal (Capital Center)","Khénifra","Azilal","Fquih Ben Salah","Khouribga","Ouaouizeght","Demnate","Kasba Tadla","Zaouiat Cheikh","El Ksiba","M'rirt","Oued Zem","Boujniba"],"Casablanca-Settat":["Casablanca (Prefecture - including Anfa, Maarif, Ain Diab, Sidi Maarif, Hay Mohammadi, Ain Sebaa, California, Bouskoura)","Mohammedia","El Jadida","Settat","Berrechid","Sidi Bennour","Benslimane","Mediouna","Nouaceur","Azemmour","Oualidia","Bouznika","Had Soualem"],"Dakhla-Oued Ed-Dahab":["Dakhla (Capital Center)","Oued Ed-Dahab","Aousserd","Bir Gandouz","El Argoub","Imoutlane","Tichla"],"Drâa-Tafilalet":["Errachidia (Capital Center)","Ouarzazate","Midelt","Tinghir","Zagora","Erfoud","Rissani","Imilchil","Boumalne Dades","Kalaat M'gouna","Agdz","M'hamid El Ghizlane"],"Fès-Meknès":["Fès (Prefecture - including Fes El Bali, Fes Jdid, Ville Nouvelle)","Meknès (Prefecture)","Taza","Sefrou","Ifrane","Azrou","Taounate","El Hajeb","Boulemane","Missour","Moulay Idriss Zerhoun","Imouzzer Kandar","Ribat El Kheir"],"Guelmim-Oued Noun":["Guelmim (Capital Center)","Tan-Tan","Sidi Ifni","Assa-Zag","Mirleft","El Ouatia","Taghjijt","Bouizakarne"],"Laâyoune-Sakia El Hamra":["Laâyoune (Capital Center)","Tarfaya","Boujdour","Es-Semara","El Marsa","Foum El Oued"],"Marrakech-Safi":["Marrakech (Prefecture - including Medina, Gueliz, Hivernage, Palmeraie, Sidi Youssef Ben Ali)","Safi","Essaouira","El Kelâat des Sraghna","Chichaoua","Al Haouz (including Tahannaout, Ourika, Asni, Imlil)","Rehamna (Benguerir)","Youssoufia","Ait Ourir","Imintanoute"],"Oriental":["Oujda (Capital Center)","Nador","Berkane","Taourirt","Jerada","Figuig","Driouch","Guercif","Saïdia","Ahfir","Bouarfa"],"Rabat-Salé-Kénitra":["Rabat (Capital City - including Hassan, Agdal, Souissi, Hay Riad, Youssoufia)","Salé","Skhirat-Témara","Kénitra","Khémisset","Sidi Kacem","Sidi Slimane","Mehdya","Moulay Bousselham","Tiflet","Rommani"],"Souss-Massa":["Agadir Ida-Outanane (including Agadir City, Anza, Taghazout, Imouzzer)","Inezgane-Aït Melloul","Tiznit","Taroudant","Tata","Chtouka Aït Baha (Biougra)","Tafraout","Ouled Teima","Massa"],"Tanger-Tétouan-Al Hoceïma":["Tangier (Prefecture - including Medina, Malabata, California, Marshan)","Tétouan","Al Hoceïma","Chefchaouen","Larache","Ksar El Kebir","M'diq-Fnideq (including Martil, Cabo Negro)","Ouezzane","Fahs-Anjra (Tanger Med area)","Asilah"]},"Mozambique":{"Cabo Delgado":["Pemba (Capital Center)","Ancuabe","Balama","Chiúre","Ibo (Quirimbas Archipelago area)","Macomia","Muidumbe","Montepuez","Mocímboa da Praia","Mueda","Nangade","Palma","Quissanga","Meluco"],"Gaza":["Xai-Xai (Capital Center)","Bilene (Praia do Bilene area)","Chibuto","Chicualacuala","Chigubo","Chókwè","Guijá","Mabalane","Manjacaze","Massangena","Massingir","Mandlakazi","Limpopo"],"Inhambane":["Inhambane Town (Capital Center)","Maxixe (Economic hub)","Vilankulo (Bazaruto Archipelago gateway)","Homoíne","Jangamo","Inharrime","Mabote","Massinga","Morrumbene","Panda","Zavala","Funhalouro"],"Manica":["Chimoio (Capital Center)","Báruè (Catandica)","Gondola","Guro","Machaze","Macate","Macossa","Manica Town","Mossurize","Vanduzi","Sussundenga (Mount Binga area)"],"Maputo (City)":["Central C (Baixa/Downtown area)","Polana Cimento (Polana area)","Sommerchield","Coop","Malhangalene","Alto Maé","Mafalala","Maxaquene","Polana Caniço","Hulene","Costa do Sol","Triunfo","Catembe (Municipal district across the bay)","Inhaca Island (Municipal district)"],"Maputo (Province)":["Matola (Capital Center)","Boane","Magude","Manhiça","Marracuene","Moamba","Namaacha","Matutuíne (Ponta do Ouro area)"],"Nampula":["Nampula City (Capital Center)","Angoche","Eráti (Namapa)","Lalaua","Malema","Meconta","Mecubúri","Memba","Mogincual","Mogovolas","Moma","Monapo","Mossuril","Muecate","Murrupula","Nacala-a-Velha","Nacala-Porto","Nacarôa","Rapale","Ribáuè","Ilha de Moçambique (Island of Mozambique historic area)"],"Niassa":["Lichinga (Capital Center)","Cuamba","Lago (Metangula / Lake Niassa area)","Majune","Mandimba","Marrupa","Maúa","Mavago","Mecanhelas","Mecula (Niassa Special Reserve area)","Metarica","Muembe","N'gauma","Nipepe","Sanga"],"Sofala":["Beira (Capital Center)","Buzi","Caia","Chemba","Cheringoma","Chibabava","Dondo","Gorongosa (National Park area)","Marromeu","Machanga","Maringué","Muanza"],"Tete":["Tete City (Capital Center)","Angónia","Cahora Bassa (Songo / Dam area)","Changara","Chifunde","Chiuta","Macanga","Magoé","Marávia","Moatize (Mining hub)","Mutarara","Tsangano","Zumbo"],"Zambezia":["Quelimane (Capital Center)","Alto Molócue","Chinde","Gilé","Gurué (Tea plantation area)","Ile","Inhassunge","Lugela","Maganja da Costa","Milange","Mocuba","Mocubela","Molumbo","Mopeia","Morrumbala","Namacurra","Namarroi","Nicoadala","Pebane","Derre"]},"Myanmar":{"Ayeyarwady":["Pathein (Capital Center)","Hinthada","Maubin","Myaungmya","Pyapon","Labutta","Kyonpyaw","Myanaung","Bogale","Ngapudaw (Chaungtha & Ngwesaung beach areas)","Wakema","Yegyi"],"Bago":["Bago (Capital Center)","Taungoo","Pyay","Tharrawaddy","Nyaunglebin","Shwedaung","Kayan","Yadashe","Thanatpin","Paungde","Kyaukkyi"],"Chin":["Hakha (Capital Center)","Falam","Mindat","Kanpetlet (Mount Victoria/Nat Ma Taung area)","Tedim","Paletwa","Matupi","Tonzang","Cikha"],"Kachin":["Myitkyina (Capital Center)","Bhamo","Putao (Hkakabo Razi gateway)","Mogaung","Mohnyin","Shwegu","Waingmaw","Tanai","Hpakant (Jade mining area)","Chhibwe"],"Kayah":["Loikaw (Capital Center)","Demawso","Hpruso","Bawlake","Pasawng","Mese","Shadaw"],"Kayin":["Hpa-An (Capital Center)","Myawaddy (Border trading hub)","Kawkareik","Thandaunggyi","Hpapun","Kyainseikgyi","Hlaingbwe"],"Magway":["Magway (Capital Center)","Minbu","Pakokku","Thayet","Gangaw","Chauk","Yenangyaung","Taungdwingyi","Natmauk","Pwintbyu","Salin"],"Mandalay":["Mandalay City (Capital Center - including Mahar Aung Myay, Chan Aye Thar Zan, Pyigyidagun, Chan Mya Thar Zan districts)","Pyin Oo Lwin (Maymyo)","Nyaung-U (Bagan archaeological area)","Myingyan","Yamethin","Meiktila","Kyaukse","Mogok (Ruby mining area)","Amarapura","Inwa (Ava)"],"Mon":["Mawlamyine (Capital Center)","Thaton","Mudon","Kyaikto (Golden Rock/Kyaiktiyo area)","Ye","Thanbyuzayat","Chaungzon (Bilu Island)","Paung"],"Naypyidaw (Union Territory)":["Zeyarthiri","Zabuthiri","Lewe","Pyinmana","Ottarathiri","Pobbathiri","Tatkone","Dekkhinathiri"],"Rakhine":["Sittwe (Capital Center)","Mrauk-U (Historic temple area)","Thandwe (Ngapali Beach area)","Kyaukpyu","Maungdaw","Minbya","Ponnagyun","Gwa","Toungup","Buthidaung","Ramree"],"Sagaing":["Monywa (Capital Center)","Sagaing City","Shwebo","Katha","Kalay (Kalaymyo)","Tamu (Border town)","Mawlaik","Hkamti","Yinmabin","Kanbalu","Wuntho"],"Shan":["Taunggyi (Capital Center / Southern Shan)","Lashio (Northern Shan Center)","Kengtung (Eastern Shan Center)","Nyaungshwe (Inle Lake area)","Kalaw","Muse (Border trading hub)","Tachileik (Border town)","Hsipaw","Kyaukme","Pindaya","Panglong"],"Tanintharyi":["Dawei (Capital Center)","Myeik (Mergui Archipelago gateway)","Kawthaung (Southernmost point)","Palaw","Bokpyin","Thayetchaung","Yebyu"],"Yangon":["Yangon City (Downtown, Dagon, Bahan, Kamayut, Insein, Yankin, Mayangone districts)","Thanlyin (Syriam)","Twante","Hlegu","Taikkyi","Kyauktan","Cocokyun (Coco Islands)"]},"Namibia":{"Erongo":["Swakopmund (Capital Center)","Walvis Bay (Port town & lagoon area)","Henties Bay","Omaruru","Karibib","Usakos","Arandis","Uis (Brandberg area)"],"Hardap":["Mariental (Capital Center)","Rehoboth","Maltahöhe (Sossusvlei gateway sector)","Gibeon","Aranos","Kalkrand","Stampriet"],"Karas (//Karas)":["Keetmanshoop (Capital Center)","Lüderitz (Coastal town)","Oranjemund (Mining town)","Karasburg","Bethanie","Berseba","Noordoewer (South African border)","Rosh Pinah","Aus"],"Kavango East":["Rundu (Capital Center)","Mashare","Ndiyona","Mukwe (Bagani / Popa Falls area)","Ndonga Linena"],"Kavango West":["Nkurenkuru (Capital Center)","Mpungu","Kapako","Tondoro","Musese","Mankumpi","Ncamagoro","Ncuncuni"],"Khomas":["Windhoek (Capital City - including Central Business District, Klein Windhoek, Olympia, Eros, Ludwigsdorf, Katutura, Khomasdal, Avis)","Dörrmid","Baumgartsbrunn","Aris"],"Kunene":["Opuwo (Capital Center)","Outjo","Khorixas","Kamanjab","Sesfontein","Epupa (Epupa Falls area)","Ruacana border sector"],"Ohangwena":["Eenhana (Capital Center)","Helao Nafidi (Oshikango border hub)","Okongo","Ondobe","Omungwelume","Epembe"],"Omaheke":["Gobabis (Capital Center)","Aminuis","Epukiro","Otjinene","Otjombinde","Tallismanus","Leonardville"],"Omusati":["Outapi (Capital Center)","Oshikuku","Ogongo","Okahao","Tsandi","Elim","Ruacana (Main town area)","Onesi"],"Oshana":["Oshakati (Capital Center)","Ongwediva","Ondangwa (Oshana sector)","Okatana","Okaku","Uuvudhiya"],"Oshikoto":["Omuthiya (Capital Center)","Tsumeb (Mining town)","Oniipa","Ondangwa (Oshikoto sector)","Olukonda","Okankolo","Guinas"],"Otjozondjupa":["Otjiwarongo (Capital Center)","Grootfontein","Okahandja","Okakarara","Otavi","Kombat","Tsumkwe (Bushmanland area)","Kalkfeld"],"Zambezi (formerly Caprivi)":["Katima Mulilo (Capital Center)","Bukalo","Sibbinda","Chinchimane","Sangwali","Kongola","Impalila Island"]},"Nauru":{"Aiwo":["Aiwo Boulevard coastal strip","Nauru Phosphate Corporation (RONPHOS) processing plant & cantilever area","Civic Centre complex","Aiwo Harbor / Boat harbor area","Chinatown district","OD-N-Aiwo Hotel area","Sacred Heart Church"],"Anabar":["Anabar Lagoons (coastal brackish ponds)","Anabar Beach coastal zone","Ijuw border inland tracks"],"Anetan":["Anetan Beach area","Government Infant School zone","Weather station sector"],"Anibare":["Anibare Bay waterfront","Anibare Harbour (channel and boat ramp)","Menen Hotel complex","Coastal palm groves line","Buada inland track junctions"],"Baiti":["Baiti coastal residential strip","Central plateau escarpment base","Location of the historic Protestant church area"],"Boe":["Boe Declaration monument area","Coastal residential strip (adjacent to Yaren runway)","Ground catchment wells sector"],"Buada":["Buada Lagoon (landlocked brackish lake perimeter)","Inland fertile agricultural depression","Central plateau phosphate mining access roads"],"Denigomodu":["Nauru General Hospital complex","Location of the \"Location\" (large expatriate worker housing complex)","Republic of Nauru Hospital (RNH) area","RONPHOS expatriate residential sector","Nauru College campus"],"Ewa":["Capelle & Partner department store complex","Kayser College compound","North Cape coastal point"],"Ijuw":["Ijuw Cape (easternmost point of Nauru)","Coastal fishing reef access areas","Scuba diving reef wall drop-off access points"],"Meneng":["Meneng Hotel coastal area","State House compound (Presidential residence)","Meneng Infrastructure Facility zone","Moxham beach area"],"Nibok":["Nibok coastal settlements","Phosphate mining field transit tracks (inland sector)","Beach reef flats"],"Uaboe":["Government workshop and maintenance yards area","Uaboe coastal strip","Community chapel sector"],"Yaren":["Parliament House complex","Government Administration buildings (Government Buildings area)","Nauru International Airport terminal & runway sector","High Court of Nauru complex","Moqua Well / Moqua Caves underground lake area","Police Station headquarters"]},"Nepal":{"Bagmati":["Kathmandu","Lalitpur","Bhaktapur","Kavrepalanchok","Chitwan","Makwanpur","Nuwakot","Dhading","Sindhupalchok","Dolakha","Ramechhap","Sindhuli","Rasuwa"],"Gandaki":["Kaski","Nawalpur (Nawalparasi East)","Tanahun","Syangja","Gorkha","Lamjung","Baglung","Parbat","Myagdi","Mustang","Manang"],"Karnali":["Surkhet","Salyan","Dailekh","Jajarkot","West Rukum","Jumla","Kalikot","Mugu","Humla","Dolpa"],"Koshi":["Morang","Sunsari","Jhapa","Udayapur","Ilam","Dhankuta","Bhojpur","Sankhuwasabha","Taplejung","Solukhumbu","Okhaldhunga","Khotang","Terhathum","Panchthar"],"Lumbini":["Rupandehi","Dang","Banke","Kapilvastu","Palpa","Bardiya","Nawalparasi (Nawalparasi West)","Gulmi","Arghakhanchi","Pyuthan","Rolpa","East Rukum"],"Madhesh":["Dhanusha","Parsa","Bara","Rautahat","Sarlahi","Mahottari","Siraha","Saptari"],"Sudurpashchim":["Kailali","Kanchanpur","Doti","Achham","Baitadi","Dadeldhura","Bajhang","Bajura","Darchula"]},"Netherlands":{"Drenthe":["Assen","Emmen","Hoogeveen","Meppel","Coevorden","Beilen","Roden","Zuidlaren"],"Flevoland":["Almere","Lelystad","Dronten","Emmeloord","Urk","Zeewolde","Biddinghuizen","Swifterbant"],"Friesland (Fryslân)":["Leeuwarden","Sneek","Heerenveen","Drachten","Harlingen","Dokkum","Franeker","Joure"],"Gelderland":["Arnhem","Nijmegen","Apeldoorn","Ede","Zutphen","Doetinchem","Harderwijk","Tiel","Wageningen"],"Groningen":["Groningen (City)","Haren","Delfzijl","Winschoten","Veendam","Stadskanaal","Appingedam","Hoogezand"],"Limburg":["Maastricht","Venlo","Roermond","Heerlen","Sittard-Geleen","Weert","Kerkrade","Valkenburg"],"North Brabant (Noord-Brabant)":["Eindhoven","Tilburg","Breda","'s-Hertogenbosch (Den Bosch)","Helmond","Roosendaal","Bergen op Zoom","Oss"],"North Holland (Noord-Holland)":["Amsterdam","Haarlem","Zandvoort","Alkmaar","Amstelveen","Hilversum","Zaandam","Hoorn","Den Helder"],"Overijssel":["Enschede","Zwolle","Deventer","Hengelo","Almelo","Kampen","Oldenzaal","Steenwijk"],"South Holland (Zuid-Holland)":["Rotterdam","The Hague (Den Haag)","Leiden","Delft","Dordrecht","Gouda","Schiedam","Alphen aan den Rijn"],"Utrecht":["Utrecht (City)","Amersfoort","Zeist","Nieuwegein","Veenendaal","Houten","Woerden","Soest"],"Zeeland":["Middelburg","Vlissingen","Goes","Terneuzen","Zierikzee","Sluis","Hulst","Domburg"]},"New Zealand":{"Auckland":["Auckland Central","Manukau","North Shore","Waitākere","Franklin","Rodney","Waiheke Island","Great Barrier Island"],"Bay of Plenty":["Tauranga","Rotorua","Whakatāne","Te Puke","Kawerau","Ōpōtiki","Katikati"],"Canterbury":["Christchurch","Timaru","Ashburton","Rangiora","Rolleston","Kaiapoi","Lincoln","Geraldine","Hanmer Springs","Kaikōura"],"Chatham Islands":["Waitangi","Kaingaroa","Owenga","Pitt Island"],"Gisborne":["Gisborne Central","Tolaga Bay","Tokomaru Bay","Ruatoria","Te Araroa","Manutuke"],"Hawke's Bay":["Napier","Hastings","Havelock North","Wairoa","Waipukurau","Waipawa"],"Manawatū-Whanganui":["Palmerston North","Whanganui","Levin","Feilding","Dannevirke","Taumarunui","Marton","Ohakune"],"Marlborough":["Blenheim","Picton","Renwick","Havelock","Seddon"],"Nelson":["Nelson Central","Stoke","Tahunanui","Atawhai"],"Northland":["Whangārei","Kerikeri","Kaitaia","Dargaville","Kaikohe","Paihia","Russell"],"Otago":["Dunedin","Queenstown","Wanaka","Oamaru","Alexandra","Cromwell","Balclutha","Arrowtown"],"Southland":["Invercargill","Gore","Te Anau","Winton","Bluff","Riverton","Oban (Stewart Island)"],"Taranaki":["New Plymouth","Hāwera","Stratford","Eltham","Ōpunake","Pātea"],"Tasman":["Richmond","Motueka","Takaka","Brightwater","Wakefield"],"Waikato":["Hamilton","Taupō","Cambridge","Te Awamutu","Tokoroa","Huntly","Matamata","Morrinsville","Thames","Whangamatā"],"Wellington":["Wellington City","Lower Hutt","Porirua","Upper Hutt","Paraparaumu","Masterton","Kāpiti","Carterton"],"West Coast":["Greymouth","Westport","Hokitika","Reefton","Franz Josef","Fox Glacier"]},"Nicaragua":{"Boaco":["Boaco (Capital City)","Camoapa","San Lorenzo","Teustepe","San José de los Remates","Santa Lucía"],"Carazo":["Jinotepe (Capital City)","Diriamba","San Marcos","Santa Teresa","Dolores","El Rosario","La Paz de Carazo","La Conquista"],"Chinandega":["Chinandega (Capital City)","Corinto (Port town)","El Viejo","Chichigalpa","Somotillo","Jiquilillo","Puerto Morazán","Cinco Pinos","San Pedro del Norte","Posoltega"],"Chontales":["Juigalpa (Capital City)","Acoyapa","Santo Tomás","La Libertad","San Pedro de Lóvago","Villa Sandino","Comalapa","El Coral"],"Estelí":["Estelí (Capital City)","Condega","Pueblo Nuevo","San Juan de Limay","La Trinidad","San Nicolás"],"Granada":["Granada (Capital City)","Nandaime","Diriomo","Diriá","Isletas de Granada","Malacatoya"],"Jinotega":["Jinotega (Capital City)","San Rafael del Norte","Pantasma (Santa María de Pantasma)","Wiwilí de Jinotega","El Cuá","San José de Bocay","San Sebastián de Yalí","La Concordia"],"León":["León (Capital City)","Nagarote","La Paz Centro","Telica","Quezalguaque","Larreynaga (Malpaisillo)","El Sauce","El Jicaral","Achuapa","Poneloya / Las Peñitas"],"Madriz":["Somoto (Capital City)","San Juan de Río Coco","Palacagüina","Totogalpa","Telpaneca","Yalagüina","San Lucas","Las Sabanas","San José de Cusmapu"],"Managua":["Managua (Capital City)","Tipitapa","Ciudad Sandino","El Crucero","San Rafael del Sur (Masachapa & Pochomil areas)","Mateare","Ticuantepe","San Francisco Libre","Villa El Carmen"],"Masaya":["Masaya (Capital City)","Catarina","Nindirí","Masatepe","San Juan de Oriente","Tisma","La Concepción","Nandasmo","Niquinohomo"],"Matagalpa":["Matagalpa (Capital City)","Sébaco","San Isidro","Matiguás","Muy Muy","Esquipulas","San Ramón","Rio Blanco","Terrabona","Ciudad Darío","El Tuma - La Dalia"],"Nueva Segovia":["Ocotal (Capital City)","Jalapa","Quilalí","Jícaro","Wiwilí de Nueva Segovia","San Fernando","Ciudad Antigua","Dipilto","Mozonte","Santa María"],"Rivas":["Rivas (Capital City)","San Juan del Sur","Tola","Altagracia (Ometepe Island)","Moyogalpa (Ometepe Island)","Potosí","Buenos Aires","San Jorge","Cárdenas","Belén"],"Río San Juan":["San Carlos (Capital City)","El Castillo","San Miguelito","Morrito","El Almendro","San Juan de Nicaragua (Greytown)","Solentiname Islands"],"North Caribbean Coast (RACCN)":["Puerto Cabezas / Bilwi (Capital City)","Waspam","Rosita","Bonanza","Siuna","Prinzapolka","Mulukukú","Waslala"],"South Caribbean Coast (RACCS)":["Bluefields (Capital City)","Corn Island (Great Corn & Little Corn)","Laguna de Perlas (Pearl Lagoon)","El Rama","Nueva Guinea","Kukra Hill","Muelle de los Bueyes","El Tortuguero","Desembocadura de Río Grande","San Juan del Norte (historically tied to southern transit)"]},"Niger":{"Agadez":["Agadez (Regional Capital)","Arlit (Mining hub)","Bilma","Tchirozérine","Iférouane","Ingall","Aderbissinat","Timia"],"Diffa":["Diffa (Regional Capital)","N'Guigmi","Maïné-Soroa","Bosso","Goudoumaria","Chétimari","Ngourti"],"Dosso":["Dosso (Regional Capital)","Dogondoutchi","Gaya","Loga","Boboye (Birni N'Gaouré)","Falmey","Tibiri","Dioundiou"],"Maradi":["Maradi (Regional Capital)","Tessaoua","Mayahi","Dakoro","Guidan Roumdji","Madarounfa","Aguie","Gazaoua"],"Niamey (Capital District)":["Niamey I (Commune)","Niamey II (Commune)","Niamey III (Commune)","Niamey IV (Commune)","Niamey V (Commune)"],"Tahoua":["Tahoua (Regional Capital)","Bouza","Illéla","Keita","Madaoua","Birni N'Konni","Tchin-Tabaraden","Abalak","Malbaza"],"Tillabéri":["Tillabéri (Regional Capital)","Téra","Say","Ouallam","Filingué","Kollo","Bankilare","Banibangou","Abala","Gothèye"],"Zinder":["Zinder (Regional Capital)","Mirriah","Magaria","Matameye","Tanout","Gouré","Belbédji","Damagaram Takaya"]},"Nigeria":{"Abia":["Umuahia (Capital)","Aba North","Aba South","Arochukwu","Ohafia","Bende","Isuikwuato","Osisioma","Ukwa West","Ukwa East","Obingwa","Ugwunagbo"],"Adamawa":["Yola (Capital)","Mubi North","Mubi South","Gombi","Michika","Madagali","Hong","Numan","Demsa","Lamurde","Fufore","Ganye"],"Akwa Ibom":["Uyo (Capital)","Eket","Ikot Ekpene","Oron","Ibiono Ibom","Mkpat Enin","Abak","Itu","Etinan","Ukanafun","Ibeno","Essien Udim"],"Anambra":["Awka (Capital)","Onitsha","Nnewi","Ekwulobia","Aguata","Ihiala","Idemili North","Idemili South","Ogbaru","Njikoka","Anaocha","Oyi"],"Bauchi":["Bauchi (Capital)","Azare (Katagum)","Misau","Ningi","Jama'are","Toro","Alkaleri","Dass","Tafawa Balewa","Shira","Gamawa","Darazo"],"Bayelsa":["Yenagoa (Capital)","Brass","Ogbia","Sagbama","Ekeremor","Southern Ijaw","Nembe","Kolokuma/Opokuma"],"Benue":["Makurdi (Capital)","Otukpo","Gboko","Katsina-Ala","Vandeikya","Adikpo (Kwande)","Ukum","Oju","Apa","Ushongo","Konshisha","Buruku"],"Borno":["Maiduguri (Capital)","Biu","Bama","Monguno","Gwoza","Dikwa","Askira/Uba","Kaga","Konduga","Jere","Ngala","Shani"],"Cross River":["Calabar (Capital)","Icom","Ogoja","Obudu","Ugep (Yakurr)","Akamkpa","Obubra","Bekwarra","Yala","Biase","Odukpani","Etung"],"Delta":["Asaba (Capital)","Warri","Sapele","Ughelli","Agbor (Ika South)","Abraka (Ethiope East)","Kwale (Ndokwa West)","Oleh (Isoko South)","Ozoro (Isoko North)","Ogwashi-Uku","Oghara","Burutu"],"Ebonyi":["Abakaliki (Capital)","Afikpo","Onueke (Ezza South)","Ikwo","Izzi","Ohaozara","Ishielu","Ohaukwu","Edda (Afikpo South)","Ezza North"],"Edo":["Benin City (Capital)","Auchi (Etsako West)","Uromi (Esan North-East)","Ekpoma (Esan West)","Igarra (Akoko-Edo)","Okada (Ovia North-East)","Sabongida-Ora","Agbede","Ubiaja","Igueben"],"Ekiti":["Ado-Ekiti (Capital)","Ikere-Ekiti","Ikole-Ekiti","Oye-Ekiti","Ijero-Ekiti","Aramoko-Ekiti","Efon-Alaaye","Otun-Ekiti","Emure-Ekiti","Ode-Ekiti","Iyin-Ekiti"],"Enugu":["Enugu (Capital)","Nsukka","Oji River","Udi","Agbani (Nkanu West)","Awgu","9th Mile (Ngwo)","Ituku-Ozalla","Nkanu East","Igbo-Eze North"],"Gombe":["Gombe (Capital)","Kaltungo","Billiri","Bajoga (Funakaye)","Dukku","Yamaltu/Deba","Nafada","Akko","Shongom","Balanga"],"Imo":["Owerri (Capital)","Orlu","Okigwe","Mbaise (Aboh/Ahiazu/Ezinihitte)","Oguta","Mbano (Isiala/Ehime)","Mbaitoli","Ikeduru","Orsu","Ideato North","Ideato South"],"Jigawa":["Dutse (Capital)","Hadejia","Kazaure","Gumel","Ringim","Birnin Kudu","Babura","Kafin Hausa","Maigatari","Jahun","Gwaram"],"Kaduna":["Kaduna (Capital)","Zaria","Kafanchan (Jema'a)","Kagoro (Kaura)","Kachia","Birnin Gwari","Zonkwa","Soba","Makarfi","Ikara","Giwa"],"Kano":["Kano City (Capital - including Dala, Fagge, Gwale, Nassarawa, Tarauni)","Wudil","Bichi","Rano","Karaye","Doguwa","Gwarzo","Danbatta","Gezawa","Gaya"],"Katsina":["Katsina (Capital)","Daura","Funtua","Malumfashi","Kankia","Dutsin-Ma","Jibia","Mani","Bakori","Baure"],"Kebbi":["Birnin Kebbi (Capital)","Argungu","Yauri","Zuru","Jega","Bunza","Kamba (Dandi)","Bagudo","Gwandu"],"Kogi":["Lokoja (Capital)","Anyigba","Idah","Okene","Kabba","Ankpa","Olamaboro","Dekina","Ajaokuta","Koton-Karfe"],"Kwara":["Ilorin (Capital)","Offa","Omu-Aran","Patigi","Lafiagi (Edu)","Kaiama","Baruten","Share (Ifelodun)","Jebba","Erin-Ile"],"Lagos":["Ikeja (Capital)","Lagos Island","Victoria Island / Ikoyi","Lekki","Badagry","Epe","Ikorodu","Surulere","Apapa","Yaba","Oshodi","Alimosho"],"Nasarawa":["Lafia (Capital)","Karu","Keffi","Akwanga","Nasarawa Town","Wamba","Doma","Toto","Keana","Obi"],"Niger":["Minna (Capital)","Suleja","Bida","Kontagora","New Bussa (Borgu)","Lapai","Agaie","Mokwa","Rijau","Kagara"],"Ogun":["Abeokuta (Capital)","Ijebu Ode","Sagamu","Ota (Ado-Odo/Ota)","Ilaro (Yewa South)","Ago-Iwoye","Ijebu Igbo","Ifo","Mowe / Ibafo","Imeko"],"Ondo":["Akure (Capital)","Ondo Town","Owo","Okitipupa","Ikare-Akoko","Ore (Odigbo)","Idanre","Ilaje","Oka-Akoko","Irele"],"Osun":["Oshogbo (Capital)","Ile-Ife","Ilesa","Ede","Ikirun","Ila Orangun","Iwo","Ejigbo","Ikire","Modakeke"],"Oyo":["Ibadan (Capital)","Ogbomoso","Oyo Town","Seyi","Iseyin","Saki","Okeho","Igboho","Eruwa","Lala"],"Plateau":["Jos (Capital)","Bukuru","Pankshin","Shendam","Langtang","Mangu","Barkin Ladi","Wase","Kanam","Bokkos"],"Rivers":["Port Harcourt (Capital)","Obio-Akpor","Bonny Island","Buguma (Asari-Toru)","Degema","Omoku (Ogba/Egbema/Ndoni)","Bori (Khana)","Okrika","Eleme","Ahoada","Oyigbo","Opobo"],"Sokoto":["Sokoto (Capital)","Wamako","Tambuwal","Gwadabawa","Illela","Goronyo","Wurno","Isa","Shagari","Bodinga"],"Taraba":["Jalingo (Capital)","Wukari","Gembu (Sardauna / Mambilla Plateau)","Bali","Takum","Gashaka","Karim Lamido","Zing","Mutum Biyu","Ibi"],"Yobe":["Damaturu (Capital)","Potiskum","Gashua (Bade)","Nguru","Geidam","Fika","Machina","Yunusari","Jakusko"],"Zamfara":["Gusau (Capital)","Kaura Namoda","Talata Mafara","Tsafe","Anka","Shinkafi","Maradun","Bungudu","Gummi","Zurmi"],"Federal Capital Territory (FCT)":["Abuja Municipal (Phase 1 / Central Business District, Garki, Wuse, Maitama, Asokoro)","Garki (Phase 2 / Apo, Durumi)","Wuse (Phase 2 / Mabushi, Utako)","Gwarinpa","Kubwa","Gwagwalada","Nyanya / Karu","Kuje","Bwari","Lugbe (Airport Road corridor)","Abaji","Kwali"]},"North Korea":{"Chagang":["Kanggye (Capital)","Manpo","Huichon","Chonchon","Changgang","Hwapyong","Jasong","Kopung","Songgan","Sijung","Wiwon","Tongsin","Usi","Ryanggang (Chagang)"],"North Hamgyong":["Chongjin (Capital)","Kimchaek","Hoeryong","Musan","Kilju","Myongchon","Onsong","Kyongsong","Orang","Puryong","Saebyol (Kyongwon)","Undok (Kyonghung)","Hwadae","Yonsa"],"South Hamgyong":["Hamhung (Capital)","Sinpo","Tanchon","Hochon","Iwons","Kumho","Rakwon","Riwon","Sinhung","Sudong","Toksong","Yonggwang","Yodok","Pujon","Changjin"],"North Hwanghae":["Sariwon (Capital)","Songrim","Kaesong (Historically/Administratively fluid border sector)","Hwangju","Pongsan","Suan","Shinhung","Yonsan","Koksan","Singye","Pyongsan","Kumchon","Tosong","Unpa"],"South Hwanghae":["Haeju (Capital)","Anak","Chaeryong","Changyon","Chongdan","Kangryong","Kwail","Ongjin","Paechon","Pongchon","Pyoksong","Samchon","Sinchon","Songhwa","Taetan","Unryul"],"Kangwon":["Wonsan (Capital)","Munchon","Anbyon","Changdo","Chonchon (Kangwon)","Chorwon","Hoeyang","Kosong","Kumgang (Mount Kumgang area)","Phyonggang","Pankyo","Sepo","Tongchon","Imgang"],"North Pyongan":["Sinuiju (Capital)","Kusong","Jeongju","Sakju","Pihyon","Ryongchon","Yomju","Cholsan","Sonchon","Kwaksan","Unjon","Unsan","Nyongbyon (Nuclear research sector)","Taechon","Chonma"],"South Pyongan":["Pyongsong (Capital)","Anju","Kaechon","Sunchon","Tokchon","Sukchon","Mundok","Pyongwon","Jungsan","Onchon","Taeong","Sinyang","Yangdok","Hoechang"],"Ryanggang":["Hyesan (Capital)","Samjiyon (Mount Paektu gateway)","Kapsan","Kimjongsuk","Kimhyongjik","Kimhyonggwon","Paegam","Pungseo","Samsu","Unhung","Pochon"],"Nampo (Special City)":["Waudo District","Hanggu District","Chollima County","Kangso County","Ryonggang County","Taean County"],"Pyongyang (Direct Controlled City)":["Chung-guyok (Central District)","Pyongchon-guyok","Sadong-guyok","Tongdaewon-guyok","Taedonggang-guyok","Moranbong-guyok","Sosong-guyok","Mangyongdae-guyok","Potonggang-guyok","Ryongsong-guyok","Samsok-guyok","Sunan-guyok (Airport sector)","Hwasong-guyok"],"Rason (Special City)":["Rajin District","Sonbong District"]},"North Macedonia":{"Aerodrom":["Jane Sandanski (Center)","Michurin","Ostrovo","Novo Lisice","Reonski Centar","Gorno Lisice","Dolno Lisice"],"Aračinovo":["Aračinovo Town","Mojanci","Orlanci","Grušino"],"Berovo":["Berovo Town","Rusinovo","Vladimirovo","Ratevo","Dvoriste","Mitrasinci","Budinarci","Smojmirovo"],"Bitola":["Bitola City Center","Bair","Brusnichka Maala","Nova Bitola","Bukovo","Capari","Bistrica","Kukurečani","Velusina","Gorno Orizari"],"Bogdanci":["Bogdanci Town","Gjavato","Selemli","Stojakovo"],"Bogovinje":["Bogovinje Town","Kamenjane","Pirok","Siničane","Jelošnik","Rakovec","Žerovjane","Gornje Sedlarce"],"Bosilovo":["Bosilovo Town","Turnovo","Monospitovo","Robovo","Sekirnik","Radovo","Ednokuḱevo"],"Brvenica":["Brvenica Town","Čelopek","Miletino","Blace","Tenovo","Radiovce","Stenče","Gurgurnica"],"Butel":["Butel 1 & 2","Radisani","Ljuboten","Ljubanci","Vizbegovo","Kučeviška Bara"],"Čair":["Čair Center","Topansko Pole","Serava","Gazi Baba (Čair sector)","Dukandžik"],"Čaška":["Čaška Town","Bogomila","Teovo","Papradište","Gorno Jabolčište","Dolno Jabolčište","Melnica","Izvor"],"Centar":["Mal Ring (City Square area)","Debar Maala","Kapistec","Vodno","Crniče","Prolet","Madžir Maala","Bunjakovec"],"Centar Župa":["Centar Župa Town","Papradnik","Gorenci","Žitineni","Brostica","Novak","Malo Papradnik"],"Češinovo-Obleševo":["Obleševo (Center)","Češinovo","Sokolarci","Spančevo","Teranci","Čiflik","Banja"],"Čučer-Sandevo":["Čučer-Sandevo Town","Kučevište","Mirkovci","Banjani","Gornjane","Pobožje","Tanusevci","Brazda"],"Debar":["Debar Town","Mogorče","Kosovrasti","Banjiste","Džepište","Otisan","Gari"],"Debarca":["Belčišta (Center)","Mešeišta","Volino","Trebeništa","Lesani","Zlestí","Botun","Orovec"],"Delčevo":["Delčevo Town","Trabotivište","Razlovci","Grad","Virče","Stamer","Iliovo"],"Demir Hisar":["Demir Hisar Town","Slepče","Sloeštica","Babino","Žvan","Murgaševo","Obednik","Pribilci"],"Demir Kapija":["Demir Kapija Town","Korešnica","Bistrenci","Čelevec","Klisura"],"Dojran":["Star Dojran (Center)","Nov Dojran","Sretenovo","Nikoliḱ","Furka","Crničani"],"Dolneni":["Dolneni Town","Ropotovo","Crnilishte","Lazani","Žitoše","Debrešte","Desovo","Kostinci"],"Drugovo":["Drugovo Town","Podvis","Popoec","Ehloec","Kozica","Izvor","Klenoec"],"Gazi Baba":["Avtokomanda","Železara","Madžari","Čento","Singeliḱ","Stajkovci","Indžikovo","Keramidnica","Smilkovci"],"Gevgelija":["Gevgelija Town","Bogorodica (Border sector)","Mrzenci","Negorci","Prdejci","Huma","Konsko"],"Gostivar":["Gostivar City Center","Dutlok","Banjica","Cegrane","Vrutok (Vardar river source)","Raven","Zdunje","Forino","Lakavica"],"Gradsco":["Gradsko Town","Vinčani","Vodovrati","Nogaevci","Ulanci"],"Ilinden":["Ilinden Town","Marino","Kadino","Miladinovci","Bunardžik","Ajvatovci","Mrševci"],"Jegunovce":["Jegunovce Town","Vratnica","Jažince (Border sector)","Šemševo","Siričino","Preljubište","Belovište","Orašje"],"Karbinci":["Karbinci Town","Radanje","Tarinci","Dolni Balvan","Krupište","Argulica","Koševe"],"Karpoš":["Karpoš 1, 2, 3 & 4","Taftalidže 1 & 2","Vlae","Kozle","Zlokukjani","Nerezi","Bardovci"],"Kavadarci":["Kavadarci Town","Vatasa","Glisik","Marena","Begnište","Vozarci","Konopište"],"Kičevo":["Kičevo Town","Osoj","Rashtani","Knežino","Trapčin Dol","Karbunica"],"Kisela Voda":["Kisela Voda Center","Rasadnik","Pripor","Usje","Dracevo (Urban & Rural sectors)","Pintija","Crnice (Border sector)"],"Kočani":["Kočani Town","Orizari","Grdovci","Trkanje","Podaresh","Beli","Jakiševo"],"Konče":["Konče Town","Lubnica","Gabrevci","Dolni Lipoviḱ","Dedino","Skorusa"],"Kratovo":["Kratovo Town","Slegovo","Šopsko Rudare","Turalevo","Živalevo","Prikovci","Ketenovo"],"Kriva Palanka":["Kriva Palanka Town","Gradec","Luke","Uzem (Border sector)","Židilovo","Mozdivnjak","Duračka Reka"],"Krivogaštani":["Krivogaštani Town","Obršani","Bela Crkva","Borotino","Godivje","Krušeani"],"Kruševo":["Kruševo Town","Aldanci","Norovo","Borino","Jakrenovo","Saždevo","Vrboec"],"Kumanovo":["Kumanovo City Center","Karpoš (Kumanovo)","Pero Čiko","Bedinje","Čerkezi","Romanovce","Proevce","Tabanovce (Border sector)","Tromegja"],"Lipkovo":["Lipkovo Town","Matejče","Lojane","Opae","Slupčane","Vaksince","Ropalce","Izvor"],"Lozovo":["Lozovo Town","Milino","Dorfulija","Karatmanovo","Saramzalino"],"Makedonska Kamenica":["Makedonska Kamenica Town","Sasa (Mining area)","Kiselica","Lukovica","Todorovci"],"Makedonski Brod":["Makedonski Brod Town","Samokov","Plasnica (Border sector)","Belica","Crešnevo","Rusjaci","Vir"],"Mavrovo and Rostuša":["Rostuša (Center)","Mavrovi Anovi","Mavrovo (Ski resort area)","Janče","Galičnik","Žirovnica","Lazaropole","Trebište"],"Mogila":["Mogila Town","Radobor","Dobruševo","Beranci","Vašarejca","Nospal","Ivanjevci"],"Negotino":["Negotino Town","Timjanik","Krivolak","Pepelište","Tremnik","Vojšanci"],"Novaci":["Novaci Town","Germijan","Živojno","Bač","Ribarci","Makovo","Staravina (Mariovo sector)"],"Novo Selo":["Novo Selo Town","Kolešino","Mokrievo","Staro Konjarevo","Badolen","Sushica"],"Ohrid":["Ohrid Old Town","Biljanini Izvori area","Peshtani","Trpejca","Lagadin","Velestovo","Kosel","Shipokno","Dolno Konjsko"],"Oslomej":["Oslomej Town","Žubrino","Crvivci","Tuin","Srbica","Premka","Garani"],"Pehčevo":["Pehčevo Town","Negrevo","Robovo","Umlena","Čiflik","Crnik"],"Petrovec":["Petrovec Town","Ržaničino","Ćojlija","Katlanovo (Spa sector)","Ognjanci","Gradmanci"],"Plasnica":["Plasnica Town","Preglovo","Lisičani","Dvorsi"],"Prilep":["Prilep City Center","Točila","Varoš (Markovi Kuli area)","Novo Lagovo","Malo Konjari","Golemo Konjari","Topolčani","Vitolište (Mariovo area)"],"Probištip":["Probištip Town","Kalnište","Plešanci","Zarepinci","Strmoš","Dobrevo"],"Radoviš":["Radoviš Town","Injevo","Podareš","Jadrif","Oraovica","Rakliš"],"Rankovce":["Rankovce Town","Ginovci","Psaca","Opila","Odreno","Radibuš"],"Resen":["Resen Town","Carina","Jankovec","Stenje (Prespa Lake area)","Oteševo","Krani","Slivnica","Brajčino","Dolno Dupeni"],"Rosoman":["Rosoman Town","Sirkovo","Palikura","Manastirec","Ribarci"],"Saraj":["Saraj Town","Gline","Kondovo","Ljubin","Raduša","Šisevo (Matka Canyon gateway)","Bojane","Kopačin Dol"],"Štip":["Štip Center","Novo Selo (Štip historic sector)","Senjak","Babi","Kežovica","Tri Češmi","Karaorman"],"Strumica":["Strumica City Center","Banjsko","Dabile","Murtino","Kukliš","Vodoča","Veljusa"],"Studeničani":["Studeničani Town","Batinci","Dolno Količani","Gorno Količani","Cvetovo","Elkovo","Maraldžik"],"Sveti Nikole":["Sveti Nikole Town","Erđelija","Amzabegovo","Mustafino","Gorobinci","Knežje"],"Tearce":["Tearce Town","Slatina","Nerašte","Dobrošte","Glogi","Odri","Pršovce"],"Tetovo":["Tetovo City Center","Džepčište","Poroj","Mala Rečica","Golema Rečica","Shipkovica","Popova Šapka (Ski resort area)","Brodec","Lisec"],"Valandovo":["Valandovo Town","Udovo","Josifovo","Pirava","Marvinci","Dedeli"],"Vasilevo":["Vasilevo Town","Gradosorci","Piperevo","Nova Maala","Angelci","Edrenikovo","Vladievci"],"Veles":["Veles City Center","Rečani","Tunel","Gorno Orizari","Časka (Border urban sector)","Novačani","Bašino Selo","Lake Mladost area"],"Vevčani":["Vevčani Village (Springs / Upper & Lower neighborhoods)"],"Vinica":["Vinica Town","Jakimovo","Gradec","Blatec","Lipec","Dragobrašte"],"Vraneštica":["Vraneštica Town","Čelopeci","Bigor Dolenci","Karbunica (Border sector)","Svetorače"],"Vrapčište":["Vrapčište Town","Negotino (Vrapčište)","Dobri Dol","Galate","Zubovce","Toplica","Gorjane"],"Želino":["Želino Town","Strmnica","Treboš","Palatnica","Larce","Merovo","Rogle","Kopačin Dol (Border sector)"],"Zajas":["Zajas Town","Greshnica","Kolibari","Tajmište","Bacishte","Strogomishte"],"Zelenikovo":["Stanica Zelenikovo (Center)","Zelenikovo Village","Taor","Paligrad","Strahojadica","Novo Selo (Zelenikovo)"],"Zrnovci":["Zrnovci Town","Morodvis","Vidovište"],"Zletovo-Probištip":["Zletovo Town","Ratavica","Lesnovo (Monastery sector)","Tripatanci","Štalkovica"]},"Norway":{"Agder":["Kristiansand","Arendal","Grimstad","Mandal","Flekkefjord","Lillesand","Farsund","Lyngdal","Risør","Evje","Tvedestrand","Vennesla"],"Akershus":["Asker","Bærum (Sandvika / Lysaker)","Lillestrøm","Ski (Nordre Follo)","Drøbak (Frogn)","Jessheim (Ullensaker)","Ås","Eidsvoll","Lørenskog","Nesoddtangen","Nittedal"],"Buskerud":["Drammen","Kongsberg","Hønefoss (Ringerike)","Hokksund (Øvre Eiker)","Gol","Geilo (Hol)","Hemsedal","Ål","Nesbyen","røyken"],"Finnmark":["Alta","Hammerfest","Vadsø","Kirkenes (Sør-Varanger)","Vardø","Karasjok","Kautokeino","Honningsvåg (Nordkapp)","Lakselv (Porsanger)","Tana Bru"],"Innlandet":["Hamar","Lillehammer","Gjøvik","Elverum","Kongsvinger","Brumunddal (Ringsaker)","Otta (Sel)","Fagernes (Nord-Aurdal)","Trysil","Tynset","Dombås"],"Møre og Romsdal":["Ålesund","Molde","Kristiansund","Ørsta","Volda","Ulsteinvik","Sykkylven","Fosnavåg","Sunndalsøra","Åndalsnes (Rauma)"],"Nordland":["Bodø","Narvik","Mo i Rana (Rana)","Mosjøen (Vefsn)","Svolvær (Vågan / Lofoten)","Leknes (Vestvågøy)","Sandnessjøen (Alstahaug)","Brønnøysund (Brønnøy)","Fauske","Sortland (Vesterålen)","Stokmarknes"],"Østfold":["Fredrikstad","Sarpsborg","Moss","Halden","Askim (Indre Østfold)","Mysen","Moss","Rakkestad"],"Rogaland":["Stavanger","Sandnes","Haugesund","Egersund (Eigersund)","Bryne (Time)","Kopervik (Karmøy)","Jørpeland (Strand)","Åkrehamn","Sauda","Skudeneshavn"],"Telemark":["Skien","Porsgrunn","Notodden","Rjukan (Tinn)","Kragerø","Lunde (Nome)","Bø (Midt-Telemark)","Seljord","Fyresdal","Vinje"],"Troms":["Tromsø","Harstad","Finnsnes (Senja)","Skjervøy","Storslett (Nordreisa)","Setermoen (Bardu)","Sjøvegan (Salangen)","Evenskjer (Tjeldsund)"],"Trøndelag":["Trondheim","Steinkjer","Stjørdalshalsen (Stjørdal)","Levanger","Verdal","Namsos","Orkanger (Orkland)","Røros","Oppdal","Melhus","Brekstad (Ørland)"],"Vestfold":["Tønsberg","Sandefjord","Larvik","Horten","Holmestrand","Stavern","Revetal"],"Vestland":["Bergen","Leirvik (Stord)","Haugesund (Sveio sector)","Førde (Sunnfjord)","Florø (Kinn)","Sogndalsfjøra (Sogndal)","Voss (Vossevangen)","Odda (Ullensvang)","Knarvik (Alver)","Måløy","Nordfjordeid"]},"Oman":{"Ad Dakhiliyah":["Nizwa (Capital Center)","Bahla","Samail","Adam","Al Hamra","Izki","Bidbid","Manah","Jebel Akhdar (Green Mountain area)"],"Ad Dhahirah":["Ibri (Capital Center)","Yanqul","Dhank","Kubara","Araqi"],"Al Batinah North":["Sohar (Capital Center)","Shinas","Saham","Al Liwa","Al Suwayq","Al Khaburah"],"Al Batinah South":["Rustaq (Capital Center)","Barka","Al Musanaah","Nakhal","Wadi Al Maawil","Al Awabi"],"Al Buraimi":["Al Buraimi Town (Capital Center)","Mahdah","Al Sunaynah"],"Al Wusta":["Haima (Capital Center)","Duqm (Industrial & Port hub)","Mahout","Al Jazir"],"Ash Sharqiyah North":["Ibra (Capital Center)","Al Mudhaibi","Bidiyah (Wahiba Sands gateway)","Wadi Bani Khalid","Dema Wa Thaieen","Al Qabil","Sinaw"],"Ash Sharqiyah South":["Sur (Capital Center)","Jalan Bani Bu Ali","Jalan Bani Bu Hassan","Al Kamil Wal Wafi","Masirah Island"],"Dhofar":["Salalah (Capital Center)","Taqah","Mirbat","Thumrait","Sadah","Rakhyut","Dhalkut","Muqshin","Shalim and the Hallaniyat Islands","Al Mazyunah"],"Musandam":["Khasab (Capital Center)","Dibba Al-Baya","Bukha","Madha (Enclave)","Kumzar"],"Muscat":["Muscat Old City (Capital Center)","Muttrah (Port & Souq area)","Bawshar (including Al Khuwair, Ghubrah, Azaiba)","Seeb (including Maabela, Al Khoudh)","Al Amrat","Qurayyat"]},"Pakistan":{"Azad Jammu and Kashmir":["Muzaffarabad (Capital)","Mirpur","Rawalakot","Kotli","Bhimber","Bagh","Pallandri (Sudhanoti)","Hattian Bala","Haveli (Forward Kahuta)","Neelam Valley (Athmuqam)"],"Balochistan":["Quetta (Capital)","Gwadar (Port hub)","Khuzdar","Turbat (Kech)","Chaman","Sibi","Loralai","Zhob","Hub","Dera Murad Jamali","Kalat","Nushki","Panjgur","Ziarat"],"Gilgit-Baltistan":["Gilgit (Capital)","Skardu (Baltistan Center)","Hunza (Karimabad)","Chilas (Diamer)","Ghizer (Gahkuch)","Khaplu (Ghanche)","Shigar","Nagar","Gupis-Yasin","Kharmang","Astore"],"Islamabad Capital Territory":["Sector G (G-6, G-7, G-8, G-9, G-10, G-11)","Sector F (F-6, F-7, F-8, F-10, F-11)","Sector E (E-7, E-11)","Sector I (I-8, I-9, I-10)","Blue Area (Central Business District)","Bani Gala","Bhara Kahu","Tarnol"],"Khyber Pakhtunkhwa":["Peshawar (Capital)","Mardan","Mingora (Swat)","Abbottabad","Mansehra","Dera Ismail Khan","Kohat","Bannu","Nowshera","Charsadda","Haripur","Chitral","Landi Kotal (Khyber Agency sector)","Wana (South Waziristan sector)"],"Punjab":["Lahore (Capital)","Faisalabad","Rawalpindi","Multan","Gujranwala","Sialkot","Bahawalpur","Sargodha","Sheikhupura","Rahim Yar Khan","Jhang","Sahiwal","Gujrat","Dera Ghazi Khan","Murree"],"Sindh":["Karachi (Capital - including Clifton, Saddar, Gulshan-e-Iqbal, Nazimabad, DHA, Malir)","Hyderabad","Sukkur","Larkana","Nawabshah (Shaheed Benazirabad)","Mirpurkhas","Thatta","Shikarpur","Jacobabad","Khairpur","Umerkot","Mithi (Tharparkar)"]},"Palau":{"Aimeliik":["Mongami (Capital Center)","Medorm","Imul","Elechui","Ngchemiangel","Ngerkeai"],"Airai":["Ngetkib (Capital Center)","Airai Village","Ngeruluobel","Oikull","Ngchesechang","Romanum","Palau International Airport sector"],"Angaur":["Ngaramasch (Capital Center)","Rois","Angaur Airstrip zone","Northern beach tracks"],"Hatohobei":["Hatohobei Village (Capital Center)","Helen Reef marine station (Helen Island)"],"Kayangel":["Kayangel Village (Capital Center)","Orak Island sector","Ngajangel reef flats"],"Koror":["Koror Downtown (Capital Center)","Malakal Island (Port & industrial area)","Meyuns","Ngermid","Ngerbeched","Ngerkebesang","Rock Islands Southern Lagoon sector"],"Melekeok":["Melekeok Village (Capital Center)","Ngerulmud (National Capitol complex)","Ngergcheng","Ngeruliang","Ngermelech","Lake Ngardok nature reserve"],"Ngaraard":["Ulimang (Capital Center)","Choll","Ngebuked","Ngkeklau","Elab"],"Ngarchelong":["Mengellang (Capital Center)","Ollei (Badrulchau Stone Monoliths gateway)","Ngebei","Ngmelei","Imeong (Ngarchelong)"],"Ngardmau":["Urdmang (Capital Center)","Ngetbong","Ngerutoi","Taki Waterfalls trail system"],"Ngatpang":["Okups (Capital Center)","Ibobang","Ngerdubech"],"Ngchesar":["Ngersuul (Capital Center)","Ngchesar Village","Ngerngesang","Ngerchelngael"],"Ngeremlengui":["Imeong (Capital Center)","Ngermetengel","Ngertecherong"],"Ngiwal":["Ngercheluuk (Capital Center)","Ngellau","Ngardmau border sector"],"Peleliu":["Kloulklubed (Capital Center)","Koska","Ngalkopl","Rois","World War II battlefield & airfield preservation zones"],"Sonsorol":["Dongosaro (Capital Center - Sonsorol Island)","Fanna Island sector","Pulo Anna Island sector","Merir Island sector"]},"Palestine":{"Bethlehem":["Bethlehem City","Beit Jala","Beit Sahour","Ad-Doha","Al-Khader","Battir","Za'atara","Beit Fajjar","Ubeidiya"],"Deir al-Balah":["Deir al-Balah City","Al-Zawayda","Nuseirat Camp","Bureij Camp","Maghazi Camp","Wadi al-Salqa"],"Gaza":["Gaza City (including Rimal, Shuja'iyya, Zeitoun, Tuffah, Sheikh Radwan, Sabra)","Al-Shati Camp (Beach Camp)","Al-Mughraqa (Abu Middein)","Juhor ad-Dik"],"Hebron":["Hebron City","Yatta","Dura","Halhul","Al-Dhahiriya","Idhna","Surif","Beit Ummar","Sa'ir","Bani Na'im","Tarqumiya","Al-Samu"],"Jenin":["Jenin City","Jenin Camp","Ya'bad","Arraba","Kabatiya","Jaba'","Silat al-Harithiya","Yamoun","Barta'a (East)","Faqqua"],"Jericho":["Jericho City","Al-Auja","Jiftlik","Ein ad-Duyuk al-Foqa","Aqabat Jaber Camp","Ein al-Sultan Camp"],"Khan Yunis":["Khan Yunis City","Bani Suheila","Abasan al-Kabira","Abasan al-Saghira","Khuza'a","Al-Qarara","Al-Fukhari","Khan Yunis Camp"],"Nablus":["Nablus City","Huwara","Beita","Aqraba","Sebastiya","Asira ash-Shamaliya","Jamma'in","Qabalān","Balata Camp","Askar Camp","Ein Beit al-Ma' Camp"],"North Gaza":["Jabalia City & Camp","Beit Lahia","Beit Hanoun","Um al-Nasser"],"Qalqilya":["Qalqilya City","Azzun","Habla","Jayyus","Kafr Thulth","Immatain"],"Rafah":["Rafah City","Al-Shoka","Tel al-Sultan","Rafah Camp (including Yibna, Shaboura)"],"Ramallah and al-Bireh":["Ramallah City","Al-Bireh City","Beituniya","Rawabi","Birzeit","Sinjil","Silwad","Ni'lin","Al-Jalazone Camp","Am'ari Camp"],"Salfit":["Salfit City","Bidya","Kafr ad-Dik","Deir Istiya","Bruqin","Kifl Haris","Yasuf"],"Tubas":["Tubas City","Tammun","Al-Far'a Camp","Bardala","Ein al-Beida","Aqaba"],"Tulkarm":["Tulkarm City","Attil","Anabta","Deir al-Ghusun","Qaffin","Bala'a","Thinnaba","Tulkarm Camp","Nur Shams Camp"]},"Panama":{"Bocas del Toro":["Bocas Town (Isla Colón)","Almirante","Changuinola","Bastimentos Island","Carenero Island","Chiriquí Grande","El Silencio","Guabito"],"Chiriquí":["David (Capital)","Boquete","Volcán","Cerro Punta","Paso Canoas (Border town)","Bugaba","Gualaca","Puerto Armuelles","San Félix","Las Lajas"],"Coclé":["Penonomé (Capital)","El Valle de Antón","Natá","Aguadulce","Antón","La Pintada","Ola","Rio Hato (Playa Blanca area)"],"Colón":["Colón City (Capital)","Sabanitas","Portobelo","Palenque","Miguel de la Borda","Gatuncillo","Buena Vista","Isla Grande"],"Darién":["La Palma (Capital)","Metetí","Yaviza","El Real de Santa María","Garachiné","Sambú","Jaqué"],"Herrera":["Chitré (Capital)","Ocú","Las Minas","Pesé","Parita","Los Pozos","Santa María"],"Los Santos":["Las Tablas (Capital)","Pedasí","Tonosí","Guararé","La Villa de Los Santos","Pocrí","Macaracas","Venao (Playa Venao)"],"Panamá":["Panamá City (including Casco Viejo, Bella Vista, San Francisco, Ancón)","San Miguelito","Tocumen (Airport sector)","Chepo","Pacora","Chiman","Taboga Island","Las Cumbres","Balboa"],"Panamá Oeste":["La Chorrera (Capital)","Arraiján","Chame","San Carlos","Coronado","Capira","Veracruz","Vista Alegre"],"Veraguas":["Santiago de Veraguas (Capital)","Soná","San Francisco de la Montaña","Santa Fe","Atalaya","Mariato","Montijo","Calobre","Puerto Mutis"],"Emberá-Wounaan (Comarca)":["Cirilo Guainora (District center)","Lajas Blancas","Manuel Ortega (District center)","Puerto Indio"],"Guna Yala (Comarca)":["El Porvenir (Capital)","Cartí Sugdupu","Narganá","Ailigandí","Tubualá","Puerto Obaldía (Border transit sector)"],"Naso Tjër Di (Comarca)":["Sieyic (Capital)","Bonyik","San San Druy","Solón"],"Ngäbe-Buglé (Comarca)":["Llano Tugrí (Capital)","Chichica","Kankintú","Kusapín","Soloy","Besikó","Muna","Nole Duima"]},"Papua New Guinea":{"Bougainville (Autonomous Region)":["Buka (Capital)","Arawa","Kieta","Buin","Tonu","Tinputz","Wakunai","Kokopau"],"Central":["Sogeri","Kwikila","Bereina","Kupiano","Tapini","Abau","Rigo","Goilala"],"Chimbu (Simbu)":["Kundiawa (Capital)","Chuave","Gumine","Kerowagi","Karimui","Gembogl","Nambawe"],"East New Britain":["Kokopo (Capital)","Rabaul","Kerevat","Duke of York Islands","Palmalmal","Namatanai border sector","Pomio"],"East Sepik":["Wewak (Capital)","Maprik","Angoram","Yangoru","Pagwi","Ambunti","Dreikikir","Chamri Lakes"],"Eastern Highlands":["Goroka (Capital)","Kainantu","Henganofi","Lufa","Okapa","Daulo","Aiyura","Yonki"],"Enga":["Wabag (Capital)","Wapenamanda","Laiagam","Porgera (Mining hub)","Kandep","Tsak Valley","Kompiam"],"Gulf":["Kerema (Capital)","Ihu","Kikori","Malalaua","Baimuru","Kaintiba"],"Hela":["Tari (Capital)","Koroba","Margarima","Komo","Nogoli"],"Jiwaka":["Minj (Capital)","Banz","Kudjip","Nondugl","Anglimp sector"],"Madang":["Madang Town (Capital)","Alexishafen","Bogia","Saidor","Walium","Bundi","Ramu Sugar (Gusap)","Karkar Island"],"Manus":["Lorengau (Capital)","Lombrum","Momote","Salacia","Baluan Island"],"Milne Bay":["Alotau (Capital)","Samarai","Esa'ala (Normanby Island)","Losuia (Trobriand Islands)","Misima Island (Bwagaoia)","Woodlark Island","Tagula Island"],"Morobe":["Lae (Capital)","Wau","Bulolo","Finschhafen","Markham","Mutzing","Menyamya","Sialum","Kaiapit"],"National Capital District":["Port Moresby (Capital City - including Waigani, Boroko, Gordons, Hohola)","Badili","Koki","3 Mile / 4 Mile / 6 Mile","Gerehu","Hanuabada","Tokarara"],"New Ireland":["Kavieng (Capital)","Namatanai","Lihir Island (Londolovit / Mining hub)","Simberi Island","Taskul","Konos"],"Oro (Northern)":["Popondetta (Capital)","Kokoda","Tufi","Higaturu","Ilimo","Sanananda"],"Sandaun (West Sepik)":["Vanimo (Capital)","Aitape","Telefomin","Green River","Amanab","Oksapmin","Lumi"],"Southern Highlands":["Mendi (Capital)","Ialibu","Pangia","Nipa","Pangia","Kagua","Erave"],"Western (Fly)":["Daru (Capital)","Kiunga","Tabubil (Mining hub)","Balimo","Morehead","Ningerum"],"Western Highlands":["Mount Hagen (Capital)","Nebilyer","Togoba","Baiyer River","Tambul"],"West New Britain":["Kimbe (Capital)","Bialla","Hoskins","Talasea","Kandrian","Gloucester"]},"Paraguay":{"Alto Paraguay":["Fuerte Olimpo (Capital)","Bahía Negra","Capitán Carmelo Peralta","Puerto Casado"],"Alto Paraná":["Ciudad del Este (Capital)","Hernandarias","President Franco","Minga Guazú","Santa Rita","Dr. Juan León Mallorquín","San Alberto","Naranjal"],"Amambay":["Pedro Juan Caballero (Capital)","Capitán Bado","Bella Vista Norte","Zanja Pytá","Karapaí"],"Boquerón":["Filadelfia (Capital)","Mariscal Estigarribia","Loma Plata","General Eugenio A. Garay","Doctor Pedro P. Peña"],"Caaguazú":["Coronel Oviedo (Capital)","Caaguazú (City)","Dr. J. Eulogio Estigarribia (Campo 9)","San José de los Arroyos","Yhú","Repatriación","J. Eulogio Estigarribia","Carayaó"],"Caazapá":["Caazapá (Capital)","Yuty","San Juan Nepomuceno","Abaí","Buena Vista","General Higinio Morínigo","Maciel"],"Canindeyú":["Salto del Guairá (Capital)","Curuguaty","Ypejhú","Villa Ygatimí","Katueté","Paloma del Espíritu Santo","Corpus Christi"],"Central":["Areguá (Capital)","Luque","San Lorenzo","Capiatá","Lambaré","Fernando de la Mora","Limpio","Mariano Roque Alonso","Ñemby","Itauguá","Villa Elisa","San Antonio"],"Concepción":["Concepción (Capital)","Horqueta","Yby Yaú","Belén","San Lázaro (Vallemí)","Azotey","Loreto"],"Cordillera":["Caacupé (Capital)","Piribebuy","San Bernardino","Tobatí","Eusebio Ayala","Itacurubí de la Cordillera","Arroyos y Esteros","Caraguatay"],"Guairá":["Villarrica (Capital)","Colonia Independencia","Mbocayaty","Yataity","Paso Yobai","Iturbe","Troche"],"Itapúa":["Encarnación (Capital)","Cambyretá","Hohenau","Obligado","Bella Vista (Sur)","Tomás Romero Pereira (María Auxiliadora)","San Cosme y Damián","Carmen del Paraná","Fram","Mayor Otaño"],"Misiones":["San Juan Bautista (Capital)","San Ignacio Guazú","Santa Rosa","Ayolas","Santiago","San Miguel","Villa Florida"],"Ñeembucú":["Pilar (Capital)","Alberdi","Humaitá","Cerrito","General José Eduvigis Díaz","Laureles"],"Paraguarí":["Paraguarí (Capital)","Carapeguá","Yaguarón","Quiindy","Pirayú","Mbuyapey","Acahay","Caapucú"],"Presidente Hayes":["Villa Hayes (Capital)","Benjamín Aceval","Nanawa (Puerto Elsa)","José Falcón","Teniente Irala Fernández","Pozo Colorado"],"San Pedro":["San Pedro de Ycuamandiyú (Capital)","San Estanislao (Santaní)","Santa Rosa del Aguaray","Guayaibí","Capiibary","Lima","Choré","Tacuatí"],"Asunción (Capital District)":["Centro Histórico","Las Mercedes","Villa Morra","Carmelitas","Sajonia","Recoleta","Trinidad","San Jerónimo"]},"Peru":{"Amazonas":["Chachapoyas (Capital)","Bagua Grande (Utcubamba)","Bagua","Pedro Ruiz Gallo","Lamud","Mendoza","Jumbilla","Santa María de Nieva"],"Ancash":["Huaraz (Capital)","Chimbote","Caraz","Yungay","Carhuaz","Huari","Casma","Huarmey","Pomabamba","Cabana"],"Apurímac":["Abancay (Capital)","Andahuaylas","Chalhuanca","Antabamba","Tambobamba","Chuquibambilla","Chincheros"],"Arequipa":["Arequipa City (Capital)","Camaná","Mollendo (Islay)","Chivay (Colca Canyon gateway)","Caravelí","Aplao (Castilla)","Chuquibamba","Cotahuasi"],"Ayacucho":["Ayacucho / Huamanga (Capital)","Huanta","Cangallo","Puquio (Lucanas)","Coracora (Parinacochas)","San Miguel (La Mar)","Vilcashuamán"],"Cajamarca":["Cajamarca (Capital)","Jaén","Chota","Celendín","Cutervo","Bambamarca (Hualgayoc)","Cajabamba","San Ignacio","Contumazá"],"Callao (Constitutional Province)":["Callao District / Downtown","Bellavista","La Perla","La Punta","Ventanilla","Mi Perú","Carmen de la Legua Reynoso"],"Cusco":["Cusco City (Capital)","Sicuani","Quillabamba (La Convención)","Urubamba (Sacred Valley)","Pisac","Ollantaytambo","Aguas Calientes (Machu Picchu Pueblo)","Calca","Yauri (Espinar)","Urcos (Quispicanchi)"],"Huancavelica":["Huancavelica (Capital)","Pampas (Tayacaja)","Lircay (Angaraes)","Acobamba","Castrovirreyna","Churcampa","Huaytará"],"Huánuco":["Huánuco (Capital)","Tingo María (Leoncio Prado)","Dos de Mayo (La Unión)","Ambo","Llata (Huamalíes)","Aucayacu"],"Ica":["Ica (Capital)","Chincha Alta","Pisco","Nazca","Palpa","Paracas","Marcona"],"Junín":["Huancayo (Capital)","Tarma","Jauja","La Oroya (Yauli)","Chanchamayo (La Merced)","Satipo","Junín Town","Concepción"],"La Libertad":["Trujillo (Capital)","Huamachuco (Sánchez Carrión)","Pacasmayo","Chepén","Otuzco","Virú","Santiago de Chuco","Tayabamba (Pataz)"],"Lambayeque":["Chiclayo (Capital)","Lambayeque City","Ferreñafe","Olmos","Motupe","Monsefú","Pimentel"],"Lima (Department & Province)":["Lima Metropolitan Area (including Miraflores, San Isidro, Historic Center, Barranco)","Huacho (Capital of Lima Region)","Huaral","Cañete (San Vicente de Cañete)","Barranca","Canta","Chosica (Lurigancho)","Matucana (Huarochirí)","Lunahuaná","Oyón"],"Loreto":["Iquitos (Capital)","Yurimaguas (Alto Amazonas)","Nauta","Requena","Contamana","Caballococha (Mariscal Ramón Castilla)","San Lorenzo (Datem del Marañón)"],"Madre de Dios":["Puerto Maldonado (Capital)","Iberia","Inambari (Mazuko)","Salvación (Manu)","Laberinto"],"Moquegua":["Moquegua (Capital)","Ilo (Port city)","Omate (General Sánchez Cerro)","Torata","Ichuña"],"Pasco":["Cerro de Pasco (Capital)","Oxapampa","Villa Rica","Pozuzo","Yanahuanca (Daniel Alcides Carrión)"],"Piura":["Piura (Capital)","Sullana","Talara","Paita","Chulucanas (Morropón)","Catacaos","Sechura","Huancabamba","Ayabaca","Máncora"],"Puno":["Puno (Capital)","Juliaca","Ayaviri (Melgar)","Ilave (El Collao)","Huancané","Azángaro","Lampa","Yunguyo","Chucuito (Juli)","Macusani (Carabaya)"],"San Martín":["Moyobamba (Capital)","Tarapoto","Juanjuí (Mariscal Cáceres)","Rioja","Tocache","Lamas","Saposoa (Huallaga)"],"Tacna":["Tacna (Capital)","Locumba (Jorge Basadre)","Tarata","Candarave"],"Tumbes":["Tumbes (Capital)","Zarumilla (Border town)","Zorritos (Contralmirante Villar)","Puerto Pizarro"],"Ucayali":["Pucallpa (Capital)","Atalaya","Aguaytía (Padre Abad)","Purús (Puerto Esperanza)"]},"Philippines":{"Abra":["Bangued (Capital)","Bucay","Dolores","La Paz","Tayum","Lagangilang","San Juan"],"Agusan del Norte":["Cabadbaran (Capital)","Butuan City (Highly urbanized administrative center)","Buenavista","Nasipit","Tubay","Carmen"],"Agusan del Sur":["Prosperidad (Capital)","San Francisco (San Franz)","Bayugan City","Bunawan","Trento","Talacogon"],"Aklan":["Kalibo (Capital)","Malay (Gateway to Boracay)","Numancia","New Washington","Ibajay","Banga"],"Albay":["Legazpi City (Capital)","Daraga","Tabaco City","Ligao City","Camalig","Guinobatan","Tiwi"],"Antique":["San Jose de Buenavista (Capital)","Sibalom","Culasi","Pandan","Bugasong","Hamtic"],"Apayao":["Kabugao (Capital)","Luna (Major administrative hub)","Pudtol","Conner","Flora","Calanasan"],"Aurora":["Baler (Capital)","Maria Aurora","Dipaculao","Dingalan","Casiguran","Dinalungan"],"Basilan":["Isabela City (Component city)","Lamitan City (Capital)","Maluso","Lantawan","Sumisip"],"Bataan":["Balanga City (Capital)","Mariveles","Dinalupihan","Orion","Orani","Limay","Morong (Subic Bay area)"],"Batanes":["Basco (Capital)","Itbayat","Ivana","Mahatao","Uyugan","Sabtang"],"Batangas":["Batangas City (Capital)","Lipa City","Tanauan City","Nasugbu","Calatagan","Santo Tomas","Bauan","Lemery","Taal"],"Benguet":["La Trinidad (Capital)","Baguio City (Highly urbanized independent city)","Itogon","Tuba","Mankayan","Buguias"],"Biliran":["Naval (Capital)","Almeria","Kawayan","Caibiran","Biliran Town"],"Bohol":["Tagbilaran City (Capital)","Panglao","Carmen (Chocolate Hills location)","Tubigon","Jagna","Talibon","Ubay"],"Bukidnon":["Malaybalay City (Capital)","Valencia City","Maramag","Manolo Fortich","Quezon","Don Carlos"],"Bulacan":["Malolos City (Capital)","San Jose del Monte City","Meycauayan City","Santa Maria","Marilao","Baliwag City","Bocaue","Guiguinto"],"Cagayan":["Tuguegarao City (Capital)","Aparri","Lal-lo","Tuao","Ballesteros","Buguey","Santa Ana"],"Camarines Norte":["Daet (Capital)","Labo","Jose Panganiban","Vinzons","Basud","Paracale"],"Camarines Sur":["Pili (Capital)","Naga City (Independent component city)","Iriga City","Calabanga","Libmanan","Nabua","Caramoan"],"Camiguin":["Mambajao (Capital)","Catarman","Sagay","Guinsiliban","Mahinog"],"Capiz":["Roxas City (Capital)","Panay","Pontevedra","Dumalag","Dao","Mambusao"],"Catanduanes":["Virac (Capital)","San Andres","Caramoran","Pandan","Viga","Baras"],"Cavite":["Imus City (Official Capital)","Trece Martires City (Seat of government)","Dasmariñas City","Bacoor City","Tagaytay City","Cavite City","General Trias City","Silang","Kawit"],"Cebu":["Cebu City (Capital - Highly urbanized)","Mandaue City (Highly urbanized)","Lapu-Lapu City (Highly urbanized)","Talisay City","Toledo City","Danao City","Carcar City","Bogo City","Consolacion","Liloan","Bantayan"],"Cotabato (North Cotabato)":["Kidapawan City (Capital)","Midsayap","Kabacan","Pikit","Makilala","Pigcawayan"],"Davao de Oro":["Nabunturan (Capital)","Monkayo","Pantukan","Compostela","Maco","Maragusan"],"Davao del Norte":["Tagum City (Capital)","Panabo City","Samal City (Island Garden City of Samal)","Carmen","Sto. Tomas","Kapalong"],"Davao del Sur":["Digos City (Capital)","Davao City (Highly urbanized center)","Santa Cruz","Bansalan","Magsaysay","Hagonoy"],"Davao Occidental":["Malita (Capital)","Santa Maria","Don Marcelino","Jose Abad Santos","Sarangani Island Town"],"Davao Oriental":["Mati City (Capital)","Lupon","Governor Generoso","Cateel","Baganga","Caraga"],"Dinagat Islands":["San Jose (Capital)","Cagdianao","Basilisa","Libjo","Tubajon","Loreto"],"Eastern Samar":["Borongan City (Capital)","Guiuan","Dolores","Oras","Taft","Llorente"],"Guimaras":["Jordan (Capital)","Buenavista","Nueva Valencia","San Lorenzo","Sibunag"],"Ifugao":["Lagawe (Capital)","Banaue (Rice Terraces location)","Alfonso Lista","Lamut","Kiangan","Aguinaldo"],"Ilocos Norte":["Laoag City (Capital)","Batac City","Bangui","Pagudpud","San Nicolas","Paoay","Dingras"],"Ilocos Sur":["Vigan City (Capital)","Candon City","Narvacan","Tagudin","Bantay","Cabugao","Sinait"],"Iloilo":["Iloilo City (Capital - Highly urbanized)","Passi City","Oton","Pavia","Pototan","Miagao","Carles (Islas de Gigantes gateway)","Estancia"],"Isabela":["Ilagan City (Capital)","Santiago City (Independent component city)","Cauayan City","Tumauini","Roxas","Alicia","Echague","San Mariano"],"Kalinga":["Tabuk City (Capital)","Tinglayan","Rizal","Lubuagan","Balbalan","Pinukpuk"],"La Union":["San Fernando City (Capital)","Bauang","Agoo","San Juan (Surfing hub)","Naguilian","Rosario"],"Laguna":["Santa Cruz (Capital)","Calamba City","Biñan City","San Pedro City","Santa Rosa City","San Pablo City","Cabuyao City","Los Baños","Pagsanjan"],"Lanao del Norte":["Tubod (Capital)","Iligan City (Highly urbanized independent city)","Lala","Kapatagan","Baroy","Maigo"],"Lanao del Sur":["Marawi City (Capital)","Wao","Malabang","Balindong","Ganassi","Tugaya"],"Leyte":["Tacloban City (Capital - Highly urbanized)","Ormoc City (Independent component city)","Baybay City","Palo","Tanauan","Carigara","Hilongos","Palompon"],"Maguindanao del Norte":["Datu Odin Sinsuat (Capital)","Cotabato City (Independent city / Administrative center)","Parang","Upi","Sultan Kudarat Town","Matanog"],"Maguindanao del Sur":["Buluan (Capital)","Shariff Aguak","Datu Piang","Pagalungan","Ampatuan","Sultan sa Barongis"],"Marinduque":["Boac (Capital)","Santa Cruz","Gasan","Torrijos","Mogpog","Buenavista"],"Masbate":["Masbate City (Capital)","Aroroy","Milagros","Cataingan","Cawayan","San Jacinto (Ticao Island)"],"Metro Manila (National Capital Region)":["Manila (Capital City)","Quezon City","Makati City","Bonifacio Global City / Taguig City","Pasig City","Mandaluyong City","Pasay City","Parañaque City","Las Piñas City","Muntinlupa City","Caloocan City","Valenzuela City","Malabon City","Navotas City","San Juan City","Marikina City","Pateros"],"Misamis Occidental":["Oroquieta City (Capital)","Ozamiz City","Tangub City","Jimenez","Plaridel","Calamba"],"Misamis Oriental":["Cagayan de Oro City (Capital - Highly urbanized)","Gingoog City","El Salvador City","Opol","Tagoloan","Balingasag","Villanueva"],"Mountain Province":["Bontoc (Capital)","Sagada","Bauko","Tadian","Paracelis","Sadanga"],"Negros Occidental":["Bacolod City (Capital - Highly urbanized)","Bago City","Cadiz City","Escalante City","Himamaylan City","Kabankalan City","La Carlota City","Sagay City","San Carlos City","Silay City","Sipalay City","Victorias City","Talisay City"],"Negros Oriental":["Dumaguete City (Capital)","Bayawan City","Bais City","Canlaon City","Guihulngan City","Tanjay City","Valencia","Sibulan","Dauin"],"Northern Samar":["Catarman (Capital)","Laoang","Allen (Ferry terminal)","Gamay","Catubig","Palapag"],"Nueva Ecija":["Palayan City (Capital)","Cabanatuan City (Major commercial hub)","Gapan City","Science City of Muñoz","San Jose City","Talavera","Guimba","San Isidro"],"Nueva Vizcaya":["Bayombong (Capital)","Solano (Commercial center)","Bambang","Bagabag","Aritao","Kayapa"],"Occidental Mindoro":["Mamburao (Capital)","San Jose (Economic hub)","Sablayan","Abra de Ilog","Lubang"],"Oriental Mindoro":["Calapan City (Capital)","Puerto Galera (Tourism hub)","Pinamalayan","Roxas","Naujan","Bongabong"],"Palawan":["Puerto Princesa City (Capital - Highly urbanized)","El Nido","Coron","Taytay","Brooke's Point","Narra","Roxas","Cuyo"],"Pampanga":["San Fernando City (Capital)","Angeles City (Highly urbanized city)","Mabalacat City (Clark area)","Guagua","Lubao","Floridablanca","Apalit","Arayat"],"Pangasinan":["Lingayen (Capital)","Dagupan City (Independent component city)","Urdaneta City","San Carlos City","Alaminos City (Hundred Islands gateway)","Tayug","Mangaldan","Malasiqui","Rosales"],"Quezon":["Lucena City (Capital - Highly urbanized)","Tayabas City","Sariaya","Candelaria","Mauban","Infanta","Gumaca","Lopez","Calauag"],"Quirino":["Cabarroguis (Capital)","Maddela","Diffun","Saguday","Nagtipunan"],"Rizal":["Antipolo City (Capital)","Cainta","Taytay","Binangonan","San Mateo","Rodriguez (Montalban)","Angono","Tanay"],"Romblon":["Romblon Town (Capital)","Odiongan (Tablas Island commercial hub)","San Fernando (Sibuyan Island)","Looc","Cajidiocan"],"Samar (Western Samar)":["Catbalogan City (Capital)","Calbayog City","Basey","Gandara","Wright (Paranas)","Tarangnan"],"Sarangani":["Alabel (Capital)","Glan","Kiamba","Maitum","Malungon","Maasim"],"South Cotabato":["Koronadal City (Capital)","General Santos City (Highly urbanized port city)","Polomolok","Tupi","Surallah","Lake Sebu"],"Southern Leyte":["Maasin City (Capital)","Sogod","Liloan","Macrohon","Hinunangan","Padre Burgos"],"Sultan Kudarat":["Isulan (Capital)","Tacurong City","Lebak","Kalamansig","Esperanza","Bagumbayan"],"Sulu":["Jolo (Capital)","Maimbung","Parang","Indanan","Talipao","Pangutaran"],"Surigao del Norte":["Surigao City (Capital)","Dapa (Siargao Island hub)","General Luna (Siargao surfing capital)","Placer","Claver","Tubod"],"Surigao del Sur":["Tandag City (Capital)","Bislig City","Lianga","Hinatuan (Enchanted River location)","Cantilan","Barobo"],"Tarlac":["Tarlac City (Capital)","Concepcion","Capas","Paniqui","Victoria","Camiling","Gerona"],"Tawi-Tawi":["Bongao (Capital)","Panglima Sugala","Sitangkai","Simunul","Mapun"],"Zambales":["Iba (Capital)","Olongapo City (Highly urbanized city)","Subic Town","Castillejos","San Marcelino","Botolan","San Antonio"],"Zamboanga del Norte":["Dipolog City (Capital)","Dapitan City","Sindangan","Labason","Siocon","Liloy"],"Zamboanga del Sur":["Pagadian City (Capital)","Zamboanga City (Highly urbanized independent city)","Aurora","Molave","Labangan","Margosatubig"],"Zamboanga Sibugay":["Ipil (Capital)","Kabasalan","Titay","Tungawan","Buug","Imelda"]},"Poland":{"Greater Poland (Wielkopolskie)":["Poznań (Capital)","Kalisz","Konin","Piła","Ostrów Wielkopolski","Gniezno (Historical capital)","Leszno","Swarzędz"],"Kuyavian-Pomeranian (Kujawsko-Pomorskie)":["Bydgoszcz (Seat of Governor / Voivode)","Toruń (Seat of Regional Assembly / Sejmik)","Włocławek","Grudziądz","Inowrocław","Brodnica","Świecie"],"Lesser Poland (Małopolskie)":["Kraków (Capital)","Tarnów","Nowy Sącz","Oświęcim","Chrzanów","Olkusz","Nowy Targ","Zakopane (Tatra Mountains hub)"],"Łódź (Łódzkie)":["Łódź (Capital)","Piotrków Trybunalski","Pabianice","Tomaszów Mazowiecki","Bełchatów","Zgierz","Skierniewice","Kutno"],"Lower Silesian (Dolnośląskie)":["Wrocław (Capital)","Wałbrzych","Legnica","Jelenia Góra","Lubin","Głogów","Świdnica","Bolesławiec"],"Lublin (Lubelskie)":["Lublin (Capital)","Zamość","Chełm","Biała Podlaska","Puławy","Świdnik","Kraśnik"],"Lubusz (Lubuskie)":["Gorzów Wielkopolski (Seat of Governor / Voivode)","Zielona Góra (Seat of Regional Assembly / Sejmik)","Nowa Sól","Żary","Żagań","Świebodzin"],"Masovian (Mazowieckie)":["Warsaw (Capital of Poland and Voivodeship)","Radom","Płock","Siedlce","Ostrołęka","Pruszków","Legionowo","Piaseczno"],"Opole (Opolskie)":["Opole (Capital)","Kędzierzyn-Koźle","Nysa","Brzeg","Kluczbork","Prudnik"],"Podlaskie":["Białystok (Capital)","Suwałki","Łomża","Augustów","Bielsk Podlaski","Grajewo"],"Pomeranian (Pomorskie)":["Gdańsk (Capital)","Gdynia","Sopot (Making up the 'Tricity' with Gdańsk and Gdynia)","Słupsk","Tczew","Wejherowo","Starogard Gdański","Chojnice"],"Silesian (Śląskie)":["Katowice (Capital)","Częstochowa","Sosnowiec","Gliwice","Zabrze","Bielsko-Biała","Bytom","Ruda Śląska","Rybnik","Tychy"],"Subcarpathian (Podkarpackie)":["Rzeszów (Capital)","Przemyśl","Stalowa Wola","Mielec","Tarnobrzeg","Krosno","Sanok"],"Świętokrzyskie":["Kielce (Capital)","Ostrowiec Świętokrzyski","Starachowice","Sandomierz","Skarżysko-Kamienna","Końskie"],"Warmian-Masurian (Warmińsko-Mazurskie)":["Olsztyn (Capital)","Elbląg","Ełk","Ostróda","Giżycko","Kętrzyn","Szczytno"],"West Pomeranian (Zachodniopomorskie)":["Szczecin (Capital)","Koszalin","Stargard","Kołobrzeg","Świnoujście","Szczecinek","Wałcz"]},"Portugal":{"Aveiro":["Aveiro (Capital)","Ovar","Ílhavo","Águeda","Santa Maria da Feira","Espinho","Anadia","Oliveira de Azeméis"],"Beja":["Beja (Capital)","Serpa","Moura","Odemira","Castro Verde","Aljustrel","Mértola"],"Braga":["Braga (Capital)","Guimarães (Historical birthplace of Portugal)","Vila Nova de Famalicão","Barcelos","Fafe","Esposende","Amares"],"Bragança":["Bragança (Capital)","Mirandela","Macedo de Cavaleiros","Mogadouro","Miranda do Douro","Torre de Moncorvo"],"Castelo Branco":["Castelo Branco (Capital)","Covilhã (Serra da Estrela gateway)","Fundão","Sertã","Idanha-a-Nova","Belmonte"],"Coimbra":["Coimbra (Capital)","Figueira da Foz","Cantanhede","Montemor-o-Velho","Oliveira do Hospital","Lousã","Condeixa-a-Nova"],"Évora":["Évora (Capital)","Montemor-o-Novo","Estremoz","Reguengos de Monsaraz","Vendas Novas","Vila Viçosa"],"Faro (Algarve)":["Faro (Capital)","Lagos","Portimão","Albufeira","Tavira","Loulé","Olhão","Silves","Vilamoura"],"Guarda":["Guarda (Capital)","Seia","Pinhel","Sabugal","Almeida","Gouveia","Foz Côa"],"Leiria":["Leiria (Capital)","Caldas da Rainha","Peniche","Alcobaça","Marinha Grande","Óbidos","Pombal","Nazaré"],"Lisbon (Lisboa)":["Lisbon City (Capital of Portugal and District)","Sintra","Cascais","Oeiras","Loures","Amadora","Odivelas","Vila Franca de Xira","Torres Vedras","Mafra"],"Portalegre":["Portalegre (Capital)","Elvas","Ponte de Sor","Campo Maior","Nisa","Marvão"],"Porto":["Porto City (Capital)","Vila Nova de Gaia","Matosinhos","Maia","Gondomar","Póvoa de Varzim","Vila do Conde","Penafiel","Amarante","Felgueiras"],"Santarém":["Santarém (Capital)","Tomar (Knights Templar city)","Abrantes","Torres Novas","Cartaxo","Entroncamento","Almeirim"],"Setúbal":["Setúbal (Capital)","Almada","Seixal","Barreiro","Palmela","Sesimbra","Sines","Santiago do Cacém"],"Viana do Castelo":["Viana do Castelo (Capital)","Ponte de Lima","Caminha","Valença (Border town)","Monção","Melgaço","Arcos de Valdevez"],"Vila Real":["Vila Real (Capital)","Chaves","Peso da Régua (Douro Valley hub)","Alijó","Valpaços","Montalegre"],"Viseu":["Viseu (Capital)","Lamego","Mangualde","Tondela","São Pedro do Sul","Castro Daire"],"Azores (Açores - Autonomous Region)":["Ponta Delgada (Administrative Capital - São Miguel Island)","Angra do Heroísmo (Historical Capital - Terceira Island)","Horta (Legislative Capital - Faial Island)","Ribeira Grande (São Miguel Island)","Madalena (Pico Island)","Vila do Porto (Santa Maria Island)","Velas (São Jorge Island)","Santa Cruz das Flores (Flores Island)","Vila do Corvo (Corvo Island)"],"Madeira (Autonomous Region)":["Funchal (Capital)","Câmara de Lobos","Machico","Santa Cruz","Ribeira Brava","Calheta","Santana","Porto Santo (Vila Baleira)"]},"Qatar":{"Ad Dawhah (Doha)":["Doha City (National Capital)","The Pearl-Qatar","West Bay (Major business district)","Al Bidda","Msheireb Downtown Doha","Al Sadd","Madinat Khalifa","Abu Hamour"],"Al Daayen":["Lusail City (Major planned smart city)","Umm Qarn","Al Kheesa","Rawdat Al Hamama","Wadi Al Banat","Al Egla"],"Al Khor (Al Khor and Al Thakhira)":["Al Khor City (Administrative seat)","Al Thakhira","Simaisma","Fuwayrit","Al Nuaman","Al Dhakira"],"Al Rayyan":["Al Rayyan City","Education City (Major academic hub)","Muaither","Al Wajbah","Ain Khaled","Abu Samra (Border settlement with Saudi Arabia)","Al Gharrafa","Shahaniya (Historically part of Al Rayyan)"],"Al Shamal":["Madinat ash Shamal (Capital)","Ruwais","Abu Dhalouf","Al Ghariya","Zubarah (UNESCO World Heritage archaeological site)"],"Al Shahaniya":["Al Shahaniya City (Capital)","Al-Nasraniya","Al Khurayb","Rawdat Rashed","Al Utouriya","Al Jamilas"],"Al Wakrah":["Al Wakrah City (Capital)","Al Wukair","Mesaieed (Major industrial city and port)","Sealine / Khor Al Adaid (The Inland Sea region)","Al Mashaf"],"Umm Salal":["Umm Salal Mohammed (Capital)","Umm Salal Ali","Al Khaitiyah","Izghawa","Al Sakhama","Bu Fasseela"]},"Romania":{"Alba":["Alba Iulia (Capital)","Aiud","Blaj","Sebeș","Cugir","Ocna Mureș"],"Arad":["Arad (Capital)","Pecica","Sântana","Lipova","Ineu","Curtici"],"Argeș":["Pitești (Capital)","Câmpulung","Curtea de Argeș","Mioveni","Costești","Ștefănești"],"Bacău":["Bacău (Capital)","Onești","Moinești","Comănești","Buhuși","Târgu Ocna"],"Bihor":["Oradea (Capital)","Salonta","Marghita","Beiuș","Aleșd","Săcueni"],"Bistrița-Năsăud":["Bistrița (Capital)","Năsăud","Sângeorz-Băi","Beclean"],"Botoșani":["Botoșani (Capital)","Dorohoi","Darabani","Săveni","Flămânzi"],"Brașov":["Brașov (Capital)","Făgăraș","Săcele","Zărnești","Codlea","Râșnov"],"Brăila":["Brăila (Capital)","Ianca","Însurăței","Făurei"],"București (Municipality)":["Sector 1","Sector 2","Sector 3","Sector 4","Sector 5","Sector 6"],"Buzău":["Buzău (Capital)","Râmnicu Sărat","Nehoiu","Pătârlagele","Pogoanele"],"Caraș-Severin":["Reșița (Capital)","Caransebeș","Bocșa","Moldova Nouă","Oravița","Băile Herculane"],"Călărași":["Călărași (Capital)","Oltenița","Modelu","Budești","Lehliu Gară"],"Cluj":["Cluj-Napoca (Capital)","Turda","Dej","Câmpia Turzii","Gherla","Huedin"],"Constanța":["Constanța (Capital)","Mangalia","Medgidia","Năvodari","Cernavodă","Eforie"],"Covasna":["Sfântu Gheorghe (Capital)","Târgu Secuiesc","Covasna","Baraolt","Întorsura Buzăului"],"Dâmbovița":["Târgoviște (Capital)","Moreni","Pucioasa","Găești","Titu","Fieni"],"Dolj":["Craiova (Capital)","Băilești","Calafat","Filiași","Segarcea"],"Galați":["Galați (Capital)","Tecuci","Târgu Bujor","Berești"],"Giurgiu":["Giurgiu (Capital)","Bolintin-Vale","Mihăilești"],"Gorj":["Târgu Jiu (Capital)","Motru","Rovinari","Bumbești-Jiu","Târgu Cărbunești","Novaci"],"Harghita":["Miercurea Ciuc (Capital)","Odorheiu Secuiesc","Gheorgheni","Toplița","Cristuru Secuiesc","Bălan"],"Hunedoara":["Deva (Capital)","Hunedoara","Petroșani","Vulcan","Lupeni","Orăștie","Brad"],"Ialomița":["Slobozia (Capital)","Fetești","Urziceni","Țăndărei","Amara"],"Iași":["Iași (Capital)","Pașcani","Hârlău","Târgu Frumos","Podu Iloaiei"],"Ilfov":["Buftea (Capital)","Voluntari","Pantelimon","Otopeni","Bragadiru","Popești-Leordeni","Chiajna"],"Maramureș":["Baia Mare (Capital)","Sighetu Marmației","Borșa","Vișeu de Sus","Baia Sprie","Târgu Lăpuș"],"Mehedinți":["Drobeta-Turnu Severin (Capital)","Orșova","Strehaia","Vânju Mare","Baia de Aramă"],"Mureș":["Târgu Mureș (Capital)","Sighișoara","Reghin","Târnăveni","Luduș","Sovata"],"Neamț":["Piatra Neamț (Capital)","Roman","Târgu Neamț","Bicaz","Roznov"],"Olt":["Slatina (Capital)","Caracal","Balș","Corabia","Scornicești"],"Prahova":["Ploiești (Capital)","Câmpina","Sinaia","Bușteni","Vălenii de Munte","Câmpina","Breaza"],"Satu Mare":["Satu Mare (Capital)","Carei","Negrești-Oaș","Tășnad","Ardud"],"Sălaj":["Zalău (Capital)","Șimleu Silvaniei","Jibou","Cehu Silvaniei"],"Sibiu":["Sibiu (Capital)","Mediaș","Cisnădie","Avrig","Agnita","Dumbrăveni"],"Suceava":["Suceava (Capital)","Fălticeni","Rădăuți","Câmpulung Moldovenesc","Vatra Dornei","Gura Humorului"],"Teleorman":["Alexandria (Capital)","Roșiorii de Vede","Turnu Măgurele","Zimnicea","Videle"],"Timiș":["Timișoara (Capital)","Lugoj","Sânnicolau Mare","Jimbolia","Recaș","Făget"],"Tulcea":["Tulcea (Capital)","Babadag","Măcin","Sulina","Isaccea"],"Vaslui":["Vaslui (Capital)","Bârlad","Huși","Negrești","Murgeni"],"Vâlcea":["Râmnicu Vâlcea (Capital)","Drăgășani","Călimănești","Horezu","Brezoi","Băile Olănești"],"Vrancea":["Focșani (Capital)","Adjud","Mărășești","Odobești","Panciu"]},"Russia":{"Adygea":["Maykop (Capital)","Yablonovsky","Enem","Giaginskaya","Adygeysk","Tulsky"],"Altai Krai":["Barnaul (Capital)","Biysk","Rubtsovsk","Novoaltaysk","Zarinsk","Kamen-na-Obi","Slavgorod"],"Altai Republic":["Gorno-Altaysk (Capital)","Mayma","Kosh-Agach","Turochak","Onguday","Chemal"],"Amur":["Blagoveshchensk (Capital)","Belogorsk","Svobodny","Tynda (Baika-Amur Mainline hub)","Zeya","Shimanovsk"],"Arkhangelsk":["Arkhangelsk (Capital)","Severodvinsk","Kotlas","Novodvinsk","Koryazhma","Mirny (Plesetsk Cosmodrome sector)"],"Astrakhan":["Astrakhan (Capital)","Akhtubinsk","Znamensk","Kharabali","Kamyzyak"],"Bashkortostan":["Ufa (Capital)","Sterlitamak","Salavat","Neftekamsk","Oktyabrsky","Beloretsk","Tuymazy"],"Belgorod":["Belgorod (Capital)","Stary Oskol","Gubkin","Shebekino","Valuyki","Alexeyevka"],"Bryansk":["Bryansk (Capital)","Klintsy","Novozybkov","Dyatkovo","Unecha","Karachev"],"Buryatia":["Ulan-Ude (Capital)","Severobaykalsk","Gusinoozyorsk","Kyakhta","Selenginsk","Zakamensk"],"Chechnya":["Grozny (Capital)","Shali","Urus-Martan","Gudermes","Argun","Achkhoy-Martan"],"Chelyabinsk":["Chelyabinsk (Capital)","Magnitogorsk","Zlatoust","Miass","Kopeysk","Ozersk","Snezhninsk"],"Chukotka":["Anadyr (Capital)","Bilibino","Pevek","Egvekinot","Lavrentiya","Provideniya"],"Chuvashia":["Cheboksary (Capital)","Novocheboksarsk","Kanash","Alatyr","Shumerlya","Civilsk"],"Dagestan":["Makhachkala (Capital)","Derbent","Kaspiysk","Khasavyurt","Kizlyar","Izberbash","Buynaksk"],"Ingushetia":["Magas (Capital)","Nazran (Largest city)","Sunzha","Malgobek","Karabulak"],"Irkutsk":["Irkutsk (Capital)","Bratsk","Angarsk","Ust-Ilimsk","Usolye-Sibirskoye","Cheremkhovo","Listvyanka (Lake Baikal gateway)"],"Ivanovo":["Ivanovo (Capital)","Kineshma","Shuya","Vichuga","Furmanov","Teykovo"],"Jewish Autonomous Oblast":["Birobidzhan (Capital)","Obluchye","Nikolaevka","Smidovich","Amurzet"],"Kabardino-Balkaria":["Nalchik (Capital)","Prokhladny","Baksan","Nartkala","Maysky","Tyrnyauz (Mount Elbrus gateway)"],"Kaliningrad":["Kaliningrad (Capital)","Sovetsk","Chernyakhovsk","Baltiysk","Gusev","Svetlogorsk","Zelenogradsk"],"Kalmykia":["Elista (Capital)","Lagan","Gorodovikovsk","Yashkul","Troitskoye"],"Kaluga":["Kaluga (Capital)","Obninsk","Lyudinovo","Kirow","Maloyaroslavets","Borovsk"],"Kamchatka Krai":["Petropavlovsk-Kamchatsky (Capital)","Yelizovo","Vilyuchinsk","Milkovo","Klyuchi"],"Karachay-Cherkessia":["Cherkessk (Capital)","Ust-Dzheguta","Karachayevsk","Zelenchukskaya","Teberda (Dombay ski area gateway)"],"Karelia":["Petrozavodsk (Capital)","Kondopoga","Segezha","Kostomuksha","Sortavala","Kem"],"Kemerovo (Kuzbass)":["Kemerovo (Capital)","Novokuznetsk","Prokopyevsk","Mezhdurechensk","Leninsk-Kuznetsky","Kiselyovsk","Yurga"],"Khabarovsk Krai":["Khabarovsk (Capital)","Komsomolsk-on-Amur","Amursk","Sovetskaya Gavan","Nikolayevsk-on-Amur","Bikin"],"Khakassia":["Abakan (Capital)","Chernogorsk","Sayanogorsk","Abaza","Sorsk"],"Khanty-Mansi (Yugra)":["Khanty-Mansiysk (Capital)","Surgut (Largest city)","Nizhnevartovsk","Nefteyugansk","Nyagan","Kogalym","Langepas"],"Kirov":["Kirov (Capital)","Kirovo-Chepetsk","Vyatskiye Polyany","Kotelnich","Slobodskoy","Omutninsk"],"Komi":["Syktyvkar (Capital)","Vorkuta","Ukhta","Usinsk","Pechora","Inta"],"Kostroma":["Kostroma (Capital)","Sharya","Nerekhta","Galich","Volgorechensk","Buyn"],"Krasnodar Krai":["Krasnodar (Capital)","Sochi","Novorossiysk","Anapa","Gelendzhik","Armavir","Yeysk","Kropotkin"],"Krasnoyarsk Krai":["Krasnoyarsk (Capital)","Norilsk","Achinsk","Kansk","Zheleznogorsk","Minusinsk","Lesosibirsk","Dudinka"],"Kurgan":["Kurgan (Capital)","Shadrinsk","Shumikha","Kurtamysh","Kataysk"],"Kursk":["Kursk (Capital)","Zheleznogorsk","Kurchatov","Lgov","Rylsk","Shchigry"],"Leningrad":["Gatchina (Capital)","Vyborg","Vsevolozhsk","Sosnovy Bor","Tikhvin","Kirishi","Kingisepp","Volkhov"],"Lipetsk":["Lipetsk (Capital)","Yelets","Gryazi","Dankov","Lebedyan"],"Magadan":["Magadan (Capital)","Ola","Susuman","Sokol","Palatka"],"Mari El":["Yoshkar-Ola (Capital)","Volzhsk","Kozmodemyansk","Medvedevo","Zvenigovo"],"Mordovia":["Saransk (Capital)","Ruzayevka","Kovylkino","Krasnoslobodsk","Ardatov"],"Moscow (Oblast)":["Balashikha","Podolsk","Khimki","Mytishchi","Lyubertsy","Odintsovo","Korolyov","Krasnogorsk"],"Moscow City (Federal City)":["Central Administrative Okrug (Kremlin, Tverskoy, Arbat)","Moscow International Business Center (Moscow-City)","Khamovniki","Zamoskvorechye","Sokolniki","Maryino","Zelenograd"],"Murmansk":["Murmansk (Capital)","Apatity","Severomorsk","Monchegorsk","Kandalaksha","Kirovsk"],"Nenets":["Naryan-Mar (Capital)","Iskateley","Amderma","Krasnoye"],"Nizhny Novgorod":["Nizhny Novgorod (Capital)","Dzerzhinsk","Arzamas","Sarov","Bor","Kstovo","Vyksa"],"North Ossetia-Alania":["Vladikavkaz (Capital)","Mozdok","Beslan","Alagir","Ardon"],"Novgorod":["Veliky Novgorod (Capital)","Borovichi","Staraya Russa","Valday","Pestovo"],"Novosibirsk":["Novosibirsk (Capital)","Berdsk","Iskitim","Kuibyshev","Barabinsk","Ob"],"Omsk":["Omsk (Capital)","Tara","Isilkul","Kalachinsk","Nazyvaevsk"],"Orenburg":["Orenburg (Capital)","Orsk","Novotroitsk","Buzuluk","Buguruslan","Gai"],"Oryol":["Oryol (Capital)","Livny","Mtsensk","Znamenka","Bolkhov"],"Penza":["Penza (Capital)","Kuznetsk","Zarechny","Kamenka","Serdobsk"],"Perm Krai":["Perm (Capital)","Berezniki","Solikamsk","Chaykovsky","Kungur","Lysva"],"Primorsky Krai":["Vladivostok (Capital)","Ussuriysk","Nakhodka","Artem","Arsenyev","Spassk-Dalny"],"Pskov":["Pskov (Capital)","Velikiye Luki","Ostrov","Nevel","Opochka"],"Rostov":["Rostov-on-Don (Capital)","Taganrog","Shakhty","Novocherkassk","Volgodonsk","Bataysk","Novoshakhtinsk"],"Ryazan":["Ryazan (Capital)","Kasimov","Skopin","Sasovo","Ryazhsk"],"Saint Petersburg (Federal City)":["Central District (Nevsky Prospekt, Hermitage sector)","Petrogradsky District","Vasileostrovsky District","Pushkin (Tsarskoye Selo)","Petergof","Kronstadt"],"Sakha (Yakutia)":["Yakutsk (Capital)","Neryungri","Mirny (Diamond mining hub)","Lensky","Aldan","Oymyakon (Pole of Cold)"],"Sakhalin":["Yuzhno-Sakhalinisk (Capital)","Kholmsk","Korsakov","Okha","Nevelsk","Kurilsk (Kuril Islands)"],"Samara":["Samara (Capital)","Tolyatti","Syzran","Novokuybyshevsk","Chapaevsk","Zhigulyovsk"],"Saratov":["Saratov (Capital)","Engels","Balakovo","Balashow","Volsk","Pugachyov"],"Sevastopol (Federal City)":["Gagarin District","Lenin District","Nakhimov District","Balaklava"],"Smolensk":["Smolensk (Capital)","Vyazma","Roslavl","Yartsevo","Safonovo"],"Stavropol Krai":["Stavropol (Capital)","Pyatigorsk","Kislovodsk","Nevinnomyssk","Essentuki","Mineralnye Vody"],"Sverdlovsk":["Yekaterinburg (Capital)","Nizhny Tagil","Kamensk-Uralsky","Pervouralsk","Serov","Novouralsk"],"Tambov":["Tambov (Capital)","Michurinsk","Rasskazovo","Morshansk","Kotovsk"],"Tatarstan":["Kazan (Capital)","Naberezhnye Chelny","Nizhnekamsk","Almetyevsk","Zelenodolsk","Yelabuga"],"Tomsk":["Tomsk (Capital)","Seversk","Strezhevoy","Asino","Kolpashevo"],"Tula":["Tula (Capital)","Novomoskovsk","Donskoy","Aleksin","Shchyokino","Uzlovaya"],"Tuva (Tyva)":["Kyzyl (Capital)","Ak-Dovurak","Shagonar","Chadan","Turan"],"Tver":["Tver (Capital)","Rzhev","Vyshny Volochyok","Kimry","Torzhok","Konakovo"],"Tyumen":["Tyumen (Capital)","Tobolsk (Historical capital)","Ishim","Yalutorovsk","Zavodoukovsk"],"Udmurtia":["Izhevsk (Capital)","Sarapul","Votkinsk","Glazov","Mozhga"],"Ulyanovsk":["Ulyanovsk (Capital)","Dimitrovgrad","Inza","Barysh","Novoulyanovsk"],"Vladimir":["Vladimir (Capital)","Kovrov","Murom","Aleksandrov","Gus-Khrustalny","Suzdal"],"Volgograd":["Volgograd (Capital)","Volzhsky","Kamyshin","Mikhaylovka","Uryupinsk","Frolovo"],"Vologda":["Vologda (Capital)","Cherepovets (Largest city)","Sokol","Veliky Ustyug","Sheksna"],"Voronezh":["Voronezh (Capital)","Borisoglebsk","Rossosh","Liski","Ostrogozhsk","Novovoronezh"],"Yamalo-Nenets":["Salekhard (Capital)","Novy Urengoy (Largest city)","Noyabrsk","Nadym","Gubkinsky","Labytnangi"],"Yaroslavl":["Yaroslavl (Capital)","Rybinsk","Pereslavl-Zalessky","Tutayev","Uglich","Rostov Veliky"],"Zabaykalsky Krai":["Chita (Capital)","Krasnokamensk","Borzya","Petrovsk-Zabaykalsky","Nerchinsk"]},"Rwanda":{"Eastern Province":["Rwamagana (Provincial Capital)","Nyagatare","Kayonza","Ngoma","Bugesera"],"Kigali":["Nyarugenge (City Center)","Gasabo","Kicukiro"],"Northern Province":["Byumba (Gicumbi)","Musanze","Burera","Rulindo","Gakenke"],"Southern Province":["Nyanza (Provincial Capital)","Huye","Muhanga","Kamonyi","Gisagara"],"Western Province":["Karongi (Provincial Capital)","Rubavu","Rusizi","Nyabihu","Nyamasheke"]},"Saint Kitts and Nevis":{"Christ Church Nichola Town":["Nichola Town","Mansion"],"Saint Anne Sandy Point":["Sandy Point Town","La Vallée"],"Saint George Basseterre":["Basseterre (National Capital)","Frigate Bay","Bird Rock"],"Saint George Gingerland":["Gingerland","Market Shop"],"Saint James Windward":["Newcastle","Brick Kiln"],"Saint John Capisterre":["Saddlers","Dieppe Bay Town"],"Saint John Figtree":["Figtree","Church Ground"],"Saint Mary Cayon":["Cayon","Keys"],"Saint Paul Capisterre":["Saint Paul's","Parsons"],"Saint Paul Charlestown":["Charlestown (Capital of Nevis)","Bath Village"],"Saint Peter Basseterre":["Monkey Hill","Conaree"],"Saint Thomas Lowland":["Cotton Ground","Jessup"],"Saint Thomas Middle Island":["Middle Island","Old Road"],"Trinity Palmetto Point":["Palmetto Point","Boyd's"]},"Saint Lucia":{"Anse la Raye":["Anse la Raye Village","Marigot Bay","Roseau"],"Canaries":["Canaries Village","Flora Villa"],"Castries":["Castries City (Capital)","Bexon","Ciceron","Cul-de-Sac"],"Choiseul":["Choiseul Village","Debreuil","La Pointe"],"Dennery":["Dennery Village","Aux Lyons","Grand Ravine"],"Gros Islet":["Gros Islet Town","Rodney Bay","Beausejour","Monchy"],"Laborie":["Laborie Village","Augier"],"Micoud":["Micoud Village","Anse Ger","Desruisseaux"],"Soufrière":["Soufrière Town","Fond St. Jacques","Malgretoute"],"Vieux Fort":["Vieux Fort Town","Grace","Pierrot"]},"Saint Vincent and the Grenadines":{"Charlotte":["Georgetown","Owia","Sandy Bay","Fancy"],"Grenadines":["Port Elizabeth (Bequia)","Canouan","Union Island","Mayreau"],"Saint Andrew":["Layou","Buccament","Clare Valley"],"Saint David":["Chateaubelair","Richmond","Troumaka"],"Saint George":["Kingstown (Capital)","Calliaqua","Mesopotamia","Arnos Vale"],"Saint Patrick":["Barrouallie","Cumberland","Spring Village"]},"Samoa":{"A'ana":["Leulumoega","Falelatai","Faleasi'u"],"Aiga-i-le-Tai":["Mulifanua","Manono","Apolima"],"Atua":["Lufilufi","Lotofaga","Lepā"],"Fa'asaleleaga":["Safotulafai","Pu'apu'a","Fusi"],"Gaga'emauga":["Saleaula","Safotulafai (parts)","Samalaeulu"],"Gaga'ifomauga":["Safotu","Fagamalo","Safune"],"Palauli":["Vailoa","Satupa'itea (parts)","Gaga'emalae"],"Satupa'itea":["Satupa'itea Village","Gautavai","Puleia"],"Tuamasaga":["Apia (Capital City)","Afega","Malie"],"Va'a-o-Fonoti":["Samamea","Ma'asina","Mutiatele"],"Vaisigano":["Asau","Vaisala","Neiafu"]},"San Marino":{"Acquaviva":["Gualdicciolo","Acquaviva Village"],"Borgo Maggiore":["Cà Melone","Cà Rigo","Valdragone","Ventoso"],"Chiesanuova":["Galavotto","Confine","Poggio Casalino","Poggio Chiesanuova"],"City of San Marino":["San Marino (Capital)","Murata","Santa Mustiola"],"Domagnano":["Cà Giannino","Fiorina","Piandivello","Spaccio Giannoni"],"Faetano":["Cà Chiavello","Calligaria","Corianino","Monte Pulito"],"Fiorentino":["Cà Lagi","Lesignano","Monte Ercole"],"Montegiardino":["Cerbaiola","Montegiardino Village"],"Serravalle":["Dogana","Falciano","Lesignano","Rovereta","Valgiurata"]},"Sao Tome and Principe":{"Água Grande":["São Tomé (Capital City)","Pantufo","Madalena"],"Cantagalo":["Santana","Desejada","Ribeira Afonso"],"Caué":["São João dos Angolares","Vila Malanza","Porto Alegre"],"Lembá":["Neves","Santa Catarina","Ponta Figo"],"Lobata":["Guadalupe","Conde","Micoló"],"Mé-Zóchi":["Trindade","Batepá","Monte Café"],"Pagué":["Santo António (Capital of Príncipe Island)","Príncipe (Island-wide municipality)","Sundy"]},"Saudi Arabia":{"Al Bahah":["Al Bahah City","Baljurashi","Al Mandaq","Al Makhwah"],"Al Jawf":["Sakaka","Qurayyat","Dumat Al-Jandal"],"Al Madinah":["Medina (Al Madinah Al Munawwarah)","Yanbu","Al Ula","Badr"],"Al Qassim":["Buraydah","Unaizah","Ar Rass","Al Bukayriyah"],"Ar Riyad":["Riyadh (Capital)","Al Kharj","Ad Diriyah","Wadi Ad Dawasir"],"Asir":["Abha","Khamis Mushait","Bisha","Muhayil"],"Eastern Province":["Dammam","Al Khobar","Dhahran","Jubail","Al Hofuf (Al-Ahsa)"],"Hail":["Hail City","Baqaa","Al Ghazalah"],"Jizan":["Jizan City","Sabya","Abu Arish","Farasan Islands"],"Makkah":["Makkah (Mecca)","Jeddah","Taif","Rabigh"],"Najran":["Najran City","Sharurah","Hubuna"],"Northern Borders":["Arar","Rafha","Turayf"],"Tabuk":["Tabuk City","Duba","Al Wajh","Umluj"]},"Senegal":{"Dakar":["Dakar (Capital)","Pikine","Guédiawaye","Rufisque","Gorée Island"],"Diourbel":["Diourbel City","Bambey","Mbacké","Touba"],"Fatick":["Fatick City","Foundiougne","Gossas","Sokone"],"Kaffrine":["Kaffrine City","Birkelane","Koungheul","Malem-Hodar"],"Kaolack":["Kaolack City","Guinguinéo","Nioro du Rip"],"Kédougou":["Kédougou City","Salemata","Saraya"],"Kolda":["Kolda City","Médina Yoro Foulah","Vélingara"],"Louga":["Louga City","Kébémer","Linguère"],"Matam":["Matam City","Kanel","Ranérou-Ferlo"],"Saint-Louis":["Saint-Louis City","Dagana","Podor"],"Sédhiou":["Sédhiou City","Bounkiling","Goudomp"],"Tambacounda":["Tambacounda City","Bakel","Goudiry","Koumpentoum"],"Thiès":["Thiès City","M'bour","Tivaouane"],"Ziguinchor":["Ziguinchor City","Bignona","Oussouye"]},"Serbia":{"Belgrade":["Zemun","New Belgrade (Novi Beograd)","Palilula","Voždovac","Čukarica","Obrenovac","Lazarevac"],"Bor":["Bor City","Majdanpek","Kladovo","Negotin"],"Braničevo":["Požarevac","Kostolac","Veliko Gradište","Golubac","Kučevo"],"Jablanica":["Leskovac","Vlasotince","Medveđa","Lebane"],"Kolubara":["Valjevo","Ub","Lajkovac","Ljig","Mionica"],"Mačva":["Šabac","Loznica","Bogatić","Koceljeva"],"Moravica":["Čačak","Gornji Milanovac","Lučani","Ivanjica"],"Nišava":["Niš","Aleksinac","Svrljig","Merošina"],"North Bačka":["Subotica","Bačka Topola","Mali Iđoš"],"North Banat":["Kikinda","Senta","Ada","Čoka","Kanjiža"],"Pčinja":["Vranje","Bujanovac","Preševo","Surdulica"],"Pirot":["Pirot City","Babušnica","Dimitrovgrad","Bela Palanka"],"Podunavlje":["Smederevo","Smederevska Palanka","Velika Plana"],"Pomoravlje":["Jagodina","Ćuprija","Paraćin","Despotovac"],"Raška":["Kraljevo","Novi Pazar","Raška","Vrnjačka Banja"],"Rasina":["Kruševac","Trstenik","Aleksandrovac","Brus"],"South Bačka":["Novi Sad","Bačka Palanka","Vrbas","Bečej","Temerin"],"South Banat":["Pančevo","Vršac","Kovin","Alibunar","Bela Crkva"],"Srem":["Sremska Mitrovica","Inđija","Stara Pazova","Ruma","Šid"],"Šumadija":["Kragujevac","Aranđelovac","Topola","Rača"],"Toplica":["Prokuplje","Kuršumlija","Blace","Žitorađa"],"West Bačka":["Sombor","Apatin","Kula","Odžaci"],"Zaječar":["Zaječar City","Knjaževac","Sokobanja","Boljevac"],"Zlatibor":["Užice","Požega","Arilje","Priboj","Prijepolje","Čajetina (Zlatibor tourist center)"],"Kosovo and Metohija (Autonomous Province)":["Pristina","Prizren","Peja (Peć)","Mitrovica","Gjilan (Gnjilane)","Ferizaj (Uroševac)"],"Vojvodina (Autonomous Province)":["Novi Sad (Capital)","Subotica","Zrenjanin","Pančevo","Sombor"]},"Seychelles":{"Anse aux Pins":["Turtle Bay","Casuarina Beach","Airport zone periphery"],"Anse Boileau":["Anse Boileau Village","Val d'En D'or","Danzil"],"Anse Etoile":["Anse Etoile Village","La Gogue","North East Point"],"Anse Royale":["Anse Royale Beach","University of Seychelles area","Fairyland"],"Au Cap":["Au Cap Village","Turtle Bay southern section","Reef Estate"],"Baie Lazare":["Baie Lazare Beach","Anse Gaulette","Takamaka junction"],"Baie Sainte Anne":["Baie Sainte Anne Port (Praslin)","Côte d'Or","Anse La Farine"],"Beau Vallon":["Beau Vallon Beach","Mare Anglaise","Bel Ombre border"],"Bel Air":["Bel Air Village","Foret Noire","Victoria periphery"],"Bel Ombre":["Bel Ombre Fishing Port","Anse Major trail area","Marie Laure"],"Cascade":["Cascade Village","Providence Industrial Estate","Airport approach area"],"Glacis":["Glacis Beach","North Point","Sunset Beach area"],"Grand'Anse Mahé":["Grand'Anse Beach","Barbarons","Port Launay border"],"Grand'Anse Praslin":["Grand'Anse Village","Amitié","Airport area (Praslin)"],"La Digue and Inner Islands":["La Passe","Anse Source d'Argent","Grand Anse (La Digue)","Félicité Island"],"Les Mamelles":["Les Mamelles Village","Roche Caïman border","Industrial zone proximity"],"Mont Buxton":["Mont Buxton Village","Upper St. Louis border","Victoria hill area"],"Mont Fleuri":["Mont Fleuri Village","Botanical Gardens area","Hospital zone"],"Plaisance":["Plaisance Village","Les Mamelles junction","Roche Caïman periphery"],"Pointe La Rue":["Pointe La Rue Village","International Airport","Turtle Bay North"],"Port Glaud":["Port Launay","Port Glaud Waterfall","Cap Ternay"],"Roche Caïman":["Roche Caïman Sanctuary","Sports Complex","Industrial Estate"],"Saint Louis":["Saint Louis Village","Bel Air hill area","Victoria outskirts"],"Takamaka":["Takamaka Beach","Intendance","Police Bay"]},"Sierra Leone":{"Bo":["Bo Town","Gerihun","Bumpe","Baoma","Kakua"],"Bombali":["Makeni","Kamakwie","Binkolo","Sella Kafta"],"Bonthe":["Bonthe Town","Mattru Jong","York Island","Torma Bum"],"Falaba":["Bendugu","Falaba Town","Mongo","Sulima"],"Kailahun":["Kailahun Town","Koindu","Daru","Pendembu"],"Kambia":["Kambia Town","Rokupr","Mambolo","Magbema"],"Karene":["Kamakwie","Kamalo","Batkanu","Sella Limba"],"Kenema":["Kenema City","Panguma","Blama","Tongo"],"Koinadugu":["Kabala","Fadugu","Musaia","Seradu"],"Kono":["Koidu (Sefadu)","Yengema","Tombodu","Jaiama Nimikor"],"Moyamba":["Moyamba Town","Shenge","Rotifunk","Gbangbatoke"],"Port Loko":["Port Loko City","Lungi","Lunsar","Mambolo"],"Pujehun":["Pujehun Town","Zimmi","Bandajuma","Sahn Malen"],"Tonkolili":["Magburaka","Yele","Bumbuna","Masingbi"],"Western Area Rural":["Waterloo","Hastings","Regent","Grafton"],"Western Area Urban":["Freetown (Capital)","Cline Town","Kissy","Wilberforce"]},"Singapore":{"Central":["Bukit Merah","Geylang","Kallang","Queenstown","Toa Payoh","Bishan","Tanglin","Downtown Core"],"North East":["Ang Mo Kio","Hougang","Punggol","Seletar","Sengkang","Serangoon","Buangkok"],"North West":["Bukit Batok","Bukit Panjang","Choa Chu Kang","Woodlands","Yishun","Sembawang","Mandai","Sungei Kadut"],"South East":["Bedok","Changi","East Coast","Joo Chiat","Marine Parade","Pasir Ris","Tampines"],"South West":["Boon Lay","Bukit Timah","Clementi","Jurong East","Jurong West","Pioneer","Tuas","Tengah"]},"Slovakia":{"Banská Bystrica":["Banská Bystrica City","Zvolen","Brezno","Lučenec","Rimavská Sobota","Detva","Revúca","Veľký Krtíš"],"Bratislava":["Bratislava City (Old Town/Staré Mesto)","Petržalka","Ružinov","Malacky","Pezinok","Senec"],"Košice":["Košice City","Michalovce","Spišská Nová Ves","Trebišov","Rožňava","Humenné","Sobrance"],"Nitra":["Nitra City","Komárno","Nové Zámky","Levice","Topoľčany","Šaľa","Zlaté Moravce"],"Prešov":["Prešov City","Poprad","Bardejov","Vranov nad Topľou","Humenné","Snina","Kežmarok","Stará Ľubovňa"],"Trenčín":["Trenčín City","Prievidza","Považská Bystrica","Nové Mesto nad Váhom","Partizánske","Púchov","Bánovce nad Bebravou"],"Trnava":["Trnava City","Piešťany","Dunajská Streda","Hlohovec","Senica","Galanta","Skalica"],"Žilina":["Žilina City","Martin","Liptovský Mikuláš","Ružomberok","Čadca","Dolný Kubín","Kysucké Nové Mesto","Námestovo"]},"Slovenia":{"Gorenjska":["Kranj","Jesenice","Radovljica","Tržič","Škofja Loka","Bled","Bohinj"],"Goriška":["Nova Gorica","Ajdovščina","Idrija","Tolmin","Bovec","Kobarid","Kanal ob Soči"],"Jugovzhodna Slovenija":["Novo Mesto","Kočevje","Črnomelj","Metlika","Trebnje","Ribnica","Šentjernej"],"Koroška":["Slovenj Gradec","Ravne na Koroškem","Dravograd","Prevalje","Mežica","Črna na Koroškem"],"Obalno-kraška":["Koper","Izola","Piran (Portorož)","Ankaran","Sežana","Divača","Komen"],"Osrednjeslovenska":["Ljubljana (Capital)","Domžale","Kamnik","Grosuplje","Vrhnika","Logatec","Medvode"],"Podravska":["Maribor","Ptuj","Slovenska Bistrica","Ormož","Lenart","Ruše","Rače-Fram"],"Pomurska":["Murska Sobota","Lendava","Gornja Radgona","Ljutomer","Beltinci","Moravske Toplice"],"Savinjska":["Celje","Velenje","Žalec","Slovenske Konjice","Šentjur","Mozirje","Laško"],"Spodnjeposavska":["Krško","Brežice","Sevnica","Bistrica ob Sotli","Radeče"],"Zasavska":["Trbovlje","Zagorje ob Savi","Hrastnik"],"Primorsko-notranjska":["Postojna","Ilirska Bistrica","Cerknica","Logatec (shared)","Bloke","Loška Dolina"]},"Solomon Islands":{"Central":["Tulagi","Savo","Russell Islands (Yandina)","Vangunu","Nggela Islands"],"Choiseul":["Taro Island (Provincial Capital)","Panggoe","Sasamungga","Choiseul Bay"],"Guadalcanal":["Marau","Aola","Avu Avu","Wanderer Bay","Tangarare"],"Isabel":["Buala (Provincial Capital)","Kia","Hograno","Susubona"],"Makira-Ulawa":["Kirakira (Provincial Capital)","Star Harbour","Ulawa","Ugi","Santa Ana (Owaraha)"],"Malaita":["Auki (Provincial Capital)","Malu'u","Atori","Dala","Afio (South Malaita)","Ontong Java (Lord Howe Atoll)"],"Rennell and Bellona":["Tigoa (Provincial Capital - Rennell)","Bellona Island","Lavanggu"],"Temotu":["Lata (Provincial Capital)","Reef Islands","Duff Islands","Vanikoro","Anuta","Tikopia"],"Western":["Gizo (Provincial Capital)","Munda","Noro","Seghe","Vella Lavella","Ranongga","Kolombangara"],"Honiara (Capital Territory)":["Central Honiara","Kukum","White River","Rove","Vura","Panatina"]},"Somalia":{"Bakool":["Xudur (Hudur)","Ceel Barde (El Barde)","Tayeeglow (Tiyeglow)","Waajid (Wajid)","Rab Dhuure (Rabdhure)"],"Banadir":["Hamar Weyne","Hodan","Yaqshid","Dharkenley","Boondhere","Abdiaziz","Waberi","Shingani"],"Bari":["Boosaaso (Bosaso)","Qardho","Caluula (Alula)","Iskushuban","Qandala","Bandarbeyla","Carmo"],"Bay":["Baydhabo (Baidoa)","Buur Hakaba","Diinsoor","Qasax Dhere (Qansaxdheere)","Berdaale"],"Galguduud":["Dhuusamareeb","Caabudwaaq (Abudwak)","Cadaado (Adado)","Ceel Buur (El Buur)","Ceel Dheer (El Dheer)","Guriceel","Balanbale"],"Gedo":["Garbahaarey","Bardheere (Bardera)","Luuq","Beled Xaawo (Belet Hawo)","Doolow (Dolow)","Ceel Waaq (El Wak)","Baardheere"],"Hiiraan":["Beledweyne","Buuloburde (Buloburti)","Jalalaqsi","Matabaan","Maxaas (Mahas)"],"Jubbada Dhexe":["Bu'aale","Jilib","Saakow","Dujuuma"],"Jubbada Hoose":["Kismaayo (Kismayo)","Afmadoow (Afmadow)","Badhaadhe","Jamaame","Xagar"],"Mudug":["Gaalkacyo (Galkayo)","Hobyo","Galdogob","Jariiban","Harardhere"],"Nugaal":["Garoowe (Garowe)","Eyl","Burtinle","Dangoroyo"],"Sanaag":["Ceerigaabo (Erigavo)","Lasqoray","Badhan","Ceel Afweyn","Dhahar","Xiis (Heis)"],"Shabeellaha Dhexe":["Jowhar","Balcad (Balad)","Cadale (Adale)","Mahadaay","Warsheikh"],"Shabeellaha Hoose":["Marka (Merca)","Afgooye","Baraawe (Brava)","Wanlaweyn","Qoryooley","Sablaale","Kurtunwaarey"],"Sool":["Las Caanood (Las Anod)","Caynabo (Aynabo)","Taleex (Taleh)","Xudun (Hudin)","Boocame"],"Togdheer":["Burco (Burao)","Buuhoodle","Oodweyne","Sheekh (Sheikh)"],"Woqooyi Galbeed":["Hargeysa (Hargeisa)","Berbera","Gabiley","Baligubadle","Salaxley"]},"South Africa":{"Eastern Cape":["Gqeberha (formerly Port Elizabeth)","East London","Makhanda (formerly Grahamstown)","Mthatha","Kariega (formerly Uitenhage)","Komani (formerly Queenstown)","Bhisho (Provincial Capital)","Jeffreys Bay"],"Free State":["Bloemfontein (Judicial Capital)","Welkom","Sasolburg","Bethlehem","Kroonstad","Phuthaditjhaba","Parys","Harrismith"],"Gauteng":["Johannesburg","Pretoria (Administrative Capital)","Soweto","Sandton","Midrand","Ekurhuleni (East Rand)","Vanderbijlpark","Centurion"],"KwaZulu-Natal":["Durban","Pietermaritzburg (Provincial Capital)","Newcastle","Richards Bay","Umhlanga","Port Shepstone","Ladysmith","Ballito"],"Limpopo":["Polokwane (Provincial Capital)","Tzaneen","Thohoyandou","Mokopane","Ba-Phalaborwa","Bela-Bela (Warmbaths)","Musina","Lephalale"],"Mpumalanga":["Mbombela (formerly Nelspruit)","Emalahleni (formerly Witbank)","Secunda","Middelburg","Ermelo","Barberton","White River","Sabie"],"North West":["Mahikeng (Provincial Capital)","Klerksdorp","Potchefstroom","Rustenburg","Brits","Vryburg","Lichtenburg","Sun City Resort zone"],"Northern Cape":["Kimberley (Provincial Capital)","Upington","Springbok","Kuruman","De Aar","Postmasburg","Colesberg","Kathu"],"Western Cape":["Cape Town (Legislative Capital)","Stellenbosch","George","Paarl","Knysna","Mossel Bay","Oudtshoorn","Hermanus"]},"South Korea":{"Busan (Special Metropolitan City)":["Haeundae District","Busanjin District","Saha District","Geumjeong District","Dongnae District","Sasang District","Suyeong District","Gijang County"],"Daegu (Metropolitan City)":["Dalseo District","Buk District","Suseong District","Dong District","West (Seo) District","Nam District","Jung District","Gunwi County"],"Daejeon (Metropolitan City)":["Seo District","Yuseong District (Daedeok Innopolis)","Jung District","Dong District","Daedeok District"],"Gangwon (Special Self-Governing Province)":["Chuncheon","Wonju","Gangneung","Sokcho","Donghae","Pyeongchang","Jeongseon","Cheorwon"],"Gwangju (Metropolitan City)":["Buk District","Gwangsan District","Seo District","Nam District","Dong District"],"Gyeonggi (Province)":["Suwon","Seongnam (Bundang)","Goyang (Ilsan)","Yongin","Bucheon","Ansan","Pyeongtaek","Uijeongbu"],"Gyeongnam (Province)":["Changwon","Gimhae","Jinju","Yangsan","Geoje Island","Tongyeong","Sacheon","Namhae"],"Gyeongbuk (Province)":["Pohang","Gumi","Gyeongju","Andong","Gyeongsan","Gimcheon","Yeongju","Ulleungdo (including Dokdo)"],"Incheon (Metropolitan City)":["Seo District","Yeonsu District (Songdo)","Namdong District","Bupyeong District","Jung District (Incheon Airport / Yeongjong)","Michuhol District","Ganghwa County","Ongjin County"],"Jeju (Special Self-Governing Province)":["Jeju City","Seogwipo","Aewol","Jocheon","Hanlim","Seongsan","Gujwa","Daejeong"],"Jeonbuk (Special Self-Governing Province)":["Jeonju","Iksan","Gunsan","Jeongeup","Namwon","Gimje","Buan","Wanju"],"Jeonnam (Province)":["Yeosu","Suncheon","Mokpo","Gwangyang","Naju","Muan","Haenam","Wando"],"Sejong (Special Self-Governing City)":["Hansol-dong","Do담-dong (Dodam)","Jongchon-dong","Jochiwon-eup","Yeonseo-myeon","Geumnam-myeon"],"Seoul (Special City)":["Gangnam District","Seocho District","Songpa District","Mapo District (Hongdae)","Yongsan District (Itaewon)","Jongno District","Jung District (Myeongdong)","Yeongdeungpo District (Yeouido)"],"Ulsan (Metropolitan City)":["Nam District","Buk District","Jung District","Dong District","Ulju County"],"Chungbuk (Province)":["Cheongju","Chungju","Jecheon","Eumseong","Jincheon","Okcheon","Yeongdong","Danyang"],"Chungnam (Province)":["Cheonan","Asan","Seosan","Dangjin","Gongju","Boryeong","Nonsan","Buyeo"]},"South Sudan":{"Central Equatoria":["Juba (Capital City)","Yei","Kajo Keji","Morobo","Lainya","Terekeka","Rokon","Mangalla"],"Eastern Equatoria":["Torit","Kapoeta","Magwi","Nimule","Ikotos","Budi (Chukudum)","Lafon","Narus"],"Jonglei":["Bor","Akobo","Twic East (Panyagoor)","Duk (Ayod border)","Fangak","Nyirol","Uror","Ayod"],"Lakes":["Rumbek","Yirol","Awerial (Mingkaman)","Cueibet","Wulu","Rumbek East","Rumbek North","Yirol West"],"Northern Bahr el Ghazal":["Aweil City","Aweil West (Nyamlel)","Aweil East (Wanyjok)","Aweil North (Gok Machar)","Aweil South","Wedweil"],"Unity":["Bentiu","Rubkona","Leer","Mayendit","Koch","Guit","Panyijiar","Pariang border sector"],"Upper Nile":["Malakal","Renk","Melut","Nasir","Maiwut","Ulang","Fashoda (Kodok)","Maban"],"Warrap":["Kuajok","Gogrial","Tonj Town","Turalei (Twic County)","Thiet","Marial Lou","Lunyaker"],"Western Bahr el Ghazal":["Wau City","Raja","Jur River (Marial Bai)","Baggari","Mapel","Deim Zubeir"],"Western Equatoria":["Yambio","Maridi","Mundri","Tambura","Nzara","Ezo","Ibba","Mvolo"],"Abyei Area (Special Administrative Area)":["Abyei Town","Agok","Rumamer","Alal","Mijak","Ameth Aguok"],"Greater Pibor Administrative Area":["Pibor Town","Pochalla","Lekuangole","Gumuruk","Boma"],"Ruweng Administrative Area":["Pariang Town","Yida","Jau","Lake Pariang zone"]},"Spain":{"Andalusia":["Seville","Málaga","Córdoba","Granada","Marbella","Jerez de la Frontera","Almería","Cádiz"],"Aragon":["Zaragoza","Huesca","Teruel","Calatayud","Ejea de los Caballeros","Monzón","Barbastro","Alcañiz"],"Asturias":["Gijón","Oviedo","Avilés","Siero","Langreo","Mieres","Llanes","Cangas de Onís"],"Balearic Islands":["Palma de Mallorca","Ibiza Town","Ciutadella de Menorca","Maó (Mahon)","Sant Antoni de Portmany","Manacor","Alcúdia","Formentera"],"Basque Country":["Bilbao","San Sebastián (Donostia)","Vitoria-Gasteiz","Barakaldo","Getxo","Irun","Portugalete","Zarautz"],"Canary Islands":["Las Palmas de Gran Canaria","Santa Cruz de Tenerife","San Cristóbal de La Laguna","Arrecife (Lanzarote)","Puerto del Rosario (Fuerteventura)","Los Cristianos","Maspalomas","Santa Cruz de La Palma"],"Cantabria":["Santander","Torrelavega","Castro Urdiales","Camargo","Piélagos","Laredo","Santoña","Comillas"],"Castile and León":["Valladolid","Burgos","Salamanca","León","Segovia","Ávila","Soria","Palencia"],"Castile-La Mancha":["Toledo","Albacete","Ciudad Real","Guadalajara","Cuenca","Talavera de la Reina","Puertollano","Tomelloso"],"Catalonia":["Barcelona","L'Hospitalet de Llobregat","Badalona","Terrassa","Sabadell","Tarragona","Lleida","Girona"],"Extremadura":["Mérida","Badajoz","Cáceres","Plasencia","Don Benito","Almendralejo","Villanueva de la Serena","Zafra"],"Galicia":["Vigo","A Coruña","Santiago de Compostela","Ourense","Lugo","Pontevedra","Ferrol","Sanxenxo"],"La Rioja":["Logroño","Calahorra","Arnedo","Haro","Alfaro","Nájera","Lardero","Santo Domingo de la Calzada"],"Madrid":["Madrid City","Móstoles","Alcalá de Henares","Fuenlabrada","Leganés","Getafe","Alcorcón","San Sebastián de los Reyes"],"Murcia":["Murcia City","Cartagena","Lorca","Molina de Segura","Alcantarilla","Águilas","Yecla","Mazarrón"],"Navarre":["Pamplona","Tudela","Barañain","Egüés","Estella-Lizarra","Tafalla","Ansoáin","Zizur Mayor"],"Valencian Community":["Valencia City","Alicante","Elche","Castellón de la Plana","Torrevieja","Orihuela","Benidorm","Gandia"],"Ceuta (Autonomous City)":["Centro / Almina","Hadú","El Príncipe","Benzú","San Amaro"],"Melilla (Autonomous City)":["Barrio Chino","El Real","Industrial","Victoria","Cabrerizas"]},"Sri Lanka":{"Central":["Kandy","Gampola","Nawalapitiya","Matale","Dambulla","Nuwara Eliya","Hatton","Talawakele"],"Eastern":["Trincomalee","Trincomalee Town and Gravets","Batticaloa","Kattankudy","Eravur","Ampara","Kalmunai","Akkaraipattu"],"North Central":["Anuradhapura","Mihintale","Medawachchiya","Polonnaruwa","Tamankaduwa","Hingurakgoda","Kaduruwela","Minneriya"],"Northern":["Jaffna","Nallur","Chavakachcheri","Point Pedro","Kilinochchi","Mannar","Vavuniya","Mullaitivu"],"North Western":["Kurunegala","Kuliyapitiya","Narammala","Wariyapola","Puttalam","Chilaw","Marawila","Wennappuwa"],"Sabaragamuwa":["Ratnapura","Balangoda","Pelmadulla","Embilipitiya","Kegalle","Mawanella","Warakapola","Ruwanwella"],"Southern":["Galle","Hikkaduwa","Ambalangoda","Karapitiya","Matara","Weligama","Hambantota","Tangalle"],"Uva":["Badulla","Bandarawela","Haputale","Diyatalawa","Ella","Monaragala","Wellawaya","Bibile"],"Western":["Colombo","Sri Jayawardenepura Kotte (Capital)","Dehiwala-Mount Lavinia","Moratuwa","Negombo","Gampaha","Kalutara","Panadura"]},"Sudan":{"Blue Nile":["Ed Damazin","Roseires","Geissan","Baw","Kurmuk","Tadamon"],"Central Darfur":["Zalingei","Wadi Salih (Garsila)","Mukjar","Umm Dukhun","Nertiti (Rokero)","Azum"],"East Darfur":["Ed Daein","Adila","Abu Karinka","Assalaya","Yassin","El Fula border sector"],"Gedaref":["Gedaref City","Al-Fashaga","Gallabat (El Gallabat)","Qallabat ash-Sharqiyah","Al-Hawata (Rahad)","Doka","Fau"],"Gezira":["Wad Madani","Al-Hasaheisa","Al-Managil","Rufaa","El Kamlin","Al-G those Corridor","Um Al-Gura"],"Kassala":["Kassala City","New Halfa","Khashm el-Girba","Aroma","Hamashkoreib","Telkok","Wad al-Hileau"],"Khartoum":["Khartoum City","Omdurman","Khartoum North (Bahri)","Jabal Awliya","Sharq el-Nil (East Nile)","Um Badda","Karari"],"North Darfur":["El Fasher","Kabkabiya","Kutum","Mellit","Tawila","Um Kaddada","Dar el-Salam"],"North Kordofan":["El Obeid","Um Rawaba","Bara","Ar Rahad","Sodari","Jebrat al-Sheikh"],"Northern":["Dongola","Wadi Halfa","Karima","Merowe","Delgo","El-Golid","Abri"],"Red Sea":["Port Sudan","Suakin","Tokar","Halayeb (Disputed)","Sinkat","Haya","Muhammad Qol"],"River Nile":["Ad-Damer","Atbara","Shendi","El Metemma","Abu Hamad","Berber"],"Sennar":["Sennar City","Singa","Dinder","Abu Hujar","Suki","Maiurno"],"South Darfur":["Nyala","Kass","Edd al-Fursan","Reheid al-Birdi","Tullus","Buram","Kubum"],"South Kordofan":["Kadugli","Dilling","Rashad","Abu Jubaiyah","Talodi","Habila"],"West Darfur":["El Geneina","Kulbus","Sirba","Habila (West Darfur)","Beida","Forobaranga"],"West Kordofan":["Al-Fulah","Babanusa","Muglad","En Nuhud","Ghubaysh","Lagawa"],"White Nile":["Rabak","Kosti","Ad-Duwaym","Al-Geteina","Tendelti","Um Rimta"]},"Suriname":{"Brokopondo":["Brokopondo Town","Afobaka (Dam site)","Brownsweg","Kwakoegron","Klaaskreek","Sarakreek","Victoria","Baling Soela"],"Commewijne":["Nieuw Amsterdam","Meerzorg","Tamanredjo","Alkmaar","Mariënburg","Bakkie (Reynsdorp)","Margaretha","Johan & Margaretha"],"Coronie":["Totness","Welgelegen","Jennely","Burnside","Salem","Friendship"],"Marowijn":["Albina","Moengo","Galibi","Wanhatti","Moengo Tapoe","Alfonsdorp","St. Laurent border sector"],"Nickerie":["Nieuw Nickerie","Wageningen","Paradise","Groot Henar","South Drain","Wassenaar"],"Para":["Onverwacht","Lelydorp border sector","Zanderij (Airport zone)","Bernharddorp","Redi Doti","Bigi Poika","Sabanpassi","Kwattahede"],"Paramaribo":["Downtown / Waterkant","Rainville","Blauwgrond","Munder","Beekhuizen","Weg Naar Zee","Zorg en Hoop","Latour"],"Saramacca":["Groningen","Catharina Sophia","Calcutta","Kampong Baru","Tijgerkreek","Wayamboweg"],"Sipaliwini":["Kwamalasamutu","Pelelu Tepu","Langatabiki","Stoelmanseiland","Apoera","Bakhuis","Pokigron","Djoemoe"],"Wanica":["Lelydorp","Koewarasan","De Nieuwe Grond","Kwatta","Houttuin","Saramaccapolder","Domburg"]},"Sweden":{"Blekinge":["Karlskrona","Ronneby","Karlshamn","Sölvesborg","Olofström"],"Dalarna":["Falun","Borlänge","Mora","Leksand","Rättvik","Malung-Sälen","Avesta","Ludvika"],"Gotland":["Visby","Hemse","Slite","Klintehamn","Fårösund"],"Gävleborg":["Gävle","Sandviken","Hudiksvall","Bollnäs","Söderhamn","Ljusdal","Hofors"],"Halland":["Halmstad","Varberg","Kungsbacka","Falkenberg","Laholm","Hyltebruk"],"Jämtland":["Östersund","Åre","Sveg","Strömsund","Krokom","Bräcke","Järpen"],"Jönköping":["Jönköping","Värnamo","Nässjö","Tranås","Vetlanda","Gislaved","Habo"],"Kalmar":["Kalmar City","Västervik","Oskarshamn","Vimmerby","Nybro","Borgholm (Öland)","Färjestaden"],"Kronoberg":["Växjö","Ljungby","Älmhult","Alvesta","Tingsryd","Markaryd"],"Norrbotten":["Luleå","Kiruna","Piteå","Boden","Gällivare","Haparanda","Kalix","Jokkmokk"],"Skåne":["Malmö","Helsingborg","Lund","Kristianstad","Landskrona","Ystad","Ängelholm","Trelleborg"],"Stockholm":["Stockholm City","Solna","Nacka","Huddinge","Täby","Södertälje","Järfälla","Lidingö"],"Södermanland":["Eskilstuna","Nyköping","Katrineholm","Strängnäs","Oxelösund","Trosa"],"Uppsala":["Uppsala City","Enköping","Bålsta (Håbo)","Östhammar","Tierp","Knivsta"],"Värmland":["Karlstad","Kristinehamn","Arvika","Karlskoga","Säffle","Sunne","Torsby"],"Västerbotten":["Umeå","Skellefteå","Lycksele","Vilhelmina","Storuman","Vännäs"],"Västernorrland":["Sundsvall","Örnsköldsvik","Härnösand","Timrå","Sollefteå","Kramfors"],"Västmanland":["Västerås","Köping","Sala","Fagersta","Arboga","Hallstahammar"],"Västra Götaland":["Göteborg (Gothenburg)","Borås","Trollhättan","Skövde","Uddevalla","Alingsås","Lidköping","Mölndal"],"Örebro":["Örebro City","Karlskoga","Kumla","Lindesberg","Hallsberg","Nora"],"Östergötland":["Linköping","Norrköping","Motala","Mjölby","Finspång","Söderköping","Vadstena"]},"Switzerland":{"Aargau":["Aarau","Baden","Brugg","Lenzburg","Zofingen","Rheinfelden","Bremgarten","Wettingen"],"Appenzell Ausserrhoden":["Herisau","Teufen","Heiden","Speicher","Gais","Urnäsch","Trogen","Walzenhausen"],"Appenzell Innerrhoden":["Appenzell","Schwende-Rüte","Oberegg","Gonten","Schlatt-Haslen"],"Basel-Landschaft":["Liestal","Muttenz","Pratteln","Binningen","Allschwil","Reinach","Sissach","Münchenstein"],"Basel-Stadt":["Basel City","Riehen","Bettingen"],"Bern":["Bern City (Capital)","Thun","Biel/Bienne","Interlaken","Köniz","Burgdorf","Langenthal","Spiez"],"Fribourg":["Fribourg City","Bulle","Estavayer-le-Lac","Murten (Morat)","Romont","Châtel-Saint-Denis","Marly","Düdingen"],"Geneva":["Geneva City","Vernier","Lancy","Meyrin","Carouge","Onex","Thônex","Versoix"],"Glarus":["Glarus","Glarus Nord (Näfels / Netstal)","Glarus Süd (Schwanden / Elm)"],"Grisons":["Chur","Davos","St. Moritz","Arosa","Pontresina","Klosters","Ilanz","Poschiavo"],"Jura":["Delémont","Porrentruy","Saignelégier","Bassecourt","Courroux","Alle"],"Lucerne":["Lucerne City","Emmen","Kriens","Horw","Sursee","Willisau","Ebikon","Hochdorf"],"Neuchâtel":["Neuchâtel City","La Chaux-de-Fonds","Le Locle","Val-de-Travers","Val-de-Ruz","Boudry","Peseux"],"Nidwalden":["Stans","Hergiswil","Buochs","Stansstad","Beckenried","Oberdorf","Ennetbürgen"],"Obwalden":["Sarnen","Engelberg","Alpnach","Kerns","Sachseln","Giswil","Lungern"],"Schaffhausen":["Schaffhausen City","Neuhausen am Rheinfall","Stein am Rhein","Beringen","Thayngen","Neuunkirch"],"Schwyz":["Schwyz Town","Küssnacht am Rigi","Einsiedeln","Freienbach (Pfäffikon)","Lachen","Arth (Goldau)","Brunnen","Wollerau"],"Solothurn":["Solothurn City","Olten","Grenchen","Zuchwil","Biberist","Balsthal","Dornach","Schönenwerd"],"St. Gallen":["St. Gallen City","Rapperswil-Jona","Wil","Gossau","Buchs","Altstätten","Uznach","Bad Ragaz"],"Thurgau":["Frauenfeld","Kreuzlingen","Arbon","Amriswil","Weinfelden","Romanshorn","Sirnach","Steckborn"],"Ticino":["Bellinzona","Lugano","Locarno","Mendrisio","Ascona","Chiasso","Biasca","Massagno"],"Uri":["Altdorf","Andermatt","Erstfeld","Schattdorf","Bürglen","Flüelen","Göschenen"],"Valais":["Sion","Martigny","Sierre","Zermatt","Brig-Glis","Monthey","Visp","Verbier"],"Vaud":["Lausanne","Yverdon-les-Bains","Montreux","Vevey","Nyon","Morges","Renens","Aigle"],"Zug":["Zug City","Baar","Cham","Risch-Rotkreuz","Steinhausen","Hünenberg","Unterägeri","Oberägeri"],"Zürich":["Zürich City","Winterthur","Uster","Dübendorf","Dietikon","Wetzikon","Wädenswil","Horgen"]},"Syria":{"Aleppo":["Aleppo City","Azaz","Al-Bab","Manbij","Afrin","Ayn al-Arab (Kobanî)","Jarabulus","Atarib"],"Al-Hasakah":["Al-Hasakah City","Qamishli","Al-Malikiyah (Derik)","Ras al-Ayn","Amuda","Al-Qahtaniyah","Al-Shaddadi","Al-Darbasiyah"],"Al-Raqqah":["Al-Raqqah City","Al-Thawrah (Tabqa)","Tell Abyad","Maadan","Ein Issa","Al-Mansurah"],"As-Suwayda":["As-Suwayda City","Salkhad","Shahba","Al-Qurayya","Al-Mazraa","Kanawat"],"Damascus":["Old City (Bab Tuma / Al-Hamidiyah)","Mezzeh","Abu Rummaneh","Malki","Muhajirin","Midan","Baramkeh","Sarouja"],"Daraa":["Daraa City","Izra","Al-Sanamayn","Busra al-Sham","Tafas","Nawa","Inkhil","Jasim"],"Deir ez-Zor":["Deir ez-Zor City","Mayadin","Abu Kamal","Hajin","Al-Busayrah","Khasham"],"Hama":["Hama City","Salamiyah","Masyaf","Mahardah","Al-Suqaylabiyah","Suran","Kafr Zita"],"Homs":["Homs City","Palmyra (Tadmur)","Al-Qusayr","Al-Rastan","Talkalakh","Al-Mukharram","Sadad","Marmarita"],"Idlib":["Idlib City","Ma'arat al-Nu'man","Jisr al-Shughur","Ariha","Harem","Khan Shaykhun","Atmeh","Sarmada","Latakia;","Latakia City","Jableh","Al-Haffah","Qardaha","Kessab","Slinfah"],"Quneitra":["Quneitra (Destroyed/Ghost Town)","Ba'ath City","Khan Arnabah","Hader","Majdal Shams (Disputed/Occupied)","Fiq"],"Rif Dimashq":["Douma","Harasta","Jaramana","Sayyidah Zaynab","Al-Zabadani","Yabroud","Qatana","Kudsayat"],"Tartus":["Tartus City","Baniyas","Safita","Duraykish","Al-Shaykh Badr","Al-Hamidiyah","Amrit"]},"Tajikistan":{"Dushanbe (Capital City)":["Ismoili Somoni District","Sino District","Firdavsi District","Shohmansur District","Center / Rudaki Avenue Area","102nd District","46th District","Karotegin Area"],"Khatlon":["Bokhtar (formerly Qurghonteppa)","Kulob","Danghara","Yovon","Panj","Shahritus","Vakhsh","Kushoniyon"],"Sughd":["Khujand","Istaravshan","Isfara","Konibodom","Panjakent","Buston (formerly Chkalovsk)","Guliston (formerly Kayrakkum)","Bobojon Ghafurov"],"Gorno-Badakhshan (Autonomous Region)":["Khorugh (Capital)","Murghob","Ishkoshim","Shughnon","Rushon","Vanj","Darvoz","Roshtqala"],"Districts of Republican Subordination":["Vahdat","Tursunzoda","Hisor","Rogun","Rudaki","Varzob","Rasht","Lakhsh (formerly Jirgatal)"]},"Tanzania":{"Arusha":["Arusha City","Meru (Usa River)","Karatu","Monduli","Longido","Ngorongoro","Ngaramtoni"],"Dar es Salaam":["Ilala (Downtown / Posta)","Kinondoni","Temeke","Ubungo","Kigamboni","Masaki / Oysterbay","Mbagala"],"Dodoma":["Dodoma City (Capital)","Bahi","Chamwino","Chemba","Kondoa","Kongwa","Mpwapwa"],"Geita":["Geita Town","Chato","Bukombe","Mbogwe","Nyang'hwale"],"Iringa":["Iringa Municipal","Kilolo","Mufindi (Mafinga)","Ismani","Pawaga"],"Kagera":["Bukoba Municipal","Karagwe","Muleba","Biharamulo","Ngara","Kyerwa","Missenyi"],"Katavi":["Mpanda Town","Mlele","Tanganyika","Mpimbwe"],"Kigoma":["Kigoma-Ujiji Municipal","Kasulu Town","Kibondo","Kakonko","Uvinza","Buhigwe"],"Kilimanjaro":["Moshi Municipal","Hai","Siha","Rombo","Mwanga","Same","Machame"],"Lindi":["Lindi Municipal","Kilwa (Masoko)","Ruangwa","Nachingwea","Liwale"],"Manyara":["Babati Town","Hanang (Katesh)","Mbulu","Simanjiro","Kiteto"],"Mara":["Musoma Municipal","Tarime","Serengeti (Mugumu)","Bunda","Rorya","Butiama"],"Mbeya":["Mbeya City","Chunya","Mbarali","Rungwe (Tukuyu)","Kyela"],"Morogoro":["Morogoro Municipal","Kilombero (Ifakara)","Kilosa","Ulanga (Mahenge)","Gairo","Mvomero","Malinyi"],"Mtwara":["Mtwara Municipal","Newala","Masasi Town","Nanyumbu","Tandahimba"],"Mwanza":["Nyamagana (Mwanza City)","Ilemela","Sengerema","Misungwi","Magu","Kwimba","Ukerewe Island"],"Njombe":["Njombe Town","Makambako Town","Ludewa","Wanging'ombe","Makete"],"Pemba North (Zanzibar)":["Wete","Micheweni","Konde","Tumbe"],"Pemba South (Zanzibar)":["Chake Chake","Mkoani","Mtambile","Kengeja"],"Pwani":["Kibaha Town","Bagamoyo","Chalinze","Kisarawe","Mkuranga","Rufiji (Utete)","Mafia Island"],"Rukwa":["Sumbawanga Municipal","Kalambo","Nkasi (Namanyere)"],"Ruvuma":["Songea Municipal","Mbinga Town","Tunduru","Nyasa (Mbamba Bay)","Namtumbo"],"Shinyanga":["Shinyanga Municipal","Kahama Town","Kishapu","Msalala"],"Simiyu":["Bariadi Town","Maswa","Meatu","Itilima","Busega"],"Singida":["Singida Municipal","Manyoni Town","Iramba","Ikungi","Itigi","Mkalama"],"Songwe":["Mbozi (Vwawa)","Tunduma Town","Ileje","Momba"],"Tabora":["Tabora Municipal","Nzega Town","Igunga Town","Urambo","Sikonge","Uyui","Kaliua"],"Tanga":["Tanga City","Muheza","Korogwe Town","Lushoto","Pangani","Handeni Town","Kilindi","Mkinga"],"Zanzibar Central/South":["Koani","Makunduchi","Dunga","Chwaka","Paje"],"Zanzibar North":["Mkokotoni","Nungwi","Matemwe","Kivunge"],"Zanzibar Urban/West":["Stone Town (Zanzibar City)","Mwera","Bububu","Fuoni","Mwanakwerekwe"]},"Thailand":{"Amnat Charoen":["Mueang Amnat Charoen","Chanuman","Pathum Ratchawongsa","Phana","Senangkhanikhom","Hua Taphan","Lue Amnat"],"Ang Thong":["Mueang Ang Thong","Wiset Chai Chan","Pho Thong","Pa Mok","Sแสวงหา (Sawaeng Ha)","Chaiyo","Samko"],"Bangkok (Special Administrative Area)":["Phra Nakhon","Sukhumvit / Watthana","Pathum Wan (Siam Square)","Bang Rak (Silom)","Khlong Toei","Chatuchak","Dusit","Thon Buri"],"Bueng Kan":["Mueang Bueng Kan","Seka","So Phisai","Bung Khla","Bueng Khong Long","Pak Khat","Phon Charoen","Si Wilai"],"Buri Ram":["Mueang Buri Ram","Nang Rong","Prakhon Chai","Satuek","Krasang","Lahan Sai","Chaloem Phra Kiat","Paham Sup"],"Chachoengsao":["Mueang Chachoengsao","Bang Pakong","Phanom Sarakham","Bang Khla","Plaแปลง (Pluang Sung)","Bang Nam Priao","Sanam Chai Khet","Tha Takiap"],"Chai Nat":["Mueang Chai Nat","Hankha","Sankhaburi","Manorom","Wat Sing","Sapphaya","Nong Mamong","Noen Kham"],"Chaiyaphum":["Mueang Chaiyaphum","Phu Khiao","Chum Phae Corridor / Kaeng Khro","Chatturat","Bamnet Narong","Nong Bua Daeng","Kaset Sombun","Thep Sathit"],"Chanthaburi":["Mueang Chanthaburi","Tha Mai","Khlung","Pong Nam Ron","Makham","Laem Sing","Soi Dao","Na Yai Am"],"Chiang Mai":["Mueang Chiang Mai","Mae Rim","Hang Dong","San Sai","San Kamphaeng","Fang","Chom Thong","Chiang Dao"],"Chiang Rai":["Mueang Chiang Rai","Mae Sai","Chiang Saen","Chiang Khong","Mae Chan","Phan","Wiang Pa Pao","Mae Fah Luang"],"Chon Buri":["Mueang Chon Buri","Pattaya City / Bang Lamung","Si Racha","Sattahip","Phanat Nikhom","Ban Bueng","Phan Thong","Koh Sichang"],"Chumphon":["Mueang Chumphon","Lang Suan","Tha Sae","Pathio","Lamae","Phato","Sawi","Thung Tako"],"Kalasin":["Mueang Kalasin","Yang Talat","Somdet","Kuchinarai","Tha Khantho","Nong Kung Si","Sahatsakhan","Kamalasai"],"Kamphaeng Phet":["Mueang Kamphaeng Phet","Khanu Woralaksaburi","Phran Kratai","Khlong Khlung","Sai Ngam *ขาณุฯ (Khanu) Hinterland","Khlong Lan","Bueng Samakkhi"],"Kanchanaburi":["Mueang Kanchanaburi","Tha Muang","Tha Maka","Sai Yok","Thong Pha Phum","Sangkhlaburi","Phanom Thuan","Bo Phloi"],"Khon Kaen":["Mueang Khon Kaen","Chum Phae","Ban Phai","Kranuan","Phon","Nong Ruea","Chonnabot","Phu Wiang"],"Krabi":["Mueang Krabi (Ao Nang)","Koh Lanta","Ao Luek","Khao Phanom","Khlong Thom","Plai Phraya","Lam Thap","Koh Phi Phi"],"Lampang":["Mueang Lampang","Ko Kha","Thoen","Chae Hom","Ngao","Mae Moh","Wang Nuea","Sop Prap"],"Lamphun":["Mueang Lamphun","Pa Sang","Ban Hong","Li","Mae Tha","Thung Hua Chang","Ban Thi","Wiang Nong Long"],"Loei":["Mueang Loei","Wang Saphung","Chiang Khan","Dan Sai","Phu Ruea","Tha Li","Pak Chom","Phu Kradueng"],"Lop Buri":["Mueang Lop Buri","Khok Samrong","Chai Badan","Phatthana Nikhom","Ban Mi","Tha Wung","Sa Bot","Lam Sonthi"],"Mae Hong Son":["Mueang Mae Hong Son","Pai","Mae Sariang","Khun Yuam","Pang Mapha","Mae La Noi","Sop Moei"],"Maha Sarakham":["Mueang Maha Sarakham","Kantharawichai","Borabue","Wapi Pathum","Kosum Phisai","Chiang Yuen","Na Chuan","Phayakkhaphum Phisai"],"Mukdahan":["Mueang Mukdahan","Nikhom Kham Soi","Don Tan","Wan Yai","Khamcha-i","Nong Sung","Dong Luang"],"Nakhon Nayok":["Mueang Nakhon Nayok","Ban Na","Pak Phli","Ongkharak"],"Nakhon Pathom":["Mueang Nakhon Pathom","Sam Phran","Kamphaeng Saen","Nakhon Chai Si","Bang Len","Don Tum","Phutthamonthon"],"Nakhon Phanom":["Mueang Nakhon Phanom","That Phanom","Ban Phaeng","Si Songkhram","Na Kae","Tha Uthen","Renu Nakhon","Pla Pak"],"Nakhon Ratchasima":["Mueang Nakhon Ratchasima (Korat)","Pak Chong","Phimai","Sikhio","Non Sung","Chok Chai","Dan Khun Thot","Wang Nam Khiao"],"Nakhon Sawan":["Mueang Nakhon Sawan","Lat Yao","Takhli","Chum Saeng","Nong Bua","Banphot Phisai","Phayuha Khiri","Tha Tako"],"Nakhon Si Thammarat":["Mueang Nakhon Si Thammarat","Thung Song","Pak Phanang","Tha Sala","Sichon","Khanom","Ron Phibun","Chawang"],"Nan":["Mueang Nan","Pua","Chiang Klang","Tha Wang Pha","Wiang Sa","Na Noi","Thung Chang","Bo Kluea"],"Narathiwat":["Mueang Narathiwat","Su-ngai Kolok","Tak Bai","Ra-ngae","Rueso","Yi-ngo","Bacho","Sukhirin"],"Nong Bua Lam Phu":["Mueang Nong Bua Lam Phu","Sri Bun Rueang","Non Sang","Na Klang","Suwannakhuha","Na Wang"],"Nong Khai":["Mueang Nong Khai","Tha Bo","Phon Phisai","Si Chiang Mai","Sangkhom","Sa Rai","Pho Tak","Rattanawapi"],"Nonthaburi":["Mueang Nonthaburi","Pak Kret","Bang Yai","Bang Bua Thong","Bang Kruai","Sai Noi"],"Pathum Thani":["Mueang Pathum Thani","Thanyaburi","Khlong Luang","Lam Luk Ka","Sam Khok","Lat Lum Kaeo","Nong Suea"],"Pattani":["Mueang Pattani","Yaring","Sai Buri","Khok Pho","Panare","Mayo","Nong Chik","Kapho"],"Phang Nga":["Mueang Phang Nga","Takua Pa (Khao Lak)","Thai Mueang","Khura Buri","Ko Yao","Thap Put","Kapong","Bang Chong"],"Phatthalung":["Mueang Phatthalung","Khuan Khanun","Tamot","Pak Phayun","Pa Bon","Bang Kaeo","Si Banphot","Srinagarindra"],"Phayao":["Mueang Phayao","Chiang Kham","Dok Khamtai","Pong","Chun","Chiang Muan","Phu Sang","Mae Chai"],"Phetchabun":["Mueang Phetchabun","Lom Sak","Lom Kao","Wichian Buri","Bueng Sam Phan","Nong Phai","Si Thep","Khao Kho"],"Phetchaburi":["Mueang Phetchaburi","Cha-am","Tha Yang","Ban Laem","Khao Yoi","Ban Lat","Kaeng Krachan","Nong Ya Plong"],"Phichit":["Mueang Phichit","Taphan Hin","Bang Mun Nak","Sam Ngam","Pho Pracha","Pho Thale","Wang Sai Phun","Dong Charoen"],"Phitsanulok":["Mueang Phitsanulok","Wang Thong","Nakhon Thai","Bang Rakam","Phrom Phiram","Wat Bot","Bang Krathum","Chat Trakan"],"Phra Nakhon Si Ayutthaya":["Phra Nakhon Si Ayutthaya City","Bang Pa-in","Wang Noi","Bang Pahan","Sena","Phachi","Tha Ruea","Nakhon Luang"],"Phrae":["Mueang Phrae","Sung Men","Den Chai","Long","Wang Chin","Song","Rong Kwang","Nong Muang Khai"],"Phuket":["Mueang Phuket (Phuket Town / Patong)","Kathu (Kamala / Karon)","Thalang (Bang Tao / Surin)"],"Prachin Buri":["Mueang Prachin Buri","Kabin Buri","Sri Maha Phot","Na Di","Ban Sang","Prachantakham","Si Mahosot"],"Prachuap Khiri Khan":["Mueang Prachuap Khiri Khan","Hua Hin","Pran Buri","Kui Buri","Bang Saphan","Thap Sakae","Sam Roi Yot","Bang Saphan Noi"],"Ranong":["Mueang Ranong","Kapoe","Kra Buri","La-un","Suk Samran"],"Ratchaburi":["Mueang Ratchaburi","Damnoen Saduak","Ban Pong","Photharam","Pak Tho","Chom Bueng","Suan Phueng","Bang Phae"],"Rayong":["Mueang Rayong","Ban Chang","Klaeng","Pluak Daeng","Ban Khai","Nikhom Phatthana","Wang Chan","Koh Samet"],"Roi Et":["Mueang Roi Et","Selaphum","Phon Thong","Suwannaphum","At Samat","Kaset Wisai","Pathum Rat","Thawatchaburi"],"Sa Kaeo":["Mueang Sa Kaeo","Aranyaprathet","Watthana Nakhon","Wang Nam Yen","Ta Phraya","Khlong Hat","Khao Chakan","Wang Sombun"],"Sakhon Nakhon":["Mueang Sakhon Nakhon","Phang Khon","Sawang Daen Din","Wanon Niwat","Akat Amnuay","Phanna Nikhom","Kusuman","Tao Ngoi"],"Samut Prakan":["Mueang Samut Prakan","Bang Phli","Phra Pradaeng","Bang Bo","Phra Samut Chedi","Bang Sao Thong"],"Samut Sakhon":["Mueang Samut Sakhon","Krathum Baen","Ban Phaeo"],"Samut Songkhram":["Mueang Samut Songkhram","Amphawa","Bang Khonthi"],"Saraburi":["Mueang Saraburi","Kaeng Khoi","Phra Phutthabat","Muak Lek","Nong Khae","Wihan Daeng","Ban Mo","Don Phut"],"Satun":["Mueang Satun","La-ngu","Khuan Don","Tha Phae","Khuan Kalong","Manang","Koh Tarutao"],"Sing Buri":["Mueang Sing Buri","In Buri","Bang Rachan","Khai Bang Rachan","Tha Chang","Prom Buri"],"Si Sa Ket":["Mueang Si Sa Ket","Kantharalak","Uthumphon Phisai","Rasi Salai","Khun Han","Khwang","Phrai Bueng","Non Khun"],"Songkhla":["Mueang Songkhla","Hat Yai","Sadao","Ranot","Chana","Singhanakhon","Sathing Phra","Nathee"],"Sukhothai":["Mueang Sukhothai","Sawankhalok","Si Satchanalai","Kong Krailat","Khiri Mat","Si Samrong","Ban Dan Lan Hoi","Thung Saliam"],"Suphan Buri":["Mueang Suphan Buri","Doem Bang Nang Buat","Dan Chang","Bang Pla Ma","Si Prachan","Song Phi Nong","Sam Chuk","U Thong"],"Surat Thani":["Mueang Surat Thani","Koh Samui","Koh Pha-ngan (including Koh Tao)","Phunphin","Wiang Sa","Chaiya","Don Sak","Ban Ta Khun"],"Surin":["Mueang Surin","Tha Tum","Sangkha","Prasat","Kap Choeng","Sikhoraphum","Rattanaburi","Chom Phra"],"Tak":["Mueang Tak","Mae Sot","Umphang","Mae Ramat","Tha Song Yang","Phop Phra","Ban Tak","Sam Ngao"],"Trang":["Mueang Trang","Kantang","Huai Yot","Yan Ta Khao","Palian","Sikao","Wang Wiset","Na Yong"],"Trat":["Mueang Trat","Koh Chang","Koh Kood","Khlong Yai","Laem Ngop","Bo Rai","Khao Saming"],"Ubon Ratchathani":["Mueang Ubon Ratchathani","Warin Chamrap","Phibun Mangsahan","Khong Chiam","Det Udom","Khemarat","Trakan Phuet Phon","Nachaluay"],"Udon Thani":["Mueang Udon Thani","Ban Dung","Kumphawapi","Nong Han","Ban Phue","Phen","Nam Som","Kut Chap"],"Uthai Thani":["Mueang Uthai Thani","Nong Chang","Thap Than","Ban Rai","Sawang Arom","Huai Khot","Lan Sak","Nong Khayang"],"Uttaradit":["Mueang Uttaradit","Laplae","Tron","Pichai","Thong Saen Khan","Nam Pat","Fak Tha","Ban Khok"],"Yala":["Mueang Yala","Betong","Raman","Bannang Sata","Yaha","Than To","Kabang","Krong Pinang"],"Yasothon":["Mueang Yasothon","Kut Chum","Kham Khuean Kaeo","Loeng Nok Tha","Pa Tiu","Maha Chana Chai","Kho Wang","Sai Mun"]},"Timor-Leste":{"Aileu":["Aileu Villa","Laulara","Lekidoe","Remexio","Bandudato","Seloi Malere"],"Ainaro":["Ainaro Villa","Hato-Udo","Hatu-Builico","Maubisse","Mulo","Aituto"],"Atauro":["Vila Maumeta","Beloi","Biqueli","Macadade","Maquili"],"Baucau":["Baucau Villa","Baguia","Laga","Quelicai","Vemasse","Venilale"],"Bobonaro":["Maliana","Bobonaro Villa","Atabae","Balibo","Cailaco","Lolotoe"],"Cova Lima":["Suai","Tilomar","Zumalai","Fohorem","Fatumean","Maucatar"],"Dili":["Nain Feto","Vera Cruz","Dom Aleixo","Cristo Rei","Metinaro"],"Ermera":["Gleno","Ermera Villa","Atsabe","Hatolia","Letefoho","Poetete"],"Lautém":["Lospalos","Iliomar","Lautém Villa","Lorehe","Luro","Tutuala"],"Liquiçá":["Liquiçá Villa","Bazartete","Maubara","Vatuvou","Loes"],"Manatuto":["Manatuto Villa","Barique","Laclo","Laclubar","Laleia","Soibada"],"Manufahi":["Same","Alas","Fatuberlio","Turiscai","Betano"],"Oecusse (Special Administrative Region)":["Pante Macassar","Nitibe","Oesilo","Passabe","Lifau"],"Viqueque":["Viqueque Villa","Lacluta","Ossu","Watulari","Watucarbau"]},"Togo":{"Maritime":["Lomé (Capital City)","Tsévié","Aneho","Vogan","Tabligbo","Kpogan","Afagnan","Togoville"],"Plateaux":["Atakpamé","Kpalimé","Badou","Notsé","Amlamé","Elavagnon","Danyi Apéyémé","Kpélé-Adéta"],"Centrale":["Sokodé","Tchamba","Sotouboua","Blitta","Kambole","Djarkpanga","Kasanga","Tamberma"],"Kara":["Kara City","Niamtougou","Bafilo","Pagouda","Kandé","Guérin-Kouka","Farende","Jadè"],"Savanes":["Dapaong","Mango","Mandouri","Tandjouaré","Cinkassé","Barkoissi","Gando","Bombouaka"]},"Tonga":{"Tongatapu":["Nuku'alofa (Capital)","Mu'a","Vaini","Haveluloto","Kolomotu'a","Kolofo'ou","Lapaha","Tatakamotonga"],"Vava'u":["Neiafu","Pangaimotu","Leimatu'a","Tefisi","Makave","Longomapu","Holonga","Feletoa"],"Ha'apai":["Pangai","Hihifo","Lifuka","Foa","Nomuka","Ha'ano","Uiha","Tungua"],"'Eua":["'Ohonua","Houma","Kaufana","Angaha","Kolomaile","Ta'anga","Futu","Esia"],"Ongo Niua":["Hihifo (Niuatoputapu)","Vaipoa","Falehau","Futu (Niuafo'ou)","Sapa'ata","Esia (Niuafo'ou)","Kolofo'ou (Niuafo'ou)"]},"Trinidad and Tobago":{"Port of Spain (City)":["Downtown Port of Spain","Woodbrook","St. Clair","Belmont","St. James","Gonzales","Newtown","Mucurapo"],"San Fernando (City)":["Mon Repos","Marabella","Les Efforts (East & West)","Vistabella","Gulf View","Cocoyea","Pleasantville","Tarouba"],"Arima (Borough)":["Arima Town Centre","Malabar","Tumpuna","Santa Rosa","Calvary Hill","Maturita","O'Meara","Pinto Road"],"Point Fortin (Borough)":["Mahaica","Techier Village","Clifton Hill","New Village","Guapo","Egypt Village","Cap-de-Ville","Fanny Village"],"Chaguanas (Borough)":["Chaguanas Proper / Town Centre","Montrose","Lange Park","Edinburgh (including Edinburgh 500)","Felicity","Cunupia","Charlieville","Enterprise"],"Diego Martin (Region)":["Diego Martin Valley","Petit Valley","Maraval","Carenage","Chaguaramas","Cascade","St. Ann's","Diamond Vale"],"San Juan-Laventille (Region)":["San Juan","Laventille","Barataria","Morvant","El Socorro","Petit Bourg","Success Village","Febeau Village"],"Tunapuna-Piarco (Region)":["Tunapuna","Piarco (including airport zone)","St. Augustine","Curepe","Arouca","Tacarigua","Macoya","Saint Joseph"],"Couva-Tabaquite-Talparo (Region)":["Couva","Tabaquite","Talparo","California","Point Lisas","Freeport","Gran Couva","Claxton Bay"],"Siparia (Region)":["Siparia Town","Fyzabad","Cedros","Palo Seco","Santa Flora","Oropouche","Rousillac","Erin"],"Penal-Debe (Region)":["Penal","Debe","Barrackpore","Rochard Road","San Francique","Woodland","Mohess Road","Suchit Trace"],"Princes Town (Region)":["Princes Town Proper","St. Mary's Village","New Grant","Moruga","Tableland","Lengua","Hindustan","Indian Walk"],"Mayaro-Guayaguayare (Region)":["Mayaro Town","Guayaguayare","Rio Claro","Biche","Radix","Grand Lagoon","Mafeking","Plaisance"],"Sangre Grande (Region)":["Sangre Grande Town","Valencia","Toco","Matura","Cumuto","Manzanilla","Guaico","Coryal"],"Tobago (House of Assembly / Autonomous Island)":["Scarborough","Signal Hill","Canaan / Bon Accord","Crown Point","Plymouth","Roxborough","Charlotteville","Moriah"]},"Tunisia":{"Ariana":["Ariana City","Raoued","Soukra","Ettadhamen","Mnihla","Kalaat el-Andalous","Sidi Thabet","Borj Louzir"],"Beja":["Beja City","Medjez el-Bab","Nefza","Teboursouk","Testour","Amdoun","Goubellat","Thibar"],"Ben Arous":["Ben Arous City","El Mourouj","Hammam Lif","Bou Mhel el-Bassatine","Radès","Megrine","Ezahra","Mohamedia-Fouchana"],"Bizerte":["Bizerte City","Menzel Bourguiba","Mateur","Ras Jebel","Sejnane","Ghar El Melh","Tinja","Joumine"],"Gabes":["Gabes City","El Hamma","Mareth","Ghannouch","Métouia","Matmata","Nouvel El Hamma","Menzel El Habib"],"Gafsa":["Gafsa City","Métlaoui","El Ksar","Redeyef","Moularès (Oum El Araïs)","Mdhilla","Sened","Belkhir"],"Jendouba":["Jendouba City","Tabarka","Bou Salem","Aïn Draham","Fernana","Ghardimaou","Oued Meliz","Balta-Bou Aouane"],"Kairouan":["Kairouan City","Bou Hajla","Sbikha","Nasrallah","Oueslatia","Haffouz","Alaâ","Chebika"],"Kasserine":["Kasserine City","Sbeïtla","Fériana","Thala","Sbiba","Majel Bel Abbès","Haïdra","El Ayoun"],"Kebili":["Kebili City","Douz","Souk Lahad","Faouar","Djemna","Bechri","Blidet","Telmine"],"Kef":["El Kef City","Dahmani","Tajerouine","Sers","Kalaat Senan","Sakiet Sidi Youssef","Jerissa","Nebeur"],"Mahdia":["Mahdia City","El Jem","Ksour Essef","Chebba","Bou Merdes","Melloulèche","Ouled Chamekh","Sidi Alouane"],"Manouba":["Manouba City","Oued Ellil","Den Den","Tebourba","Douar Hicher","Mornaguia","Jedeida","El Battan"],"Medenine":["Medenine City","Houmt Souk (Djerba)","Midoun (Djerba)","Zarzis","Ben Guerdane","Ajim (Djerba)","Beni Khedache","Sidi Makhlouf"],"Monastir":["Monastir City","Moknine","Ksar Hellal","Jemmal","Teboulba","Bekalta","Sahline","Sayada"],"Nabeul":["Nabeul City","Hammamet","Menzel Temime","Kelibia","Korba","Soliman","Grombalia","El Haouaria"],"Sfax":["Sfax City","Sakiet Ezzit","Sakiet ed-Daier","Thyna","El Hencha","Agareb","Mahres","Kerkennah"],"Sidi Bouzid":["Sidi Bouzid City","Regueb","Meknassy","Menzel Bouzaiane","Jilma","Bir El Hafey","Sidi Ali Ben Aoun","Cebbala Ouled Asker"],"Siliana":["Siliana City","Bou Arada","Makthar","Gaâfour","El Krib","Bargou","Rohia","Laroussa"],"Sousse":["Sousse City","M'saken","Kalâa Kebira","Hammam Sousse","Akouda","Enfidha","Kalâa Sghira","Bouficha"],"TataouineL":["Tataouine City","Ghomrassen","Remada","Bir Lahmar","Dehiba","Smâr","Maztouria","Kirchaou"],"Tozeur":["Tozeur City","Nefta","Degache","El Hamma du Jérid","Tamaghza","Hazoua"],"Tunis":["Tunis City (Medina / Centre)","La Marsa","Le Kram","Carthage","Sidi Bou Said","El Menzah","Bardo","Sidi Hassine"],"Zaghouan":["Zaghouan City","El Fahs","Nadhour","Bir Mcherga","Zriba","Saouaf"]},"Turkey":{"Adana":["Seyhan","Çukurova","Yüreğir","Sarıçam","Ceyhan","Kozan","İmamoğlu","Karataş"],"Adıyaman":["Adıyaman City","Kahta","Besni","Gölbaşı","Gerger","Sincik","Tut","Samsat"],"Afyonkarahisar":["Afyonkarahisar City","Sandıklı","Dinar","Bolvadin","Emirdağ","Sinanpaşa","Şuhut","Çay"],"Ağrı":["Ağrı City","Doğubayazıt","Patnos","Diyadin","Eleşkirt","Taşlıçay","Tutak","Hamur"],"Aksaray":["Aksaray City","Ortaköy","Eskil","Gülağaç","Güzelyurt","Sultanhanı","Ağaçören","Sarıyahşi"],"Amasya":["Amasya City","Merzifon","Suluova","Taşova","Gümüşhacıköy","Göynücek","Hamamözü"],"Ankara":["Çankaya","Keçiören","Yenimahalle","Mamak","Etimesgut","Sincan","Altındağ","Gölbaşı"],"Antalya":["Kepez","Muratpaşa","Alanya","Manavgat","Konyaaltı","Serik","Aksu","Kumluca"],"Ardahan":["Ardahan City","Göle","Çıldır","Hanak","Posof","Damal"],"Artvin":["Artvin City","Hopa","Borçka","Arhavi","Yusufeli","Şavşat","Ardanuç","Kemalpaşa"],"Aydın":["Efeler","Nazilli","Söke","Kuşadası","Didim","İncirliova","Çine","Germencik"],"Balıkesir":["Efeler","Nazilli","Söke","Kuşadası","Didim","İncirliova","Çine","Germencik"],"Bartın":["Bartın City","Amasra","Ulus","Kurucaşile"],"Batman":["Batman City","Kozluk","Kurtalan boundary sector","Beşiri","Sason","Gercüş","Hasankeyf"],"Bayburt":["Bayburt City","Demirözü","Aydıntepe"],"Bilecik":["Bilecik City","Bozüyük","Osmaneli","Söğüt","Gölpazarı","Pazaryeri","Yenipazar","İnhisar"],"Bingöl":["Bingöl City","Genç","Solhan","Karlıova","Adaklı","Kiğı","Yedisu","Yayladere"],"Bitlis":["Tatvan","Bitlis City","Güroymak","Ahlat","Hizan","Mutki","Adilcevaz"],"Bolu":["Bolu City","Gerede","Mudurnu","Göynük","Mengen","Yeniçağa","Dörtdivan","Seben"],"Burdur":["Burdur City","Bucak","Gölhisar","Yeşilova","Çavdır","Tefenni","Karamanlı","Ağlasun"],"Bursa":["Osmangazi","Yıldırım","Nilüfer","İnegöl","Gemlik","Mustafakemalpaşa","Mudanya","Gürsu"],"Çanakkale":["Çanakkale City","Biga","Çan","Gelibolu (Gallipoli)","Yenice","Ayvacık","Ezine","Çeceabat"],"Çankırı":["Çankırı City","Orta","Çerkeş","Ilgaz","Yapraklı","Kurşunlu","Şabanözü","Korgun"],"Çorum":["Çorum City","Sungurlu","Osmancık","Alaca","İskilip","Bayat","Mecitözü","Kargı"],"Denizli":["Pamukkale","Merkezefendi","Çivril","Acıpayam","Tavas","Honaz","Sarayköy","Buldan"],"Diyarbakır":["Kayapınar","Bağlar","Yenişehir","Ergani","Bismil","Sur","Silvan","Çermik"],"Düzce":["Düzce City","Akçakoca","Kaynaşlı","Gölyaka","Çilimli","Yığılca","Gümüşova","Cumayeri"],"Edirne":["Edirne City","Keşan","Uzunköprü","İpsala","Havsa","Meriç","Enez","Lalapaşa"],"Elazığ":["Elazığ City","Kovancılar","Karakoçan","Palu","Arıcak","Baskil","Maden","Keban"],"Erzincan":["Erzincan City","Tercan","Üzümlü","Refahiye","Çayırlı","İliç","Kemah","Kemaliye"],"Erzurum":["Yakutiye","Palandöken","Aziziye","Horasan","Oltu","Pasinler","Karayazı","Hınıs"],"Eskişehir":["Odunpazarı","Tepebaşı","Çifteler","Sivrihisar","Alpu","Mahmudiye","Beylikova","İnönü"],"Gaziantep":["Şahinbey","Şehitkamil","Nizip","İslahiye","Nurdağı","Araban","Oğuzeli","Yavuzeli"],"Giresun":["Giresun City","Bulancak","Espiye","Görele","Tirebolu","Şebinkarahisar","Dereli","Keşap"],"Gümüşhane":["Gümüşhane City","Kelkit","Şiran","Kürtün","Torul","Köse"],"Hakkâri":["Hakkâri City","Yüksekova","Şemdinli","Çukurca","Derecik"],"Hatay":["Antakya","İskenderun","Defne","Dörtyol","Samandağ","Kırıkhan","Reyhanlı","Erzin"],"Iğdır":["Iğdır City","Tuzluca","Aralık","Karakoyunlu"],"Isparta":["Isparta City","Yalvaç","Eğirdir","Şarkikaraağaç","Gelendost","Keçiborlu","Senirkent","Sütçüler"],"İstanbul":["Esenyurt","Küçükçekmece","Bağcılar","Kadıköy","Üsküdar","Beşiktaş","Fatih","Pendik"],"İzmir":["Buca","Karabağlar","Bornova","Bayraklı","Karşıyaka","Konak","Çiğli","Torbalı"],"Kahramanmaraş":["Onikişubat","Dulkadiroğlu","Elbistan","Afşin","Türkoğlu","Pazarcık","Göksun","Andırın"],"Karabük":["Karabük City","Safranbolu","Yenice","Eskipazar","Çerkeş border sector","Ovacık"],"Karaman":["Karaman City","Ermenek","Sarıveliler","Ayrancı","Kazımkarabekir","Başyayla"],"Kars":["Kars City","Sarıkamış","Kağızman","Digor","Selim","Arpaçay","Akyaka","Susuz"],"Kastamonu":["Kastamonu City","Tosya","Taşköprü","Cide","İnebolu","Araç","Devrekani","Bozkurt"],"Kayseri":["Melikgazi","Kocasinan","Talas","Develi","Yahyalı","Bünyan","Pınarbaşı","Tomarza"],"Kırıkkale":["Kırıkkale City","Yahşihan","Keskin","Delice","Bahşılı","Sulakyurt","Karakeçili","Balışeyh"],"Kırklareli":["Kırklareli City","Lüleburgaz","Babaeski","Vize","Pınarhisar","Demirköy","Pehlivanköy","Kofçaz"],"Kırşehir":["Kırşehir City","Kaman","Mucur","Çiçekdağı","Akpınar","Boztepe","Akçakent"],"Kilis":["Kilis City","Elbeyli","Musabeyli","Polateli"],"Kocaeli":["Gebze","İzmit","Darıca","Körfez","Gölcük","Derince","Çayırova","Kartepe"],"Konya":["Selçuklu","Meram","Karatay","Ereğli","Akşehir","Beyşehir","Seydişehir","Karapınar"],"Kütahya":["Kütahya City","Tavşanlı","Simav","Gediz","Emet","Altıntaş","Domaniç","Hisarcık"],"Malatya":["Yeşilyurt","Battalgazi","Doğanşehir","Akçadağ","Darende","Hekimhan","Yazıhan","Pütürge"],"Manisa":["Yunusemre","Şehzadeler","Akhisar","Turgutlu","Salihli","Soma","Alaşehir","Saruhanlı"],"Mardin":["Artuklu","Kızıltepe","Midyat","Nusaybin","Derik","Mazıdağı","Dargeçit","Savur"],"Mersin":["Tarsus","Toroslar","Yenişehir","Akdeniz","Mezitli","Erdemli","Silifke","Anamur"],"Muğla":["Bodrum","Fethiye","Milas","Menteşe","Marmaris","Seydikemer","Ortaca","Dalaman"],"Muş":["Muş City","Bulanık","Malazgirt","Hasköy","Korkut","Varto"],"Nevşehir":["Nevşehir City","Ürgüp","Avanos","Derinkuyu","Gülşehir","Kozaklı","Acıgöl","Hacıbektaş"],"Niğde":["Niğde City","Bor","Çiftlik","Ulukışla","Altunhisar","Çamardı"],"Ordu":["Altınordu","Ünye","Fatsa","Gölköy","Korgan","Kumru","Perşembe","Akkuş"],"Osmaniye":["Osmaniye City","Kadirli","Düziçi","Bahçe","Toprakkale","Sumbas","Hasanbeyli"],"Rize":["Rize City","Çayeli","Ardeşen","Pazar","Fındıklı","Güneysu","Kalkandere","İkizdere"],"Sakarya":["Adapazarı","Serdivan","Akyazı","Erenler","Hendek","Karasu","Geyve","Arifiye"],"Samsun":["İlkadım","Atakum","Bafra","Çarşamba","Canik","Vezirköprü","Terme","Tekkeköy"],"Şanlıurfa":["Haliliye","Eyyübiye","Siverek","Viranşehir","Karaköprü","Ceylanpınar","Suruç","Birecik"],"Siirt":["Siirt City","Kurtalan","Pervari","Baykan","Şirvan","Eruh","Tillo"],"Sinop":["Sinop City","Boyabat","Gerze","Ayancık","Durağan","Türkeli","Erfelek","Dikmen"],"Sivas":["Sivas City","Şarkışla","Yıldızeli","Suşehri","Zara","Kangal","Divriği","Gemerek"],"Şırnak":["Cizre","Silopi","Şırnak City","Idil","Uludere","Beytüşşebap","Güçlükonak"],"Tekirdağ":["Çorlu","Süleymanpaşa","Çerkezköy","Kapaklı","Ergene","Malkara","Saray","Hayrabolu"],"Tokat":["Tokat City","Erbaa","Turhal","Niksar","Zile","Reşadiye","Almus","Pazar"],"Trabzon":["Ortahisar","Akçaabat","Araklı","Of","Yomra","Arsin","Sürmene","Vakfıkebir"],"Tunceli":["Tunceli City","Pertek","Mazgirt","Ovacık","Hozat","Çemişgezek","Pülümür","Nazımiye"],"Uşak":["Uşak City","Banaz","Eşme","Sivaslı","Ulubey","Karahallı"],"Van":["İpekyolu","Tuşba","Edremit","Erciş","Özalp","Muradiye","Çaldıran","Gevaş"],"Yalova":["Yalova City","Çiftlikköy","Çınarcık","Altınova","Armutlu","Termal"],"Yozgat":["Yozgat City","Sorgun","Akdağmadeni","Yerköy","Boğazlıyan","Sarıkaya","Çekerek","Şefaatli"],"Zonguldak":["Zonguldak City","Ereğli (Karadeniz Ereğli)","Çaycuma","Devrek","Kozlu","Kilimli","Alaplı","Gökçebey"]},"Turkmenistan":{"Ashgabat (Capital City)":["Berkararlyk District","Kopetdag District","Bagtyyarlyk District","Buzmeyin District","Abadan sector","Choganly","Parahat (Mir) neighborhoods","Archabil avenue sector"],"Ahal":["Änew (Anau)","Tejen","Kaka","Sarahs (Serahs)","Bäherden","Gökdepe","Babadaýhan","Ýashlyk"],"Balkan":["Balkanabat","Türkmenbashy","Serdar (Gyzylarbat)","Bereket","Esenguly","Etrek","Magtymguly","Awaza"],"Daşoguz":["Daşoguz City","Köneürgenç (Kunye-Urgench)","Akdepe","Boldumsaz","Görogly","Gubadag","Saparbyrat Nyýazow sector","Shabat"],"Lebap":["Türkmenabat","Kerki","Gazojak","Saýat","Farap","Darganata","Döwletli","Halaç"],"Mary":["Mary City","Baýramaly","Ýolöten","Serhetabat (Gushgy)","Murgap","Sakarçäge","Wekilbazar","Türkmengala"]},"Tuvalu":{"Funafuti (Island Council)":["Vaiaku (Government centre)","Fakaifou","Alapi","Senala","Tengako","Amatuku","Fongafale","Mulitefala"],"Nanumaga (District Council)":["Tonga (Main village)","Tokelau (Main village)","Mangaia sector","Matagi","Sagalala","Teone"],"Nanumea (District Council)":["Lolua","Haumafa","Matagi","Motu Foliki","Teatua a Taepoa","Lakena"],"Niutao (District Council)":["Kulia","Teava","Tuapa","Angafoulua","Niulakita (Administered dependency island)"],"Nui (District Council)":["Tanrake","Fenua Tapu","Alamoni","Tokelau","Meang","Pongalei"],"Nukufetau (District Council)":["Savave","Fale","Motumua","Teafualiku","Sakuru","Lafaga"],"Nukulaelae (District Council)":["Fangaua","Tumiloto","Feage","Motukitoga","Niuoko","Kavutu"],"Vaitupu (District Council)":["Asau","Tumaseu","Motufoua sector","Temotu","Potufale","Alisano"]},"Uganda":{"Abim":["Abim Town","Alerek","Lotukei","Morulem","Nyakwae","Kiru"],"Adjumani":["Adjumani Town","Pakele","Dzaipi","Ciforo","Ukusijoni","Arinyapi"],"Agago":["Agago Town","Kalongo","Patongo","Adilang","Lukole","Wol"],"Alebtong":["Alebtong Town","Omoro","Aloi","Apala","Abia","Akura"],"Amolatar":["Amolatar Town","Namasale","Awelo","Muntu","Arwotcek","Aputi"],"Amudat":["Amudat Town","Karita","Loroo","Amudat Sector","Abiliyep"],"Amuria":["Amuria Town","Asamuk","Kuju","Wera","Abarilela","Willa"],"Amuru":["Amuru Town","Atiak","Pabo","Lamogi","Guru Guru","Olwal"],"Apac":["Apac Town","Ibuje","Chawente","Chegere","Akokoro","Aduku boundary sector"],"Arua":["Arua City","Vurra","Logiri","Pajulu","Ayivuni","Rhino Camp sector"],"Budaka":["Budaka Town","Iki-Iki","Kamonkoli","Naboa","Lyama","Kaderuna"],"Bududa":["Bududa Town","Bushika","Bulucheke","Bukalasi","Bukibokolo","Bumayoka"],"Bugiri":["Bugiri Town","Nankoma","Nabukalu","Buwunga","Iwemba","Kapyanga"],"Bugweri":["Busesa","Idudi","Iganga-busembatia axis","Buyanga","Makutu","Igombe"],"Buhweju":["Nsiika","Nsika Town","Nyakishana","Bihanga","Karungu","Burere"],"Buikwe":["Buikwe Town","Njeru","Lugazi","Nkokonjeru","Ngogwe","Najja"],"Bukedea":["Bukedea Town","Kachumbala","Kidongole","Malera","Kolir","Aligoi"],"Bukomansimbi":["Bukomansimbi Town","Butenga","Bigasa","Kitanda","Kibinge","Mirambi"],"Bukwo":["Bukwo Town","Suam","Chesower","Kortek","Riwo","Tulel"],"Bulambuli":["Bulambuli Town","Muyembe","Bwikhonge","Bunambutye","Masira","Lishutu"],"Buliisa":["Buliisa Town","Butiaba","Biiso","Ngwedo","Kihungya","Kigwera"],"Bundibugyo":["Bundibugyo Town","Nyahuka","Busaru","Kasitu","Bubukwanga","Ntandi"],"Bunyangabu":["Kibiito","Rwimi","Rubona","Kisomoro","Kabonero","Buheesi"],"Bushenyi":["Bushenyi Town","Ishaka","Kyamuhunga","Bumbaire","Nyabubare","Kyabugimbi"],"Busia":["Busia Town","Majanji","Lumino","Masafu","Bulumbi","Dabani"],"Butaleja":["Butaleja Town","Busolwe","Mazimasa","Himutu","Naweyo","Kachonga"],"Butambala":["Gombe Town","Bulo","Budde","Kalamba","Kibibi","Ngando"],"Butebo":["Butebo Town","Kakoro","Petete","Kabwangasi","Kanginima","Muyemu"],"Buvuma":["Kitamilo","Buvuma Town","Island Sector","Nairambi","Busamuzi","Bugaya"],"Buyende":["Buyende Town","Budiope","Kidera","Nkondo","Kagulu","Ndolwa"],"Dokolo":["Dokolo Town","Agwata","Kangai","Kwera","Adeknino","Amwoma"],"Gomba":["Kanoni","Maddu Town","Kabulasoke","Kyegonza","Mpenja","Kisozi"],"Gulu":["Gulu City","Pece","Layibi","Bardege","Laroo","Bobi"],"Hoima":["Hoima City","Kigorobya","Buseruka","Kitoba","Kyabigambire","Buhimba boundary sector"],"Ibanda":["Ibanda Town","Igorora","Kikyenkye","Ishongorero","Ruhoko","Bufunda"],"Iganga":["Iganga Town","Busembatia","Nakigo","Nakalama","Namungalwe","Nawanyago boundary sector"],"Isingiro":["Isingiro Town","Kabingo","Kikagate","Nyamitsindo","Kaberebere","Rushasha"],"Jinja":["Jinja City","Kakira","Bugembe","Mafubira","Buwenge","Walukuba"],"Kaabong":["Kaabong Town","Kathile","Lodwar sector","Sidok","Kapedo","Kalapata"],"Kabale":["Kabale Town","Kyanamira","Kitumba","Bubare","Maziba","Kaharo"],"Kabarole":["Fort Portal City","Mugusu","Kasenda","Karambi","Busoro","Kiko"],"Kaberamaido":["Kaberamaido Town","Ochero","Kobulubulu","Alwa","Aperkira","Bululu"],"Kagadi":["Kagadi Town","Muhorro","Mpeefu","Ruteete","Bwikara","Kabamba"],"Kakumiro":["Kakumiro Town","Kisiita","Mpasaana","Katikara","Kikuleta","Kakindo"],"Kalangala":["Kalangala Town","Bugala Island","Ssese Islands sector","Bufumira","Bukasa","Kyamuswa"],"Kaliro":["Kaliro Town","Namugongo sector","Bumanya","Gadumire","Nawaikoke","Kasokwe"],"Kalungu":["Kalungu Town","Lukaya","Kyamulibwa","Bukulula","Lwabenge","Bwesa"],"Kampala (Capital City)":["Central Division (Nakasero, Kololo, Kampala Hill)","Nakawa (Naguru, Bugolobi, Ntinda, Luzira)","Makindye (Muyenga, Kabalagala, Ggaba)","Rubaga (Menggo, Namirembe, Kasubi)","Kawempe (Mulago, Makerere, Kisaasi)"],"Kamuli":["Kamuli Town","Mbulamuti","Namasagali","Bugulumbya","Balawoli","Kitayunjwa"],"Kamwenge":["Kamwenge Town","Mahyoro","Kahunge","Nkoma","Bwizi","Kicheche"],"Kanungu":["Kanungu Town","Kihihi","Butogota","Kayonza","Kambuga","Mpungu"],"Kapchorwa":["Kapchorwa Town","Kaserem","Sipi","Tegeres","Amukol","Chema"],"Kapelebyong":["Kapelebyong Town","Acowa","Kuju boundary sector","Okungur","Obalanga","Amaseniko"],"Kasese":["Kasese Town","Mpondwe-Lhubiriha","Hima","Katwe-Kabatoro","Bwera","Kilembe"],"Katakwi":["Katakwi Town","Toroma","Usuk","Omutor sector","Kapujan","Ngariam"],"Kayunga":["Kayunga Town","Kangulumira","Bbaale","Nazigo","Galiraya","Kayonza"],"Kazo":["Kazo Town","Buremba","Kanoni Town sector","Nkensi","Engari","Rwemikoma"],"Kibaale":["Kibaale Town","Karuguuza","Mabaale","Nyamarunda","Bubango","Matale"],"Kiboga":["Kiboga Town","Lwamata Town","Bukomero","Muwanga","Kapeke","Kyiga"],"Kibuku":["Kibuku Town","Tirinyi","Kadama","Bulangira","Kasasira","Kagumu"],"Kikuube":["Kiziranfumbi","Kabwoya","Kyangwali","Bugambe","Buhimba","Kingo"],"Kiruhura":["Kiruhura Town","Rushere","Kinoni","Sanga","Nyakashashara","Kenshunga"],"Kiryandongo":["Kiryandongo Town","Karuma","Bweyale","Kigumba","Mutunda","Masindi Port sector"],"Kisoro":["Kisoro Town","Cyanika","Bunagana","Nyakabande","Nyarusiza","Muramba"],"Kitgum":["Kitgum Town","Mucwini","Namokora","Orom","Amida","Layamo"],"Koboko":["Koboko Town","Oraba","Ludara","Kuluba","Lobule","Midia"],"Kole":["Kole Town","Alito","Bala","Ayer","Aboke","Ilera"],"Kotido":["Kotido Town","Rengen","Kacheri","Nakapelimoru","Panyangara","Maru"],"Kumi":["Kumi Town","Nyero","Mukura","Atutur","Kanyum","Ongino"],"Kwania":["Nambieso","Chawente boundary sector","Inomo","Abongomola","Atongtidi","Adams sector"],"Kween":["Binyiny","Kaproron","Kwanyiny","Ngenge","Benet","Chemwania"],"Kyankwanzi":["Kyankwanzi Town","Butemba Town","Ntwetwe","Mulagi","Gayaza sector","Wattuba"],"Kyegegwa":["Kyegegwa Town","Kakabara","Hapuyo","Ruyonza","Mpara Town","Kasule"],"Kyenjojo":["Kyenjojo Town","Katooke","Bufunjo","Butunduzi","Nyabuharwa","Kyaka boundary sector"],"Kyotera":["Kyotera Town","Mutukula","Kasensero","Kakuuto","Kalisizo","Sanje"],"Lamwo":["Lamwo Town","Padibe Town","Lokung","Palabek Ogili","Palabek Kal","Agoro"],"Lira":["Lira City","Amach","Ogur","Barr","Adekokwok","Agali"],"Luuka":["Luuka Town","Kiyunga","Ikwendero","Irongo","Bukanga","Bukooma"],"Luwero":["Luwero Town","Wobulenzi","Bombo","Ziroobwe","Kamira","Kikyusa"],"Lwengo":["Lwengo Town","Kinoni Town","Mbiriizi","Kyazanga","Kingo","Malongo"],"Lyantonde":["Lyantonde Town","Kaliro sector","Mpumudde","Kasagama","Lyakajura","Kinuuka"],"Madi-Okollo":["Ogoko","Rhino Camp","Rigbo","Anyiribu","Offaka","Okollo"],"Manafwa":["Manafwa Town","Bubulo","Butiru","Bugobero","Sibanga","Kaato"],"Maracha":["Maracha Town (Oleba)","Nyadri","Oluvu","Tara","Yivu","Kijomoro"],"Masaka":["Masaka City","Nyendo","Kimanya","Kabonera","Bukakata","Kyanamukaka"],"Masindi":["Masindi Town","Budongo","Bujenje","Pakanyi","Kimengo","Miirya"],"Mayuge":["Mayuge Town","Kityerera","Bukatube","Kigandalo","Baitambogwe","Malongo"],"Mbale":["Mbale City","Wanale","Nakaloke","Busoba","Bungokho","Namanyonyi"],"Mbarara":["Mbarara City","Kakoba","Kamukuzi","Nyamitanga","Bubaare","Biharwe"],"Mitooma":["Mitooma Town","Kashenshero Town","Bitereko","Kiyanga","Katenga","Mutara"],"Mityana":["Mityana Town","Banda","Kakindu","Bulera","Maanyi","Sekanyonyi"],"Moroto":["Moroto Town","Nadunget","Rupa","Katikekile","Tapac","Loputuk"],"Moyo":["Moyo Town","Lefori Town","Metu","Dufile","Aluru","Gimara"],"Mpigi":["Mpigi Town","Buwama","Kammengo","Muduma","Kiringente","Kayabwe"],"Mubende":["Mubende Town","Kassanda boundary sector","Kiganda","Kitenga","Myanzi","Madudu"],"Mukono":["Mukono Town","Goma","Mabalala","Kalagi","Kigunga","Nakisunga"],"Nabilatuk":["Nabilatuk Town","Lolachat","Lorengedwat","Natirae","Kosike"],"Nacapiripirit":["Nakapiripirit Town","Namalu","Kakomongole","Loregae","Mourita"],"Nakaseke":["Nakaseke Town","Kiwoko Town","Ngoma Town","Semuto Town","Wakyato","Kapeeka"],"Nakasongola":["Nakasongola Town","Kakooge Town","Migyera Town","Lwampanga","Wabinyonyi","Kalungi"],"Namayingo":["Namayingo Town","Sigulu Islands","Mutumba","Banda sector","Buyinja","Buswale"],"Namisindwa":["Bupoto","Lwakhakha","Namisindwa Town","Magale Town","Bukwali","Mukoto"],"Namutumba":["Namutumba Town","Ivukula","Magada","Nsinze","Bulange","Kibaale sector"],"Napak":["Lorengecora","Iriri","Matany","Ngoleriet","Lokopo","Lopei"],"Nebbi":["Nebbi Town","Erussi","Kucwiny","Ndhew","Atego","Nyaravur"],"Ngora":["Ngora Town","Kapir","Kobwin","Mukura sector boundary","Odwarat"],"Ntoroko":["Rwebisengo","Kanara","Karugutu","Ntoroko Town","Kibuuku sector","Bweramule"],"Ntungamo":["Ntungamo Town","Rubaare","Kajara","Itojo","Ruhaama","Rwashamaire"],"Nwoya":["Anaka","Purongo","Koch Goma","Alero","Lungulu","Got Apwoyo"],"Obongi":["Obongi Town","Itula","Gimara sector boundary","Palorinya","Aliba"],"Omoro":["Palenga","Koro","Lalogi","Bobi boundary sector","Odek","Lakwana"],"Otuke":["Otuke Town","Olilim","Adwari","Okwang","Orum","Ogor"],"Oyam":["Oyam Town","Minakulu","Kamdini","Loro","Aber","Iceme"],"Pader":["Pader Town","Pajule","Puranga","Kilak","Lapul","Latanya"],"Pakwach":["Pakwach Town","Wadelai","Panyimur","Panyango","Alwi","Pokwero"],"Pallisa":["Pallisa Town","Butebo boundary sector","Agule","Gogonyo","Kamuge","Pututi"],"Rakai":["Kooki","Rakai Town","Lwanda","Kibaale sector","Kagamba","Byakabanda"],"Rubanda":["Rubanda Town","Muko","Bufundi","Hamurwa","Nyamweru","Ruhija"],"Rubirizi":["Rubirizi Town","Katerera","Bunyaruguru sector","Kyabakara","Magambo","Ryeru"],"Rukiga":["Mparo","Muhanga Town","Kashambya","Kamwezi","Rwamucucu","Bukinda"],"Rukungiri":["Rukungiri Town","Buyanja","Nyakagyeme","Kebisoni","Kihihi boundary sector","Bwambara"],"Rwampara":["Kinoni Town","Mwizi","Bugamba","Rugando","Ndeija","Rweibogo"],"Sembabule":["Sembabule Town","Lwebitakuli","Mateete Town","Lugusulu","Nntusi","Mijwala"],"Serere":["Serere Town","Kasilo","Bugondo","Kadungulu","Pingire","Olio"],"Sheema":["Kibingo","Kabwohe","Itendero","Itjo sector","Shuuku","Kagango"],"Sironko":["Sironko Town","Budadiri","Buhugu","Buteza","Masaba","Zesui"],"Soroti":["Soroti City","Gweri","Arapai","Asuret","Kamuda","Lale"],"Sukulu":["Sukulu Hills sector","Osukuru","Rubongi","Mukuju"],"Tororo":["Tororo Town","Malaba","Nagongera","Kwapa","Kisoko","Mella"],"Wakiso":["Entebbe","Kira","Nansana","Makindye Ssabagabo","Kajjansi","Kasangati"],"Yumbe":["Yumbe Town","Bidibidi sector","Romogi","Kululu","Kei","Kerwa"],"Zombo":["Zombo Town","Paidha","Warr","Zeu","Nyapea","Kango"]},"Ukraine":{"Cherkasy Oblast":["Cherkasy (Administrative Center)","Uman (Major pilgrimage and cultural hub)","Smila","Zolotonosha","Kaniv (Location of the Taras Shevchenko burial memorial)","Korsun-Shevchenkivskyi","Vatutine","Shpola"],"Chernihiv Oblast":["Chernihiv (Administrative Center / Historic medieval city)","Nizhyn (Famous for historical university and architecture)","Pryluky","Bakhmach (Major railway junction)","Novhorod-Siverskyi","Oster","Ichnia","Koriukivka"],"Chernivtsi Oblast":["Chernivtsi (Administrative Center / Cultural hub of Northern Bukovina)","Storozhynets","Khotyn (Famous for the Khotyn Fortress)","Novodnistrovsk","Sokyriany","Zastavna","Kitsman","Hertsa"],"Dnipropetrovsk Oblast":["Dnipro (Administrative Center / Major industrial and aerospace hub)","Kryvyi Rih (Major metallurgical center and longest city in Europe)","Kamianske","Nikopol","Pavlohrad (Mining hub)","Novomoskovsk","Marhanets","Zhovti Vody"],"Donetsk Oblast":["Donetsk (Official Administrative Center)","Kramatorsk (Interim administrative center)","Mariupol (Major port and industrial city on the Sea of Azov)","Makiivka","Horlivka","Sloviansk","Bakhmut","Pokrovsk"],"Ivano-Frankivsk Oblast":["Ivano-Frankivsk (Administrative Center)","Kolomyia (Cultural hub of the Hutsul region)","Kalush","Yaremche (Major Carpathian mountain resort gateway)","Dolyna","Nadvirna","Burshtyn","Rohatyn"],"Kharkiv Oblast":["Kharkiv (Administrative Center / Second-largest city in Ukraine)","Lozova (Major railway junction)","Izium","Chuhuiv","Kupiansk","Balakliia","Merefa","Krasnohrad"],"Kherson Oblast":["Kherson (Administrative Center / Major port on the Dnipro River)","Nova Kakhovka","Kakhovka","Skadovsk (Black Sea resort port)","Oleshyk (Oleshky)","Henichesk (Port town on the Sea of Azov)","Beryslav","Hola Prystan"],"Khmelnytskyi Oblast":["Khmelnytskyi (Administrative Center)","Kamianets-Podilskyi (Famous for its medieval castle landscape)","Shepetivka (Major railway hub)","Netishyn (Location of the Khmelnytskyi Nuclear Power Plant)","Slavuta","Starokostiantyniv","Polonne","Volochysk"],"Kirovohrad Oblast":["Kropyvnytskyi (Administrative Center)","Oleksandriia","Svitlovodsk (On the Kremenchuk Reservoir)","Znamianka (Major railway junction)","Novoukrainka","Haivoronsky","Dolynska","Blahovishchenske"],"Kyiv Oblast":["Kyiv (Serves as administrative center but is legally separate)","Bila Tserkva (Largest city in the oblast)","Brovary","Boryspil (Location of Ukraine's primary international airport)","Irpin","Bucha","Vyshhorod","Fastiv (Major railway hub)","Slavutych (Built for Chernobyl Nuclear Power Plant personnel)"],"Luhansk Oblast":["Luhansk (Official Administrative Center)","Sievierodonetsk (Interim administrative center)","Lysychansk","Alchevsk","Khrustalnyi (Krasnyi Luch)","Kadiivka (Stakhanov)","Rubizhne","Starobilsk"],"Lviv Oblast":["Lviv (Administrative Center / Major western cultural and historical hub)","Drohobych","Chervonohrad (Mining hub)","Stryi","Sambir","Truskavets (Famous mineral spa resort town)","Boryslav","Zolochiv"],"Mykolaiv Oblast":["Mykolaiv (Administrative Center / Major shipbuilding city)","Pervomaisk","Voznesensk","Yuzhnoukrainsk (Location of the South Ukraine Nuclear Power Plant)","Ochakiv (Black Sea port town)","Novyi Buh","Snihurivka","Bashtanka"],"Odesa Oblast":["Odesa (Administrative Center / Major maritime port and cultural hub)","Chornomorsk (Major commercial port)","Izmail (Largest Ukrainian port on the Danube River)","Bilhorod-Dnistrovskyi (Location of Akkerman Fortress)","Podilsk","Yuzhne (Port and industrial terminal)","Kilija","Reni"],"Poltava Oblast":["Poltava (Administrative Center)","Kremenchuk (Major industrial center on the Dnipro River)","Horishni Plavni","Lubny","Myrhorod (Famous spa resort town)","Hadiach","Pyriatyn","Karlivka"],"Rivne Oblast":["Rivne (Administrative Center)","Varash (Location of the Rivne Nuclear Power Plant)","Dubno","Kostopil","Sarny (Major regional transportation hub)","Zdolbuniv","Ostroh (Historical educational and printing center)","Berezne"],"Sumy Oblast":["Sumy (Administrative Center)","Konotop (Major railway and historical hub)","Shostka","Okhtyrka","Romny","Hlukhiv (Former capital of the Cossack Hetmanate)","Lebedyn","Krolevets"],"Ternopil Oblast":["Ternopil (Administrative Center)","Chortkiv","Kremenets","Berezhany","Terebovlia","Buchach","Borshchiv","Pochaiv (Home of the Pochaiv Lavra monastery)"],"Vinnytsia Oblast":["Vinnytsia (Administrative Center)","Zhmerynka (Major historic railway hub)","Mohyliv-Podilskyi (Border town near Moldova)","Khmilnyk (Famous balneological resort town)","Haisyn","Koziatyn","Ladyzhyn","Tulchyn"],"Volyn Oblast":["Lutsk (Administrative Center)","Kovel (Major transport and railway hub near borders)","Volodymyr (Volodymyr-Volynskyi / Ancient historical city)","Novovolynsk (Mining hub)","Kivertsi","Rozhyshche","Kamin-Kashyrskyi","Liuboml"],"Zakarpattia Oblast":["Uzhhorod (Administrative Center / Border city near Slovakia)","Mukachevo (Major cultural and economic hub with Palanok Castle)","Khust","Berehove (Cultural center of the Hungarian minority)","Vynohradiv","Rakhiv (Highest city in Ukraine / geographical center of Europe area)","Tiachiv","Svaliava"],"Zaporizhzhia Oblast":["Zaporizhzhia (Administrative Center / Major hydroelectric and industrial hub)","Melitopol","Berdiansk (Major port and resort city on the Sea of Azov)","Enerhodar (Location of the Zaporizhzhia Nuclear Power Plant)","Tokmak","Polohy","Vasylivka","Orikhiv"],"Zhytomyr Oblast":["Zhytomyr (Administrative Center)","Berdychiv (Historical cultural and religious hub)","Korosten (Major railway hub)","Novohrad-Volynskyi (Zviahel)","Malyn","Korostyshiv","Ovrush","Radomyshl"],"Autonomous Republic of Crimea":["Simferopol (Official Capital City)","Sevastopol (Legally separate but within the peninsula geographic zone)","Yalta (Famous southern resort coast city)","Kerch (Major port and historic gateway city)","Eupatoria (Yevpatoriya / Coastal family resort)","Feodosia","Bakhchysarai (Historical capital of the Crimean Khanate)","Dzhankoi (Major northern transport junction)"],"Kyiv (City with Special Status)":["Pechersk (Administrative and spiritual center)","Shevchenko (Historical and educational district)","Podil (Historic merchant and riverside quarter)","Solomianka (Transport hub sector)","Obolon","Darnytsia (Major left-bank sector)","Desna","Dnipro District"],"Sevastopol (City with Special Status)":["Gagarin District","Lenin District (City center core)","Nakhimov District","Balaklava (Historic coastal town and bay district)","Inkerman (Sub-town within the municipality)"]},"United Arab Emirates":{"Abu Dhabi":["Abu Dhabi City (Capital of the UAE and the Emirate)","Al Ain (Major inland garden city)","Madinat Zayed (Administrative center of Al Dhafra / Western Region)","Ruwais (Major industrial and housing hub)","Ghayathi","Liwa Oasis (Historical desert oasis region)","Mirfa","Delma Island"],"Ajman":["Ajman City (Capital City and primary urban hub)","Masfout (Inland mountainous exclave)","Manama (Agricultural inland exclave)","Al Hamidiyah","Al Chupka","Al Jirf"],"Dubai":["Dubai City (Capital City and largest metropolitan hub)","Jumeirah","Downtown Dubai","Dubai Marina","Deira (Historical commercial center)","Bur Dubai (Historical district)","Hatta (Mountainous resort exclave)","Jebel Ali (Major port and industrial zone)","Al Awir"],"Fujairah":["Fujairah City (Capital City)","Dibba Al-Fujairah (Second-largest town, coastal hub)","Qidfa","Al Badiyah (Home to the UAE's oldest standing mosque)","Masafi (Shared with Ras Al Khaimah)","Al Siji","Mirbah"],"Ras Al Khaimah":["Ras Al Khaimah City (Capital City)","Al Jazirah Al Hamra (Historic coastal town)","Rams","Digdaga","Khatt","Masafi (Shared with Fujairah)","Al Dhait"],"Sharjah":["Sharjah City (Capital City)","Khor Fakkan (Major East Coast port city / exclave)","Kalba (East Coast eco-tourism exclave)","Dibba Al-Hisn (East Coast exclave)","Dhaid (Central agricultural hub)","Al Madam","Mleiha (Historical and archaeological site)","Al Hamriyah"],"Umm Al Quwain":["Umm Al Quwain City (Capital City)","Falaj Al Mualla (Inland agricultural oasis town)","Al Salamah","Al Rafeah","Bi'atah"]},"United Kingdom":{"England":["London (Capital City of the United Kingdom and England)","Birmingham (Major industrial and commercial city)","Manchester (Cultural and economic hub of the North)","Leeds","Liverpool (Major port and cultural city)","Newcastle upon Tyne","Bristol","Sheffield","Nottingham","Southampton"],"Scotland":["Edinburgh (Capital City)","Glasgow (Largest city and economic hub)","Aberdeen (Major energy and port hub)","Dundee","Inverness (Administrative center of the Highlands)","Stirling","Perth","Dumfries"],"Wales":["Cardiff (Capital City)","Swansea (Second-largest city and coastal hub)","Newport","Wrexham (Major hub of North Wales)","Bangor","St Davids","Aberystwyth","Tenby"],"Northern Ireland":["Belfast (Capital City and largest city)","Derry / Londonderry (Second-largest city)","Lisburn","Newry","Armagh (Historical ecclesiastical capital)","Bangor","Enniskillen","Omagh"],"Anguilla (Overseas Territory)":["The Valley (Capital / Administrative Center)","Blowing Point (Main ferry port)","Sandy Ground","West End Village","Island Harbour","Stoney Ground"],"Bermuda (Overseas Territory)":["Hamilton (Capital City / Financial hub)","St. George's (Historic town / UNESCO World Heritage site)","Somerset Village","Flatts Village","Tucker's Town"],"British Antarctic Territory (Overseas Territory)":["Rothera Research Station (Main UK base)","Halley Research Station","Signy Research Station","Fossil Bluff (Forward operating station)","Sky Blu (Forward logistics facility)"],"British Indian Ocean Territory (Overseas Territory)":["Diego Garcia (Largest island / Location of the joint UK-US military facility)"],"British Virgin Islands (Overseas Territory)":["Road Town (Capital / located on Tortola)","Spanish Town (Virgin Gorda)","Great Harbour (Jost Van Dyke)","The Settlement (Anegada)","West End (Tortola)"],"Cayman Islands (Overseas Territory)":["George Town (Capital City / located on Grand Cayman)","West Bay (Grand Cayman)","Bodden Town (Grand Cayman / Former capital)","East End (Grand Cayman)","Cayman Brac (Stake Bay settlement)","Little Cayman (Blossom Village settlement)"],"Falkland Islands (Overseas Territory)":["Stanley (Capital / Sole city)","Goose Green (Camp settlement)","Port Howard (West Falkland)","Fox Bay (West Falkland)","Darwin","Fitzroy"],"Gibraltar (Overseas Territory)":["Westside (Primary urban and commercial district)","Changing of the Guard / Convent area (Administrative core)","Catalan Bay (Coastal village)","Europa Point (Southernmost point settlement)","Moorish Castle area"],"Montserrat (Overseas Territory)":["Brades (De facto Capital / Interim seat of government)","Little Bay (Future official capital port project)","Plymouth (Official Capital / Abandoned in the volcanic exclusion zone)","Salem","St. John's","Davy Hill"],"Pitcairn, Henderson, Ducie and Oeno Islands (Overseas Territory)":["Adamstown (Capital and sole settlement / located on Pitcairn Island)"],"Saint Helena, Ascension and Tristan da Cunha (Overseas Territory)":["Jamestown (Capital City / located on Saint Helena)","Georgetown (Administrative center / located on Ascension Island)","Edinburgh of the Seven Seas (Sole settlement / located on Tristan da Cunha)","Half Tree Hollow (Most populous area on Saint Helena)","Longwood (Saint Helena)"],"South Georgia and the South Sandwich Islands (Overseas Territory)":["King Edward Point (Administrative center and research base)","Grytviken (Abandoned historic whaling station)","Bird Island (Scientific research station)"],"Sovereign Base Areas of Akrotiri and Dhekelia (Overseas Territory)":["Episkopi Cantonment (Administrative Center / located in the Western Sovereign Base Area)","Akrotiri Village (Akrotiri Base Area)","Dhekelia Cantonment (Eastern Sovereign Base Area)","Ayios Nikolaos Station (Dhekelia Base Area)"],"Turks and Caicos Islands (Overseas Territory)":["Cockburn Town (Capital City / located on Grand Turk)","Providenciales (Largest city and main tourism / commercial hub)","Grace Bay (Providenciales)","Key Town (South Caicos)","Whitby (North Caicos)","Bottle Creek (North Caicos)"],"Guernsey (Crown Dependency)":["St. Peter Port (Capital City and main port)","St. Sampson","Vale","Castel","St. Martin","St. Anne (Sole town / located on the dependency island of Alderney)","Sark (Feudal community settlement)","Herm (Car-free island settlement)"],"Isle of Man (Crown Dependency)":["Douglas (Capital City and largest hub)","Ramsey (Major northern town)","Peel (Major western port town)","Castletown (Historical capital city)","Port Erin","Port St Mary","Laxey"],"Jersey (Crown Dependency)":["St. Helier (Capital City and primary economic hub)","St. Brelade (St. Aubin area)","St. Saviour","St. Ouen","Gorey (Located in St. Martin / St. Grouville parishes)","St. Lawrence"]},"United States":{"Alabama":["Montgomery (State Capital)","Birmingham (Largest city by metropolitan population)","Huntsville (Largest city by municipal population / aerospace hub)","Mobile (Major port city)","Tuscaloosa","Auburn","Decatur","Dothan"],"Alaska":["Juneau (State Capital)","Anchorage (Largest city and economic hub)","Fairbanks","Wasilla","Sitka (Largest city by land area)","Ketchikan","Kenai","Kodiak"],"Arizona":["Phoenix (State Capital and largest city)","Tucson","Mesa","Chandler","Scottsdale","Gilbert","Glendale","Tempe","Flagstaff","Yuma"],"Arkansas":["Little Rock (State Capital and largest city)","Fort Smith","Fayetteville","Springdale","Jonesboro","Rogers","North Little Rock","Conway","Hot Springs"],"California":["Sacramento (State Capital)","Los Angeles (Largest city)","San Diego","San Jose","San Francisco","Fresno","Oakhurst","Long Beach","Oakland","Bakersfield","Anaheim"],"Colorado":["Denver (State Capital and largest city)","Colorado Springs","Aurora","Fort Collins","Lakewood","Thornton","Arvada","Westminster","Pueblo","Boulder"],"Connecticut":["Hartford (State Capital)","Bridgeport (Largest city)","New Haven","Stamford","Waterbury","Norwalk","Danbury","New Britain","Greenwich"],"Delaware":["Dover (State Capital)","Wilmington (Largest city and economic hub)","Newark","Middletown","Smyrna","Milford","Seaford","Georgetown"],"Florida":["Tallahassee (State Capital)","Jacksonville (Largest city by population and land area)","Miami (Major metropolitan and cultural hub)","Tampa","Orlando (Major tourism hub)","St. Petersburg","Hialeah","Fort Lauderdale","Port St. Lucie","Cape Coral"],"Georgia":["Atlanta (State Capital and largest city)","Augusta (Augusta-Richmond County)","Columbus","Macon (Macon-Bibb County)","Savannah (Major port city)","Athens (Athens-Clarke County)","Sandy Springs","South Fulton","Roswell"],"Hawaii":["Honolulu (State Capital and largest city / located on Oahu)","Hilo (Largest settlement on the Big Island)","Kailua-Kona (Oahu / Hawaii Island)","Kaneohe (Oahu)","Kahului (Maui)","Kihei (Maui)","Lihue (Kaua'i administrative center)","Pearl City (Oahu)"],"Idaho":["Boise (State Capital and largest city)","Meridian","Nampa","Idaho Falls","Pocatello","Caldwell","Coeur d'Alene","Twin Falls","Lewiston"],"Illinois":["Springfield (State Capital)","Chicago (Largest city and major economic hub)","Aurora","Joliet","Naperville","Rockford","Elgin","Peoria","Champaign","Waukegan"],"Indiana":["Indianapolis (State Capital and largest city)","Fort Wayne","Evansville","South Bend","Carmel","Fishers","Bloomington","Hammond","Lafayette","Gary"],"Iowa":["Des Moines (State Capital and largest city)","Cedar Rapids","Davenport","Sioux City","Iowa City","Waterloo","Ankeny","Council Bluffs","Dubuque","Ames"],"Kansas":["Topeka (State Capital)","Wichita (Largest city)","Overland Park","Kansas City (KCK)","Olathe","Lawrence","Shawnee","Manhattan","Lenexa","Salina"],"Kentucky":["Frankfort (State Capital)","Louisville (Largest city / consolidated city-county)","Lexington (Consolidated city-county)","Bowling Green","Owensboro","Covington","Richmond","Georgetown","Florence","Hopkinsville"],"Louisiana":["Baton Rouge (State Capital)","New Orleans (Largest city and major cultural/port hub)","Shreveport","Lafayette","Lake Charles","Bossier City","Kenner","Monroe","Alexandria"],"Maine":["Augusta (State Capital)","Portland (Largest city and economic hub)","Lewiston","Bangor","South Portland","Auburn","Biddeford","Sanford","Brunswick"],"Maryland":["Annapolis (State Capital)","Baltimore (Largest city and major port hub)","Frederick","Rockville","Gaithersburg","Bowie","Hagerstown","Annapolis","Salisbury"],"Massachusetts":["Boston (State Capital and largest city)","Worcester","Springfield","Cambridge","Lowell","Brockton","Quincy","Lynn","New Bedford","Fall River"],"Michigan":["Lansing (State Capital)","Detroit (Largest city and major industrial hub)","Grand Rapids","Warren","Sterling Heights","Ann Arbor","Flint","Dearborn","Livonia","Troy"],"Minnesota":["St. Paul (State Capital)","Minneapolis (Largest city / Twin Cities hub)","Rochester (Home of the Mayo Clinic)","Duluth (Major Great Lakes port)","Bloomington","Brooklyn Park","Plymouth","Woodbury","Lakeville","St. Cloud"],"Mississippi":["Jackson (State Capital and largest city)","Gulfport (Major coastal port city)","Southaven","Biloxi","Hattiesburg","Meridian","Tupelo","Olive Branch"],"Missouri":["Jefferson City (State Capital)","Kansas City (Largest city)","St. Louis (Major historical and economic hub)","Springfield","Columbia (Home of the University of Missouri)","Independence","Lee's Summit","O'Fallon"],"Montana":["Helena (State Capital)","Billings (Largest city)","Missoula","Great Falls","Bozeman","Butte","Kalispell","Havre"],"Nebraska":["Lincoln (State Capital)","Omaha (Largest city and economic hub)","Bellevue","Grand Island","Kearney","Fremont","Hastings","North Platte"],"Nevada":["Carson City (State Capital)","Las Vegas (Largest city and global tourism hub)","Henderson","Reno","North Las Vegas","Sparks","Elko","Boulder City"],"New Hampshire":["Concord (State Capital)","Manchester (Largest city)","Nashua","Derry","Dover","Rochester","Portsmouth (Major port town)","Keene"],"New Jersey":["Trenton (State Capital)","Newark (Largest city and major transport hub)","Jersey City","Paterson","Elizabeth","Edison","Woodbridge","Lakewood"],"New Mexico":["Santa Fe (State Capital)","Albuquerque (Largest city)","Las Cruces","Rio Rancho","Roswell","Farmington","Clovis","Hobbs"],"New York":["Albany (State Capital)","New York City (Largest city and global economic hub)","Buffalo","Rochester","Yonkers","Syracuse","New Rochelle","Mount Vernon"],"North Carolina":["Raleigh (State Capital)","Charlotte (Largest city and financial hub)","Greensboro","Durham","Winston-Salem","Fayetteville","Cary","Wilmington (Major port city)"],"North Dakota":["Bismarck (State Capital)","Fargo (Largest city)","Grand Forks","Minot","West Fargo","Williston (Oil industry hub)","Dickinson","Mandan"],"Ohio":["Columbus (State Capital and largest city)","Cleveland (Major Great Lakes port and industrial city)","Cincinnati","Toledo","Akron","Dayton","Parma","Canton"],"Oklahoma":["Oklahoma City (State Capital and largest city)","Tulsa","Norman","Broken Arrow","Edmond","Lawton","Moore","Midwest City"],"Oregon":["Salem (State Capital)","Portland (Largest city and economic hub)","Eugene","Gresham","Hillsboro","Beaverton","Bend","Medford"],"Pennsylvania":["Harrisburg (State Capital)","Philadelphia (Largest city and historical hub)","Pittsburgh","Allentown","Reading","Erie","Scranton","Bethlehem"],"Rhode Island":["Providence (State Capital and largest city)","Cranston","Warwick","Pawtucket","East Providence","Woonsocket","Coventry","Cumberland"],"South Carolina":["Columbia (State Capital)","Charleston (Largest city and historic port hub)","North Charleston","Mount Pleasant","Rock Hill","Greenville","Myrtle Beach (Major coastal resort)","Spartanburg"],"South Dakota":["Pierre (State Capital)","Sioux Falls (Largest city)","Rapid City (Gateway to Mt. Rushmore)","Aberdeen","Brookings","Watertown","Mitchell","Yankton"],"Tennessee":["Nashville (State Capital / Country music hub)","Memphis (Largest city by municipal population / major logistics hub)","Knoxville","Chattanooga","Clarksville","Murfreesboro","Franklin","Jackson"],"Texas":["Austin (State Capital and tech hub)","Houston (Largest city and energy hub)","San Antonio","Dallas (Major financial and commercial hub)","Fort Worth","El Paso","Arlington","Corpus Christi"],"Utah":["Salt Lake City (State Capital and largest city)","West Valley City","West Jordan","Provo","Orem","Sandy","St. George","Ogden"],"Vermont":["Montpelier (State Capital / Smallest state capital by population)","Burlington (Largest city)","South Burlington","Rutland","Barre","Winooski","St. Albans","Newport"],"Virginia":["Richmond (State Capital)","Virginia Beach (Largest city by population)","Norfolk (Major naval and port base)","Chesapeake","Arlington (County treated as an urban center)","Newport News","Alexandria","Hampton"],"Washington":["Olympia (State Capital)","Seattle (Largest city and commercial/tech hub)","Spokane","Tacoma","Vancouver","Bellevue","Kent","Everett"],"West Virginia":["Charleston (State Capital and largest city)","Huntington","Morgantown (Home of West Virginia University)","Parkersburg","Wheeling","Weirton","Martinsburg","Beckley"],"Wisconsin":["Madison (State Capital)","Milwaukee (Largest city and major port)","Green Bay","Kenosha","Racine","Appleton","Waukesha","Oshkosh"],"Wyoming":["Cheyenne (State Capital and largest city)","Casper","Laramie","Gillette","Rock Springs","Sheridan","Green River","Evanston","Washington, D.C. (Federal District)","Northwest (NW) Quadrant","Northeast (NE) Quadrant","Southwest (SW) Quadrant","Southeast (SE) Quadrant","Georgetown","Capitol Hill","Anacostia","Adams Morgan"],"American Samoa (Territory)":["Pago Pago (Territorial Capital / Administrative center)","Tafuna (Largest village)","Leone","Faleniu","Ili'ili","Fagatogo"],"Guam (Territory)":["Hagåtña (Territorial Capital)","Dededo (Most populous village)","Tamuning (Commercial hub / Tumon tourist district)","Yigo","Mangilao","Apra Harbor (Major port area)"],"Northern Mariana Islands (Territory)":["Saipan (Capital Island / Administrative center based in Capitol Hill)","Garapan (Saipan commercial/tourist center)","Chalan Kanoa (Saipan)","Tinian (San Jose village)","Rota (Songsong village)"],"Puerto Rico (Territory)":["San Juan (Territorial Capital and largest city)","Bayamón","Carolina","Ponce (Major southern city)","Caguas","Mayagüez","Guaynabo","Arecibo"],"U.S. Virgin Islands (Territory)":["Charlotte Amalie (Territorial Capital / located on St. Thomas)","Christiansted (St. Croix)","Frederiksted (St. Croix)","Cruz Bay (St. John)","Red Hook (St. Thomas)"],"United States Minor Outlying Islands (Territory)":["Midway Atoll (Sand Island)","Wake Island","Johnston Atoll","Palmyra Atoll","Kingman Reef","Jarvis Island","Baker Island","Howland Island","Navassa Island"]},"Uruguay":{"Artigas":["Artigas City (Capital City)","Bella Unión (Major northern border town)","Tomás Gomensoro","Baltasar Brum","Las Piedras (Artigas)","Sequeira"],"Canelones":["Canelones City (Capital City)","Ciudad de la Costa (Largest city / major metropolitan coastal area)","Las Piedras (Major urban center)","Pando","Atlántida (Major coastal resort town)","Santa Lucía","Progress","Paso Carrasco","San Ramón"],"Cerro Largo":["Melo (Capital City)","Río Branco (Important border town near Brazil)","Fraile Muerto","Isidoro Noblía","Aceguá","Tupambaé"],"Colonia":["Colonia del Sacramento (Capital City / UNESCO World Heritage site)","Carmelo","Nueva Helvecia (Also known as Colonia Suiza)","Juan Lacaze","Tarariras","Nueva Palmira (Important fluvial port)","Rosario","Colonia Valdense"],"Durazno":["Durazno City (Capital City)","Sarandí del Yí","Villa del Carmen","La Paloma (Durazno)","Centenario","Carlos Reyles"],"Flores":["Trinidad (Capital City)","Ismael Cortinas","Juan José Castro","La Casilla"],"Florida":["Florida City (Capital City)","Sarandí Grande","Casupá","Fray Marcos","25 de Mayo","Cardal (Known as the capital of milk)"],"Lavalleja":["Minas (Capital City)","José Pedro Varela","Solís de Mataojo","Mariscala","José Batlle y Ordóñez","Pirarajá"],"Maldonado":["Maldonado City (Capital City)","Punta del Este (World-famous luxury beach resort peninsula)","San Carlos","Piriápolis (Historic coastal resort town)","Pan de Azúcar","Aiguá","Punta Ballena"],"Montevideo":["Montevideo City (Capital City of Uruguay and its departments share boundaries)","Ciudad Vieja (Historic Old Town)","Pocitos","Carrasco","Centro","Prado","Malvín","Aguada"],"Paysandú":["Paysandú City (Capital City)","Guichón","Quebracho","Tambores (Shared with Tacuarembó)","Lorenzo Geyres","Piedras Coloradas"],"Río Negro":["Fray Bentos (Capital City / UNESCO World Heritage industrial landscape)","Young","Nuevo Berlín","San Javier (Famous for its Russian heritage foundations)","Algorta"],"Rivera":["Rivera City (Capital City / Forms a unified border urban area with Santana do Livramento, Brazil)","Tranqueras","Mandubí","Vichadero","Minas de Corrales"],"Rocha":["Rocha City (Capital City)","Chuy (Major border commercial town dividing Uruguay and Brazil)","Castillos","Lascano","La Paloma (Major coastal surf and beach town)","Punta del Diablo (Famous seaside fishing/tourist village)","La Pedrera","Cabo Polonio (Protected coastal wilderness hamlet)"],"Salto":["Salto City (Capital City / Uruguay's second-largest urban center)","Constitución","Belén","Daymán (Famous for its hot springs resort infrastructure)","San Antonio"],"San José":["San José de Mayo (Capital City)","Ciudad del Plata (Major metropolitan commuter zone)","Libertad","Rodríguez","Ecilda Paullier","Rafael Perazza"],"Soriano":["Mercedes (Capital City)","Dolores","Cardona","Chacras de Dolores","Palmitas","Villa Soriano (One of the oldest European settlements in the country)"],"Tacuarembó":["Tacuarembó City (Capital City)","Paso de los Toros","San Gregorio de Polanco (Known for its lakeside beaches and open-air artwork murals)","Ansina","Curtina","Treinta y Tres","Treinta y Tres City (Capital City)","Vergara","Santa Clara de Olimar","Cerro Chato","General Enrique Martínez (Charqueada)","Ejido de Treinta y Tres"]},"Uzbekistan":{"Andijan":["Andijan City (Administrative Center)","Asaka (Major automotive manufacturing hub)","Shahrixon","Qorasuv (Border town)","Xonobod","Marxamat","Paxtaobod","Jalaquduq"],"Bukhara":["Bukhara City (Administrative Center / UNESCO World Heritage site)","Kogon (Major railway junction)","Gijduvon (Famous for ceramics)","Qorakoʻl","Vobkent","Jondor","Olot","Shofirkon"],"Fergana":["Fergana City (Administrative Center)","Kokand (Historical capital of the Kokand Khanate)","Margilan (Famous for traditional silk production)","Kuva","Rishton (Famous for blue-glazed pottery)","Yaypan","Quvasoy","Oltiariq"],"Jizzakh":["Jizzakh City (Administrative Center)","Gʻallaorol","Dashtobod","Paxtakor","Doʻstlik","Zomin (Known for its mountain resort national park)","Gagarin"],"Khorazm":["Urgench (Administrative Center)","Khiva (UNESCO World Heritage museum-city)","Gurlan","Shovot","Xonqa","Qoʻshkoʻpir","Pitnak","Hazorasp"],"Namangan":["Namangan City (Administrative Center)","Chust (Famous for traditional knives and skullcaps)","Kosonsoy","Uchqoʻrgʻon","Toʻraqoʻrgʻon","Pop (Major transport gateway via Kamchik Pass)","Chortoq (Known for mineral springs)","Haqqulobod"],"Navoiy":["Navoiy City (Administrative Center / Major industrial hub)","Zarafshon (Gold mining center)","Uchquduq (Mining town)","Nurota (Historical and pilgrimage site)","Qiziltepa","Karmana","Gʻozgʻon"],"Qashqadaryo":["Qarshi City (Administrative Center)","Shahrisabz (Birthplace of Timur / UNESCO World Heritage site)","Kitob","Koson","Muborak (Gas industry hub)","Yakkabogʻ","Gʻuzor","Chiroqchi","Kamashi"],"Samarqand":["Samarqand City (Administrative Center / Historical Silk Road capital)","Kattaqoʻrgʻon (Second-largest city in the region)","Urgut (Famous for its large traditional bazaar)","Oqtosh","Bulungʻur","Juma","Chelak","Payariq (Near Imam al-Bukhari complex)"],"Sirdaryo":["Guliston (Administrative Center)","Shirin (Location of the Syr Darya Power Plant)","Sirdaryo City","Baxt","Yangiyer","Oqoltin","Sayxunobod"],"Surxondaryo":["Termez (Administrative Center / Southernmost city bordering Afghanistan)","Denov (Major commercial center in the oasis)","Sherobod","Jarqoʻrgʻon","Shoʻrchi","Boysun (UNESCO cultural heritage landscape)","Qumqoʻrgʻon","Shargʻun"],"Tashkent (Region)":["Nurafshon (Administrative Center / Formerly Toitepa)","Chirchiq (Industrial city)","Angren (Coal mining hub)","Olmaliq (Major metallurgical center)","Bekobod (Steel manufacturing hub)","Yangiyoʻl","Gʻazalkent (Gateway to Chimgan mountains)","Chinoz"],"Tashkent (Independent City)":["Yunusabad","Mirzo Ulugbek","Chilanzar","Yashnabad (Formerly Hamza)","Shaykhontohur","Yakkasaray","Mirobod","Olmazor","Uchtepa","Sergeli","Yangihayot","Bektemir"],"Republic of Karakalpakstan (Autonomous Republic)":["Nukus (Capital City / Home of the Savitsky Avant-Garde Art Museum)","Xoʻjayli","Qoʻngʻirot (Major transport stop on the way to western borders)","Moʻynoq (Former port city on the retreating Aral Sea)","Toʻrtkoʻl (Former capital)","Beruniy","Chimboy","Mangit","Taxiatosh"]},"Vanuatu":{"Malampa":["Lakatoro (Administrative Center / located on Malekula)","Norsup (Malekula)","Lamap (Malekula)","Craig Cove (Ambrym)","Eas (Ambrym)","Liro (Paama)"],"Penama":["Saratamata (Administrative Center / located on Ambae)","Longana (Ambae)","Loltong (Pentecost)","Lonorore (Pentecost)","Pangi (Pentecost)","Liseiriki (Maewo)"],"Sanma":["Luganville (Administrative Center / Vanuatu's second-largest city, located on Espiritu Santo)","Hog Harbour (Espiritu Santo)","Port Olry (Espiritu Santo)","Champagne Beach area (Espiritu Santo)","Asanvari (Malo)"],"Shefa":["Port Vila (Capital City of Vanuatu / located on Éfaté)","Bauerfield (Area surrounding the international airport)","Mele (Éfaté)","Teouma (Éfaté)","Morua (Tongoa / Shepherd Islands)","Tongariki (Shepherd Islands)"],"Tafea":["Isangel (Administrative Center / located on Tanna)","Lénakel (Largest port town on Tanna)","White Grass (Tanna)","Ipota (Erromango)","Dillon's Bay (Erromango)","Anelghowhat (Aneityum)"],"Torba":["Sola (Administrative Center / located on Vanua Lava, Banks Islands)","Mota Lava (Banks Islands)","Ureparapara (Banks Islands)","Loh (Torres Islands)","Tog (Torres Islands)","St. Peter's Square (Piazza San Pietro)","St. Peter's Basilica (Basilica di San Pietro)","Vatican Museums (Musei Vaticani)","Sistine Chapel (Cappella Sistina)","Vatican Gardens (Giardini Vaticani)","Apostolic Palace (Palazzo Apostolico)","Governatorate Palace (Palazzo del Governatorato)","Domus Sanctae Marthae (St. Martha's House)"]},"Venezuela":{"Amazonas":["Puerto Ayacucho (Capital City)","San Fernando de Atabapo","Maroa","San Carlos de Río Negro","San Juan de Manapiare","San Fernando de Guainía","La Esmeralda"],"Anzoátegui":["Barcelona (Capital City)","Puerto La Cruz (Major coastal / port city)","El Tigre","Anaco","Guanta","Lechería","Cantaura","Pariaguán","Soledad","Puerto Píritu"],"Apure":["San Fernando de Apure (Capital City)","Guasdualito","Achaguas","Elorza","Biruaca","Bruzual","San Juan de Payara"],"Aragua":["Maracay (Capital City)","Turmero","El Limón","La Victoria","Cagua","Villa de Cura","Palo Negro","San Mateo","Ocumare de la Costa","Choroní"],"Barinas":["Barinas City (Capital City)","Socopó","Sabaneta","Ciudad Bolivia","Pedraza","Barinitas","Santa Bárbara de Barinas","Obispos"],"Bolívar":["Ciudad Bolívar (Capital City)","Ciudad Guayana (Largest city / includes Puerto Ordaz and San Félix)","Upata","Caicara del Orinoco","Tumeremo","El Callao","Santa Elena de Uairén (Border town near Brazil)","Guasipati"],"Carabobo":["Valencia (Capital City)","Puerto Cabello (Major commercial port city)","Guacara","Naguanagua","San Diego","Tocuyito","Mariara","Morón","San Joaquín"],"Cojedes":["San Carlos (Capital City)","Tinaquillo","Las Vegas","El Pao","El Baúl","Macapo","Tinaco"],"Delta Amacuro":["Tucupita (Capital City)","Pedernales","Curiapo","Sierra Imataca","Piacoa"],"Falcón":["Coro (Capital City / UNESCO World Heritage site)","Punto Fijo (Major industrial city / Paraguaná Peninsula)","Puerto Cumarebo","Tucacas (Chichiriviche gateway / Morrocoy National Park)","Churuguara","Dabajuro","La Vela de Coro","Mene de Mauroa"],"Guárico":["San Juan de los Morros (Capital City)","Valle de la Pascua","Calabozo","Zaraza","Altagracia de Orituco","El Sombrero","Las Mercedes del Llano","Camaguán"],"Lara":["Barquisimeto (Capital City)","Cabudare","Carora","El Tocuyo","Quíbor","Duaca","Sanare","Siquisique"],"Mérida":["Mérida City (Capital City / Andean hub)","El Vigía","Tovar","Ejido","Mucuchíes","Lagunillas","Bailadores","Santo Domingo","Timotes"],"Miranda":["Los Teques (Capital City)","Petare (Part of the Caracas metropolitan area)","Baruta (Part of the Caracas metropolitan area)","Chacao (Part of the Caracas metropolitan area)","El Hatillo (Part of the Caracas metropolitan area)","Guarenas","Guatire","Charallave","Cúa","Ocumare del Tuy","Higuerote","Río Chico"],"Monagas":["Maturín (Capital City)","Punta de Mata","Caripe (Guácharo Cave area)","Caripito","Temblador","Caicara de Maturín","Aragua de Maturín"],"Nueva Esparta":["La Asunción (Capital City)","Porlamar (Largest commercial city)","Pampatar","Juan Griego","Punta de Piedras (Main ferry port)","San Juan Bautista","Santa Ana","San Pedro de Coche (Coche Island)"],"Portuguesa":["Guanare (Capital City)","Acarigua","Araure","Villa Bruzual","Píritu","Ospino","Biscucuy"],"Sucre":["Cumaná (Capital City)","Carúpano","Güiria","Casanay","Cariaco","El Pilar","Río Caribe","Araya"],"Táchira":["San Cristóbal (Capital City)","Táriba","San Antonio del Táchira (Busy border town near Colombia)","Ureña (Border town)","Rubio","La Grita","Colón","Michelena","La Fría"],"Trujillo":["Trujillo City (Capital City)","Valera (Largest commercial city)","Boconó","Carache","Monay","Pampán","La Puerta","Sabana de Mendoza"],"Yaracuy":["San Felipe (Capital City)","Yaritagua","Chivacoa","Nirgua","Cocorote","Urachiche","Aroa"],"Zulia":["Maracaibo (Capital City / Second-largest city in Venezuela)","San Francisco","Cabimas (Oil hub on the eastern shore)","Ciudad Ojeda","Machiques","Santa Bárbara del Zulia","Bachaquero","Lagunillas","Los Puertos de Altagracia","Mene Grande"],"La Guaira":["La Guaira (Capital City / Main maritime port for Caracas)","Maiquetía (Location of Simón Bolívar International Airport)","Catia La Mar","Macuto","Caraballeda","Naiguatá","Carayaca"],"Caracas (Capital District)":["Libertador Municipality"],"Federal Dependencies of Venezuela":["Gran Roque (Administrative hub and only permanently inhabited town / Los Roques Archipelago)","La Tortuga Island","Orchila Island","Blanquilla Island","Testigos Islands","Aves Island"]},"Vietnam":{"An Giang":["Long Xuyên (Capital City)","Châu Đốc (City near the Cambodian border)","Tân Châu (Town)","Tịnh Biên (Town)","Thoại Sơn","Chợ Mới","Phú Tân","An Phú"],"Bà Rịa-Vũng Tàu":["Vũng Tàu (Largest city / Coastal hub)","Bà Rịa (Capital City)","Phú Mỹ (Town / Major industrial port)","Long Điền","Đất Đỏ","Xuyên Mộc","Châu Đức","Côn Đảo (Island district)"],"Bắc Giang":["Bắc Giang City (Capital City)","Chũ (Town)","Việt Yên (Town)","Hiệp Hòa","Lạng Giang","Lục Nam","Yên Dũng","Tân Yên","Yên Thế","Sơn Động"],"Bắc Kạn":["Bắc Kạn City (Capital City)","Chợ Đồn","Ba Bể (Near Ba Bể Lake)","Ngân Sơn","Chợ Mới","Na Rì","Bạch Thông","Pác Nặm"],"Bạc Liêu":["Bạc Liêu City (Capital City)","Giá Rai (Town)","Hòa Bình","Vĩnh Lợi","Phước Long","Hồng Dân","Đông Hải"],"Bắc Ninh":["Bắc Ninh City (Capital City)","Từ Sơn (City)","Thuận Thành (Town)","Quế Võ (Town)","Tiên Du","Yên Phong","Gia Bình","Lương Tài"],"Bến Tre":["Bến Tre City (Capital City)","Châu Thành","Chợ Lách","Mỏ Cày Bắc","Mỏ Cày Nam","Giồng Trôm","Ba Tri","Bình Đại","Thạnh Phú"],"Bình Định":["Quy Nhơn (Capital City)","An Nhơn (Town)","Hoài Nhơn (Town)","Tuy Phước","Phù Cát","Phù Mỹ","Tây Sơn","Hoài Ân","Vĩnh Thạnh","Vân Canh","An Lão"],"Bình Dương":["Thủ Dầu Một (Capital City)","Thuận An (City)","Dĩ An (City)","Tân Uyên (City)","Bến Cát (City)","Dầu Tiếng","Bàu Bàng","Phú Giáo","Bắc Tân Uyên"],"Bình Phước":["Đồng Xoài (Capital City)","Bình Long (Town)","Phước Long (Town)","Chơn Thành (Town)","Lộc Ninh","Hớn Quản","Bù Đốp","Bù Đăng","Đồng Phú","Phú Riềng","Bù Gia Mập"],"Bình Thuận":["Phan Thiết (Capital City / Mũi Né resort area)","La Gi (Town)","Tuy Phong","Bắc Bình","Hàm Thuận Bắc","Hàm Thuận Nam","Tánh Linh","Đức Linh","Hàm Tân","Phú Quý (Island district)"],"Cà Mau":["Cà Mau City (Capital City)","Năm Căn","Sông Đốc","Cái Nước","Đầm Dơi","Trần Văn Thời","Thới Bình","U Minh","Ngọc Hiển"],"Cần Thơ (Municipality)":["Ninh Kiều (Central urban district)","Cái Răng (Home of the floating market)","Bình Thủy","Ô Môn","Thốt Nốt","Phong Điền","Thới Lai","Cờ Đỏ","Vĩnh Thạnh"],"Cao Bằng":["Cao Bằng City (Capital City)","Quảng Uyên","Trùng Khánh (Near Bản Giốc Waterfall)","Trà Lĩnh","Hà Quảng","Hòa An","Nguyên Bình","Thạch An","Bảo Lạc","Bảo Lâm"],"Đà Nẵng (Municipality)":["Hải Châu (Central urban district)","Thanh Khê","Sơn Trà (Sơn Trà Peninsula)","Ngũ Hành Sơn (Marble Mountains area)","Liên Chiểu","Cẩm Lệ","Hòa Vang","Hoàng Sa (Paracel Islands district)"],"Đắk Lắk":["Buôn Ma Thuột (Capital City / Coffee capital)","Buôn Hồ (Town)","Krông Pắc","Ea Kar","Ea H'leo","Krông Ana","Cư M'gar","Krông Bông","Krông Năng","Lắk","Buôn Đôn"],"Đắk Nông":["Gia Nghĩa (Capital City)","Cư Jút","Đắk Mil","Đắk R'lấp","Đắk Song","Krông Nô","Tuy Đức","Đắk Glong"],"Điện Biên":["Điện Biên Phủ City (Capital City / Historical battlefield)","Mường Lay (Town)","Điện Biên","Điện Biên Đông","Tuần Giáo","Tủa Chùa","Mường Chà","Mường Nhé","Nậm Pồ","Mường Ảng"],"Đồng Nai":["Biên Hòa (Capital City / Major industrial hub)","Long Khánh (City)","Long Thành (Location of Long Thành Airport project)","Nhơn Trạch","Trảng Bom","Thống Nhất","Vĩnh Cửu","Định Quán","Tân Phú","Cẩm Mỹ","Xuân Lộc"],"Đồng Tháp":["Cao Lãnh (Capital City)","Sa Đéc (City / Famous flower village)","Hồng Ngự (City)","Lấp Vò","Lai Vung","Châu Thành","Tam Nông (Tram Chim National Park area)","Thanh Bình","Tháp Mười","Cao Lãnh District","Hồng Ngự District"],"Gia Lai":["Pleiku (Capital City)","An Khê (Town)","Ayun Pa (Town)","Đak Đoa","Chư Prông","Chư Sê","Chư Pưh","Đak Pơ","Đức Cơ","Ia Grai","Ia Pa","Kông Chro","Krông Pa","Mang Yang","Phú Thiện","Chư Păh"],"Hà Giang":["Hà Giang City (Capital City)","Đồng Văn (Karst Plateau geopark hub)","Mèo Vạc","Yên Minh","Quản Bạ","Vị Xuyên","Bắc Mê","Hoàng Su Phì","Xín Mần","Bắc Quang","Quang Bình"],"Hà Nam":["Phủ Lý (Capital City)","Duy Tiên (Town)","Kim Bảng (Town / Tam Chúc pagoda area)","Thanh Liêm","Lý Nhân","Bình Lục"],"Hà Nội (Municipality)":["Hoàn Kiếm (Historical Old Quarter)","Ba Đình (Political center)","Tây Hồ (West Lake area)","Hai Bà Trưng","Đống Đa","Cầu Giấy","Long Biên","Thanh Xuân","Hoàng Mai","Hà Đông","Bắc Từ Liêm","Nam Từ Liêm","Sơn Tây (Town)","Ba Vì","Đông Anh","Gia Lâm","Sóc Sơn"],"Hà Tĩnh":["Hà Tĩnh City (Capital City)","Hồng Lĩnh (Town)","Kỳ Anh (Town)","Nghi Xuân","Đức Thọ","Hương Sơn","Hương Khê","Vũ Quang","Cẩm Xuyên","Thạch Hà","Can Lộc","Lộc Hà"],"Hải Dương":["Hải Dương City (Capital City)","Chí Linh (City)","Kinh Môn (Town)","Bình Giang","Cẩm Giàng","Gia Lộc","Kim Thành","Nam Sách","Ninh Giang","Thanh Hà","Thanh Miện","Tứ Kỳ"],"Hải Phòng (Municipality)":["Hồng Bàng (Central urban district)","Lê Chân","Ngô Quyền","Hải An","Kiến An","Đồ Sơn (Coastal resort district)","Dương Kinh","Thủy Nguyên (Designated to become a city)","An Dương","An Lão","Kiến Thụy","Tiên Lãng","Vĩnh Bảo","Cát Hải (Cát Bà Island area)","Bạch Long Vĩ (Offshore island district)"],"Hậu Giang":["Vị Thanh (Capital City)","Ngã Bảy (City)","Long Mỹ (Town)","Châu Thành","Châu Thành A","Phụng Hiệp","Vị Thủy","Long Mỹ District"],"Hòa Bình":["Hòa Bình City (Capital City)","Lương Sơn","Cao Phong","Đà Bắc","Kim Bôi (Famous for hot springs)","Lạc Sơn","Lạc Thủy","Mai Châu (Major ecotourism valley)","Tân Lạc","Yên Thủy"],"Hồ Chí Minh City (Municipality)":["District 1 (Central Business District)","District 3","District 4","District 5 (Chợ Lớn / Chinatown)","District 6","District 7 (Phú Mỹ Hưng area)","District 8","District 10","District 11","Phú Nhuận District","Bình Thạnh District","Tân Bình District","Tân Phú District","Gò Vấp District","Thủ Đức City (Municipal city within HCMC)","Bình Chánh District","Hóc Môn District","Củ Chi District (Củ Chi Tunnels area)","Nhà Bè District","Cần Giờ District (Coastal mangrove biosphere)"],"Hưng Yên":["Hưng Yên City (Capital City)","Mỹ Hào (Town)","Văn Lâm","Văn Giang (Ecopark urban area)","Yên Mỹ","Khoái Châu","Kim Động","Ân Thi","Tiên Lữ","Phù Cừ"],"Khánh Hòa":["Nha Trang (Capital City / Major beach resort)","Cam Ranh (City / Location of Cam Ranh Airport)","Ninh Hòa (Town)","Vạn Ninh (Vân Phong Bay area)","Diên Khánh","Cam Lâm","Khánh Vĩnh","Khánh Sơn","Trường Sa (Spratly Islands district)"],"Kiên Giang":["Rạch Giá (Capital City)","Phú Quốc (Island City)","Hà Tiên (City bordering Cambodia)","Kiên Lương","Hòn Đất","Tân Hiệp","Châu Thành","Giồng Riềng","Gò Quao","An Biên","An Minh","Vĩnh Thuận","U Minh Thượng","Kiên Hải (Island district)","Giang Thành"],"Kon Tum":["Kon Tum City (Capital City)","Đắk Hà","Đắk Tô","Ngọc Hồi (Near the tri-border area)","Đắk Glei","Sa Thầy","Kon Plông (Măng Đen resort area)","Kon Rẫy","Tu Mơ Rông","Ia H'Drai"],"Lai Châu":["Lai Châu City (Capital City)","Mường Tè","Phong Thổ","Sìn Hồ","Tam Đường","Than Uyên","Tân Uyên","Nậm Nhùn"],"Lâm Đồng":["Đà Lạt (Capital City / Highland resort)","Bảo Lộc (City)","Đức Trọng (Location of Liên Khương Airport)","Lạc Dương","Đơn Dương","Lâm Hà","Di Linh","Đạ Huoai","Đạ Tẻh","Cát Tiên","Đam Rông"],"Lạng Sơn":["Lạng Sơn City (Capital City)","Cao Lộc","Hữu Lũng","Lộc Bình","Bắc Sơn","Chi Lăng","Đình Lập","Tràng Định","Văn Lãng","Văn Quan","Bình Gia"],"Lào Cai":["Lào Cai City (Capital City / Border crossing)","Sa Pa (Town / Major mountain resort)","Bắc Hà (Famous for its cultural market)","Bảo Thắng","Bảo Yên","Bát Xát","Mường Khương","Văn Bàn","Si Ma Cai"],"Long An":["Tân An (Capital City)","Kiến Tường (Town)","Bến Lức","Đức Hòa","Cần Đước","Cần Giuộc","Thủ Thừa","Châu Thành","Tân Trụ","Thạnh Hóa","Tân Thạnh","Mộc Hóa","Vĩnh Hưng","Tân Hưng"],"Nam Định":["Nam Định City (Capital City)","Mỹ Lộc","Vụ Bản","Ý Yên","Nghĩa Hưng","Nam Trực","Trực Ninh","Xuân Trường","Giao Thủy (Xuân Thủy National Park area)","Hải Hậu"],"Nghệ An":["Vinh (Capital City)","Cửa Lò (Town / Beach resort)","Thái Hòa (Town)","Hoàng Mai (Town)","Quỳnh Lưu","Diễn Châu","Nghi Lộc","Yên Thành","Đô Lương","Hưng Nguyên","Nam Đàn (Birthplace of Ho Chi Minh)","Thanh Chương","Anh Sơn","Con Cuông","Tân Kỳ","Nghĩa Đàn","Quỳ Hợp","Quỳ Châu","Quế Phong","Tương Dương","Kỳ Sơn"],"Ninh Bình":["Ninh Bình City (Capital City / Tràng An gateway)","Tam Điệp (City)","Hoa Lư (Ancient capital area)","Gia Viễn (Vân Long Wetland)","Nho Quan (Cúc Phương National Park gateway)","Yên Khánh","Yên Mô","Kim Sơn"],"Ninh Thuận":["Phan Rang-Tháp Chàm (Capital City)","Ninh Hải","Ninh Phước","Ninh Sơn","Bác Ái","Thuận Bắc","Thuận Nam"],"Phú Thọ":["Việt Trì (Capital City / Hùng Kings Historic Site)","Phú Thọ Town","Thị xã Phú Thọ","Đoan Hùng","Hạ Hòa","Thanh Ba","Phù Ninh","Lâm Thao","Tam Nông","Thanh Thủy","Thanh Sơn","Yên Lập","Cẩm Khê","Tân Sơn"],"Phú Yên":["Tuy Hòa (Capital City)","Sông Cầu (Town)","Đông Hòa (Town)","Đồng Xuân","Tuy An (Gành Đá Đĩa area)","Sơn Hòa","Sông Hinh","Tây Hòa","Phú Hòa"],"Quảng Bình":["Đồng Hới (Capital City)","Ba Đồn (Town)","Quảng Trạch","Bố Trạch (Phong Nha-Kẻ Bàng National Park gateway)","Quảng Ninh","Lệ Thủy","Tuyên Hóa","Minh Hóa"],"Quảng Nam":["Tam Kỳ (Capital City)","Hội An (City / UNESCO World Heritage ancient town)","Điện Bàn (Town)","Đại Lộc","Duy Xuyên (My Son Sanctuary area)","Thăng Bình","Quế Sơn","Hiệp Đức","Núi Thành","Phước Sơn","Phước Sơn","Bắc Trà My","Nam Trà My","Đông Giang","Tây Giang","Nam Giang"],"Quảng Ngãi":["Quảng Ngãi City (Capital City)","Đức Phổ (Town)","Bình Sơn (Dung Quất economic zone)","Sơn Tịnh","Tư Nghĩa","Nghĩa Hành","Mộ Đức","Trà Bồng","Sơn Hà","Sơn Tây","Ba Tơ","Minh Long","Lý Sơn (Island district)"],"Quảng Ninh":["Hạ Long (Capital City / Ha Long Bay gateway)","Cẩm Phả (City)","Uông Bí (City)","Móng Cái (City bordering China)","Đông Triều (City)","Quảng Yên (Town)","Vân Đồn (Island district / Vân Đồn Airport)","Tiên Yên","Đầm Hà","Hải Hà","Ba Chẽ","Bình Liêu","Cô Tô (Archipelago district)"],"Quảng Trị":["Đông Hà (Capital City)","Quảng Trị Town","Vĩnh Linh","Gio Linh","Cam Lộ","Triệu Phong","Hải Lăng","Hướng Hóa (Khe Sanh area)","Đakrông","Cồn Cỏ (Island district)"],"Sóc Trăng":["Sóc Trăng City (Capital City)","Vĩnh Châu (Town)","Ngã Năm (Town)","Châu Thành","Mỹ Tú","Kế Sách","Long Phú","Mỹ Xuyên","Thạnh Trị","Trần Đề","Cù Lao Dung"],"Sơn La":["Sơn La City (Capital City)","Mộc Châu (Major highland tourism plateau)","Vân Hồ","Thuận Châu","Mường La","Quỳnh Nhai","Sông Mã","Sốp Cộp","Mai Sơn","Yên Châu","Bắc Yên","Phù Yên"],"Tây Ninh":["Tây Ninh City (Capital City)","Trảng Bàng (Town)","Hòa Thành (Town / Cao Đài Holy See area)","Gò Dầu","Bến Cầu","Dương Minh Châu","Châu Thành","Tân Biên","Tân Châu"],"Thái Bình":["Thái Bình City (Capital City)","Đông Hưng","Hưng Hà","Kiến Xương","Vũ Thư","Tiền Hải","Thái Thụy","Quỳnh Phụ"],"Thái Nguyên":["Thái Nguyên City (Capital City)","Sông Công (City)","Phổ Yên (City)","Định Hóa","Phú Lương","Đồng Hỷ","Võ Nhai","Đại Từ","Phú Bình"],"Thanh Hóa":["Thanh Hóa City (Capital City)","Sầm Sơn (City / Beach resort)","Bỉm Sơn (City)","Nghi Sơn (Town / Major economic zone)","Đông Sơn","Quảng Xương","Hoằng Hóa","Hậu Lộc","Hà Trung","Nga Sơn","Thiệu Hóa","Triệu Sơn","Thọ Xuân","Yên Định","Vĩnh Lộc (Citadel of the Hồ Dynasty)","Thạch Thành","Cẩm Thủy","Ngọc Lặc","Thường Xuân","Như Xuân","Như Thanh","Bá Thước","Lang Chánh","Quan Hóa","Quan Sơn","Mường Lát"],"Thừa Thiên Huế":["Huế (Capital City / Former imperial capital)","Hương Thủy (Town)","Hương Trà (Town)","Phong Điền","Quảng Điền","Phú Vang","Phú Lộc (Lăng Cô Bay area)","A Lưới","Nam Đông"],"Tiền Giang":["Mỹ Tho (Capital City)","Gò Công (City)","Cai Lậy (Town)","Cái Bè (Cái Bè floating market)","Châu Thành","Chợ Gạo","Gò Công Đông","Gò Gông Tây","Tân Phước","Tân Phú Đông"],"Trà Vinh":["Trà Vinh City (Capital City)","Duyên Hải (Town)","Càng Long","Cầu Kè","Tiểu Cần","Châu Thành","Trà Cú","Cầu Ngang","Duyên Hải District"],"Tuyên Quang":["Tuyên Quang City (Capital City)","Sơn Dương","Yên Sơn","Hàm Yên","Chiêm Hóa","Na Hang","Lâm Bình"],"Vĩnh Long":["Vĩnh Long City (Capital City)","Bình Minh (Town)","Long Hồ","Mang Thít","Vũng Liêm","Tam Bình","Trà Ôn","Bình Tân"],"Vĩnh Phúc":["Vĩnh Yên (Capital City)","Phúc Yên (City)","Tam Đảo (Town / Mountain resort)","Bình Xuyên","Lập Thạch","Sông Lô","Tam Dương","Vĩnh Tường","Yên Lạc"],"Yên Bái":["Yên Bái City (Capital City)","Nghĩa Lộ (Town)","Mù Cang Chải (Famous for terraced rice fields)","Trạm Tấu","Văn Chấn","Trấn Yên","Lục Yên","Văn Yên","Yên Bình (Thác Bà Lake area)"]},"Yemen":{"'Adan (Aden)":["Aden City (Administrative Center / Major port)","Crater (Sirah)","Mualla","Tawahi","Khormaksar","Mansura","Sheikh Othman","Bureika","Dar Sad"],"'Amran":["'Amran City (Administrative Center)","Khamir","Raydah","Shaharah (Famous for its historical stone footbridge)","Thula (Historical walled town)","Huth","Dhi Bin","Harf Sufyan"],"Abyan":["Zinjibar (Administrative Center)","Ja'ar","Khanfir","Lawdar","Ahwar","Mudiyah","Al Mahfid","Rasd"],"Al Bayda":["Al Bayda City (Administrative Center)","Rada'a","Mukayras","Dhi Na'im","Az Zahir","Al Malagim","As Sawadiya"],"Al Dhale'e":["Al Dhale'e City (Administrative Center)","Qa'atabah","Damt","Juban","Al Azariq","Jahaf","Al Husha"],"Al Hudaydah":["Al Hudaydah City (Administrative Center / Major Red Sea port)","Zabid (UNESCO World Heritage site)","Bajil","Beit al-Faqih","Al Marawi'ah","Ad Dahi","Al Khawkha","Hays"],"Al Jawf":["Al Hazm (Administrative Center)","Barat Anan","Al Matammah","Al Khalaq","Khabb wa ash Sha'af","Al Humaydat"],"Al Mahrah":["Al Ghaydah (Administrative Center)","Shihan (Important border crossing with Oman)","Qishn","Sayhut","Huswain","Al Ghaydah Port (Nishtun)"],"Al Mahwit":["Al Mahwit City (Administrative Center)","Shibam Kawkaban (Historical twin mountain towns)","At Tawilah","Ar Rujum","Milhan","Hufash"],"Amanat Al Asimah (Sana'a Capital Municipality)":["Old City of Sana'a (UNESCO World Heritage site)","Al Wahdah","As Sabain","At Tahrir","Ath Thawrah","Az Zalal","Shu'aub","Bani Al Harith"],"Dhamar":["Dhamar City (Administrative Center)","Ma'bar","Dawran Aness","Utmah (Nature reserve area)","Wusab Al Ali","Wusab As Safil","Jahran"],"Hadramaut":["Mukalla (Administrative Center / Major port)","Shibam (The \"Manhattan of the Desert\" skyscraper city)","Say'un","Tarim (Islamic scholarship hub)","Al Shihr","Wadi Doan","Qamr"],"Hajjah":["Hajjah City (Administrative Center)","Haradh (Border area)","Abs","Mabyan","Kuhlan Affar","Shahil","Aslem"],"Ibb":["Ibb City (Administrative Center / Known as the Green City)","Jiblah (Historical capital of Queen Arwa)","Yarim","Al Qa'idah","Ba'dan","Al Udayn","As Sayyani","Hubaysh"],"Lahij":["Al Hawtah (Administrative Center)","Radfan","Yafa'a","Al Qabbaytah","Al Maqatirah","Al Musaymir","Tur Al Bahah"],"Marib":["Marib City (Administrative Center / Ancient Sabaean capital)","Harib","Sirwah","Al Jubah","Bidbadah","Majzar"],"Raymah":["Al Jabin (Administrative Center)","Kusmah","Mazhar","Bilad At Ta'am","Al Jafariyah","Salafiyah"],"Sa'dah":["Sa'dah City (Administrative Center)","Razih","Dhahir","Kitaf wa Al Boqe'e","Sahar","Majz","Monabbih"],"Sana'a (Governorate)":["Rawdah (Surrounding the capital municipality)","Sanhan","Bani Matar","Bani Hushaysh","Manakhah (Haraz Mountains hub)","Al Haymah Al Dakhiliyah","Jihanah","Arhab"],"Shabwah":["Ataq (Administrative Center)","Beihan","Azzan","Mayfa'a","Al Rawdah","Usaylan","Balhaf (LNG port terminal)"],"Taiz":["Taiz City (Administrative Center)","Mocha (Historical coffee port town)","Al Turba","Dimnat Chadir","Misrakh","Shar'ab Ar Rawnah","Maqbanah","Yafrus"],"Socotra":["Hadibu (Administrative Center on the main island)","Qalansiyah (Second-largest town)","Mori (Location of Socotra Airport)","Kadama","Zahek","Erissel"]},"Zambia":{"Central":["Kabwe (Administrative Center)","Kapiri Mposhi (Major railway junction)","Mkushi (Agricultural hub)","Mumbwa","Serenje","Chibombo","Chisamba","Ngabwe"],"Copperbelt":["Ndola (Administrative Center)","Kitwe (Largest city in the province)","Chingola","Mufulira","Luanshya","Chililabombwe (Border town)","Kalulushi","Lufwanyama","Masaiti","Mpongwe"],"Eastern":["Chipata (Administrative Center)","Petauke","Katete","Lundazi","Nyimba","Chadiza","Sinda","Mambwe (Gateway to South Luangwa National Park)","Vubwi"],"Luapula":["Mansa (Administrative Center)","Samfya (On Lake Bangweulu)","Nchelenge","Mwense","Kawambwa","Mwansabombwe","Chienge","Milenge","Chembe"],"Lusaka":["Lusaka City (Capital City of Zambia)","Kafue","Chongwe","Luangwa (Border town)","Chirundu (Major border crossing)","Chilanga"],"Muchinga":["Chinsali (Administrative Center)","Mpika (Major transport and railway hub)","Isoka","Nakonde (Busy border town with Tanzania)","Mafinga","Shiwang'andu","Lavushimanda","Kanchibiya"],"Northern":["Kasama (Administrative Center)","Mbala","Mpulungu (Zambia's only international wet port on Lake Tanganyika)","Luwingu","Mporokoso","Kaputa","Nsama","Chilubi","Mungwi"],"North-Western":["Solwezi (Administrative Center / Mining hub)","Kansanshi","Kasempa","Mwinilunga","Zambezi","Kabompo","Chavuma","Mufumbwe","Manyinga"],"Southern":["Choma (Administrative Center)","Livingstone (Tourist capital / Victoria Falls gateway)","Mazabuka (Sugar industry hub)","Monze","Kalomo","Siavonga (On Lake Kariba)","Sinazongwe","Maamba (Coal mining town)","Pemba","Namwala","Kazungula"],"Western":["Mongu (Administrative Center)","Sesheke","Kaoma","Senanga","Kalabo","Lukulu","Shang'ombo","Mwandi","Limulunga (Royal village of the Litunga)","Nkeyema"]},"Zimbabwe":{"Bulawayo (Metropolitan Province)":["Bulawayo City (Administrative Center / Second-largest city)","Cowdray Park","Luveve","Nkulumane","Pumula","Magwegwe","Lobengula"],"Harare (Metropolitan Province)":["Harare City (Capital City of Zimbabwe)","Chitungwiza (Major high-density dormitory town)","Epworth","Ruwa","Mount Pleasant","Borrowdale","Highfield","Mabvuku"],"Manicaland":["Mutare (Administrative Center)","Rusape","Chipinge","Nyanga","Chimanimani","Murambinda","Headlands","Penhalonga"],"Mashonaland Central":["Bindura (Administrative Center)","Mount Darwin","Shamva","Mazowe","Concession","Mvurwi","Centenary","Guruve"],"Mashonaland East":["Marondera (Administrative Center)","Chinhoyi (Historically transition point, though West is primary)","Murewa","Mutoko","Goromonzi","Beatrice","Wedza","Mudzi"],"Mashonaland West":["Chinhoyi (Administrative Center)","Kadoma","Kwekwe (Border region)","Kariba (Major resort and lakeside town)","Chegutu","Karoi","Norton","Banket"],"Masvingo":["Masvingo City (Administrative Center / Near Great Zimbabwe)","Chiredzi","Triangle","Mwenezi","Gutu","Zaka","Bikita","Ngundu"],"Matabeleland North":["Lupane (Administrative Center)","Victoria Falls (Major tourism hub)","Hwange (Coal mining hub)","Binga","Tsholotsho","Nkayi","Bubi","Umguza"],"Matabeleland South":["Gwanda (Administrative Center)","Beitbridge (Major international border town)","Plumtree (Border town)","Filabusi","Maphisa","Esigodini","Colleen Bawn"],"Midlands":["Gweru (Administrative Center)","Kwekwe","Redcliff","Shurugwi","Zvishavane","Gokwe","Mvuma","Chirumhanzu"]}};
-
-// ── Server status tracking ───────────────────────────────────────
-const SELF       = process.env.RENDER_EXTERNAL_URL || "https://globevoyage-admin.onrender.com";
-const serverBoot = new Date().toISOString();
-let   pingCount  = 0;
-let   lastPingAt = null;
-let   pipelineStatus = {
-  running:     false,
-  lastRunAt:   null,
-  lastRunName: null,
-  nextRuns:    ["06:00 UTC","14:00 UTC","22:00 UTC"],
-  countriesLastRun: 0,
-};
-
-setInterval(() => {
-  const mod = SELF.startsWith("https") ? https : http;
-  mod.get(SELF+"/", r=>r.resume()).on("error",()=>{});
-  pingCount++;
-  lastPingAt = new Date().toISOString();
-}, 5000);
-
-const WIKI_UA = "GlobeVoyage/2.0 (travel-intelligence-app; nodejs-axios)";
-
 // ══════════════════════════════════════════════════════════════════
-// HELPER: Get hardcoded areas for a state/country
-// ══════════════════════════════════════════════════════════════════
-function getHardcodedAreas(stateName, countryName) {
-  // Try exact country match first
-  const countryData = HARDCODED_GEO[countryName];
-  if (countryData) {
-    // Try exact state match
-    if (countryData[stateName]) return countryData[stateName];
-    // Try partial match
-    const stateKey = Object.keys(countryData).find(k =>
-      k.toLowerCase().includes(stateName.toLowerCase()) ||
-      stateName.toLowerCase().includes(k.toLowerCase())
-    );
-    if (stateKey) return countryData[stateKey];
-  }
-  // Try partial country match
-  const countryKey = Object.keys(HARDCODED_GEO).find(k =>
-    k.toLowerCase().includes(countryName.toLowerCase()) ||
-    countryName.toLowerCase().includes(k.toLowerCase())
-  );
-  if (countryKey) {
-    const cd = HARDCODED_GEO[countryKey];
-    if (cd[stateName]) return cd[stateName];
-    const sk = Object.keys(cd).find(k =>
-      k.toLowerCase().includes(stateName.toLowerCase()) ||
-      stateName.toLowerCase().includes(k.toLowerCase())
-    );
-    if (sk) return cd[sk];
-  }
-  return [];
-}
-
-function getHardcodedStates(countryName) {
-  const countryData = HARDCODED_GEO[countryName];
-  if (countryData) return Object.keys(countryData);
-  const countryKey = Object.keys(HARDCODED_GEO).find(k =>
-    k.toLowerCase().includes(countryName.toLowerCase()) ||
-    countryName.toLowerCase().includes(k.toLowerCase())
-  );
-  if (countryKey) return Object.keys(HARDCODED_GEO[countryKey]);
-  return [];
-}
+const HARDCODED_GEO = {"Afghanistan":{"Badakhshan":["Faizabad","Baharak","Ishkashim","Wakhan","Jurm","Kishim","Raghistan","Shighnan","Darwaz","Shahri Buzurg"],"Badghis":["Qala i Naw","Ab Kamari","Jawand","Muqur","Bala Murghab","Qadis","Ghormach"],"Baghlan":["Puli Khumri","Baghlani Jadid","Andarab","Khost wa Fereng","Dushi","Dahana i Ghori","Banu","Tala wa Barfak","Guzargahi Nur"],"Balkh":["Mazar-i-Sharif","Balkh","Dehdadi","Dawlatabad","Khulm","Sholgara","Chimtal","Charbolak","Hairatan","Nahri Shahi"],"Bamyan":["Bamyan City","Yakawlang","Panjab","Kahmard","Saighan","Shibar","Waras"],"Daykundi":["Nili","Khadir","Shahristan","Miramor","Sangtakht","Ashtarlay","Kiti","Patoo"],"Farah":["Farah City","Bala Buluk","Bakwa","Khaki Safed","Pusht Rod","Anardara","Qala-i-Kah","Shib Koh","Gulistan","Pur Chaman"],"Faryab":["Maymana","Andkhoy","Pashtun Kot","Shirin Tagab","Almar","Qaysar","Gurziwan","Bilchiragh","Khwaja Sabz Posh","Kohistan","Qurghan"],"Ghazni":["Ghazni City","Jaghori","Andar","Qarabagh","Muqur","Malistan","Nawur","Gelan","Giro","Ab Band","Deh Yak","Jaghatu"],"Ghor":["Chaghcharan","Shahrak","Lal Wa Sarjangal","Pasaband","Saghar","Tulak","Dawlat Yar","Du Layna","Charsada"],"Helmand":["Lashkar Gah","Sangin","Marjah","Nad Ali","Garmser","Kajaki","Nawzad","Musa Qala","Washir","Nawa-I-Barakzayi","Khanashin"],"Heart":["Herat City","Shindand","Guzara","Karukh","Kushk","Kushki Kuhna","Gulran","Zinda Jan","Enjil","Adraskan","Ghoryan","Kohsan","Obe","Pashtun Zarghun","Chishti Sharif"],"Jowzjan":["Sheberghan","Aqcha","Khwaja Du Koh","Qarqin","Khamyab","Fayzabad","Mardyan","Mingajik","Darzab","Qush Tepa"],"Kabul":["Kabul City","Paghman","Bagrami","Deh Sabz","Shakardara","Mir Bacha Kot","Kalakan","Guldara","Qarabagh","Istalif","Khaki Jabbar","Surobi","Mussahi","Chahar Asyab"],"Kandahar":["Kandahar City","Arghandab","Panjwai","Spin Boldak","Zhari","Shah Wali Kot","Khakrez","Maiwand","Ghorak","Maruf","Arghistan","Reg","Shorabak","Miyanishin","Naish"],"Kapisa":["Mahmud-i-Raqi","Nijrab","Tagab","Alasay","Hesa Awal Kohistan","Hesa Duwum Kohistan","Koh Band"],"Khost":["Khost City","Sabari","Bak","Jaji Maidan","Tere Zayi","Tanai","Gurbuz","Mando Zayi","Musakhel","Qalandar","Nadir Shah Kot","Spera","Shamal"],"Kunar":["Asadabad","Bar Kunar","Asmar","Dangam","Marawara","Sirkanay","Shigal","Wata Pur","Narang","Chowkay","Nurgal","Khas Kunar","Pech","Chapa Dara"],"Kunduz":["Kunduz City","Imam Sahib","Dasht-i-Archi","Chahar Dara","Aliabad","Khan Abad","Qalay-i-Zal"],"Laghman":["Mihtarlam","Qarghayi","Alingar","Alishing","Dawlat Shah","Badpakh"],"Logar":["Puli Alam","Baraki Barak","Charkh","Khoshi","Mohammad Agha","Kharwar","Azra"],"Nangarhar":["Jalalabad City","Surkh Rod","Behsud","Kama","Goshta","Lal Pur","Muhmand Dara","Shinwar","Bati Kot","Rodat","Chaparhar","Khogyani","Sherzad","Pachir Aw Agam","Deh Bala","Achin","Nazyan","Kot","Dur Baba","Hesarak"],"Nimruz":["Zaranj","Chakhansur","Kang","Khash Rod","Dilaram","Char Burjak"],"Nuristan":["Parun","Wama","Waygal","Kamdesh","Barg-i-Matal","Du Ab","Mandol","Nurgaram"],"Paktia":["Gardez","Zurmat","Jaji","Chamkani","Dand Aw Patan","Tsamkani","Sayed Karam","Mirzaka","Ahmad Khel","Lazha Mangal","Shwak","Wuza Zadran","Ahmadabad"],"Paktika":["Sharana","Urgun","Zarghun Shahr","Jani Khel","Yahya Khel","Yusuf Khel","Omna","Bermal","Gayan","Sar Hawza","Nika","Dila","Khushamand","Katawaz","Turwo","Wor Mamay","Gomal","Sarobi"],"Panjshir":["Bazarak","Rokha","Dara","Abshar","Hesa Awal","Hesa Duwum","Shotul"],"Parwan":["Charikar","Bagram","Jabal Saraj","Salang","Shinwari","Ghorband","Shekh Ali","Surkh Parsa","Kohi Safi"],"Samangan":["Aybak","Khuram Wa Sarbagh","Hazrat-i-Sultan","Ruyi Du Ab","Dara-i-Sufi Bala","Dara-i-Sufi Payin","Feroz Nakhchir"],"Sar-e Pol":["Sar-e Pol City","Sangcharak","Balkhab","Sozma Qala","Sayyad","Kohistanat","Gosfandi"],"Takhar":["Taloqan","Khanabad","Kalafgan","Khwaja Ghar","Yangi Qala","Chah Ab","Farkhar","Warsaj","Bangi","Baharak","Khwaja Bahauddin","Dashti Qala","Darqad","Rustaq","Namak Ab","Hazar Sumuch"],"Urozgan":["Tarinkot","Chora","Deh Rahwod","Shahidi Hassas","Gizab","Khas Uruzgan"],"Wardak":["Maydan Shahr","Chaki Wardak","Day Mirdad","Jalrez","Jaghatu","Saydabad","Nirkh","Markazi Bihsud","Hesa-i-Awali Bihsud"],"Zabul":["Qalat","Shah Joy","Shinkay","Tarnak wa Jaldak","Arghandab","Daychopan","Mizana","Shamulzayi","Naw Bahar","Kakar"]},"Albania":{"Berat":["Berat City","Kuçovã","Poliçan","Skrapar","Ura Vajgurore"],"Diber":["Peshkopi","Bulqizë","Burrel","Klos"],"Durres":["Durrës City","Shijak","Krujë","Fushë-Krujë","Sukth"],"Elbasan":["Elbasan City","Cërrik","Gramsh","Librazhd","Peqin","Prrenjas","Belsh"],"Fier":["Fier City","Lushnjë","Patos","Divjakë","Roskovec","Mallakastër"],"Gjirokaster":["Gjirokastër City","Tepelenë","Përmet","Këlcyrë","Libohovë","Memaliaj","Dropull"],"Korce":["Korçë City","Pogradec","Maliq","Devoll","Kolonjë","Pustec"],"Kukes":["Kukës City","Has","Tropojë"],"Lezhe":["Lezhë City","Mirditë","Kurbin"],"Shkoder":["Shkodër City","Malësi e Madhe","Pukë","Vau i Dejës","Fushë-Arrëz"],"Tirana":["Tirana City","Kamëz","Vorë","Kavajë","Rrogozhinë"],"Vlore":["Vlorë City","Sarandë","Delvinë","Himarë","Selenicë","Konispol"]},"Algeria":{"Algiers":["Algiers Center","Sidi M'Hamed","Bouzareah","Cheraga","Zeralda","Bir Mourad Raïs","Hussein Dey","El Harrach","Dar El Beïda","Rouïba","Baraki"],"Oran":["Oran City","Es Senia","Bir El Djir","Ain El Turk","Arzew","Bethioua","Oued Tlelat","Boutlelis","Gediel"],"Constantine":["Constantine City","El Khroub","Hamma Bouziane","Didouche Mourad","Zighoud Youcef","Ain Abid","Ibn Ziad"],"Annaba":["Annaba City","El Bouni","Berrahal","El Hadjar","Chetaïbi","Seraïdi"],"Blida":["Blida City","Boufarik","Ouled Yaïch","Larbaa","Meftah","El Affroun","Mouzaia","Chréa"],"Batna":["Batna City","Barika","Arris","Ain Touta","Merouana","Tazoult","N'Gaous","Thniet El Abed","Chemora"],"Setif":["Sétif City","El Eulma","Bouandas","Ain Oulmene","Ain Arnat","Salah Bey","Amoucha","Guenzet","Bougaa"],"Biskra":["Biskra City","Tolga","Ouled Djellal","Sidi Khaled","El Kantara","Zeribet El Oued","Sidi Okba","M'Chouneche"],"Tlemcen":["Tlemcen City","Maghnia","Ghazaouet","Remchi","Nedroma","Sebdou","Ouled Mimoun","Hennaya","Bab El Assa"],"Bejaia":["Bejaia City","Akbou","Amizour","Kherrata","Sidi Aïch","El Kseur","Seddouk","Adekar","Souk El Ténine"],"Tizi Ouzou":["Tizi Ouzou City","Azazga","Larbaâ Nath Irathen","Tigzirt","Draâ Ben Khedda","Boghni","Ain El Hammam","Azeffoun","Ouadhia"],"Tamantasset":["Tamanrasset City","In Salah","In Ghar","Abalessa","Idles","Tazrouk","Tin Zaouatine","In Guezzam"],"Ouargla":["Ouargla City","Hassi Messaoud","Touggourt","Temacine","Megarine","El Hadjira","Taibet","Sidi Khouiled"]},"Angola":{"Luanda":["Luanda City","Viana","Belas","Cacuaco","Talatona","Kilamba Kiaxi","Icolo e Bengo","Quiçama"],"Benguela":["Benguela City","Lobito","Catumbela","Baía Farta","Cubal","Ganda","Balombo","Caimbambo","Chongorói","Bocoio"],"Huambo":["Huambo City","Caála","Bailundo","Ekunha","Longonjo","Ukuma","Chinjenje","Mungo","Catchiungo","Tchicala Tcholohanga","Londuimbali"],"Huila":["Lubango","Chibia","Humpata","Cacula","Matala","Jamba","Kuvango","Caluquembe","Chicomba","Caconda","Quilengues","Gambos"],"Bie":["Kuito","Andulo","Camacupa","Chinguar","Catabola","Nharea","Cuemba","Cunhinga","Chitembo"],"Uige":["Uíge City","Negage","Sanza Pombo","Maquela do Zombo","Damba","Mucaba","Puri","Bungo","Kangola","Alto Cauale","Quitexe","Ambuila","Bembe","Songo","Milunga","Quimbele"],"Cunene":["Ondjiva","Cuanhama","Ombadja","Namacunde","Cahama","Curoca","Cuvelai"],"Cabinda":["Cabinda City","Cacongo","Buco-Zau","Belize"],"Zaire":["M'banza-Kongo","Soyo","Nzeto","Cuimba","Nóqui","Tomboco"],"Malanje":["Malanje City","Calandula","Cacuso","Cangandala","Mucari","Cuaba Nzogo","Quela","Kiwaba Nzoji","Massango","Marimba","Luquembo","Quirima","Cambundi-Catembo"],"Moxico":["Luena","Cameia","Camanongue","Léua","Lucano","Luau","Alto Zambeze","Bundas","Luchazes"],"Namibe":["Moçâmedes","Tôwa","Virei","Bibala","Camucuio"],"Cuando Cubango":["Menongue","Cuito Cuanavale","Cuchi","Cuangar","Calai","Dirico","Mavinga","Rivungo","Nancova"],"Cuanza Norte":["Ndalatando","Cazengo","Cambambe","Ambaca","Golungo Alto","Lucala","Banga","Bolongongo","Quiculungo","Samba Cajú","Ngonguembo"],"Cuanza Sul":["Sumbe","Porto Amboim","Amboim","Cela","Libolo","Mussende","Quibala","Seles","Conda","Ebo","Cassongue","Quilenda"],"Lunda Norte":["Dundo","Chitato","Cambulo","Lucapa","Capenda-Camulemba","Cuilo","Caungula","Cuango","Xá-Muteba","Lóvua"],"Lunda Sul":["Saurimo","Dala","Muconda","Cacolo"],"Bengo":["Caxito","Dande","Ambriz","Nambuangongo","Dembos","Pango Aluquém","Bula Atumba"]},"Argentina":{"Buenos Aires":["Palermo","Recoleta","San Telmo","Puerto Madero","La Boca","Belgrano","Caballito","Flores","Almagro","Villa Urquiza"],"Buenos Aires Province":["La Plata","Mar del Plata","Bahía Blanca","Tandil","San Isidro","Pilar","Vicente López","Tigre","Quilmes","Lanús","Avellaneda","Pergamino","Olavarría","San Nicolás"],"Catamarca":["San Fernando del Valle de Catamarca","Belén","Tinogasta","Andalgalá","Santa María","Fiambalá","Recreo","Valle Viejo"],"Chaco":["Resistencia","Presidencia Roque Sáenz Peña","Villa Ángela","Charata","Juan José Castelli","Fontana","Barranqueras","General José de San Martín"],"Chubut":["Rawson","Comodoro Rivadavia","Trelew","Puerto Madryn","Esquel","Gaiman","Rada Tilly","Sarmiento"],"Cordoba":["Córdoba City","Villa Carlos Paz","Río Cuarto","Villa María","San Francisco","Alta Gracia","Jesús María","Villa General Belgrano","Cosquín","La Falda"],"Corrientes":["Corrientes City","Goya","Paso de los Libres","Curuzú Cuatiá","Mercedes","Bella Vista","Santo Tomé","Ituzaingó"],"Entre Rios":["Paraná","Concordia","Gualeguaychú","Concepción del Uruguay","Victoria","Colón","Gualeguay","Chajarí"],"Formosa":["Formosa City","Clorinda","Pirané","El Colorado","Las Lomitas","Ingeniero Juárez","Ibarreta"],"Jujuy":["San Salvador de Jujuy","San Pedro de Jujuy","Palpalá","Perico","Humahuaca","Tilcara","Purmamarca","La Quiaca"],"La Pampa":["Santa Rosa","General Pico","Eduardo Castex","Toay","Realicó","Macachín","General Acha","25 de Mayo"],"La Rioja":["La Rioja City","Chilecito","Chamical","Aimogasta","Chepes","Villa Unión","Famatina"],"Mendoza":["Mendoza City","San Rafael","Godoy Cruz","Luján de Cuyo","Maipú","Guaymallén","Las Heras","Tunuyán","Malargüe","Tupungato","San Martín"],"Misiones":["Posadas","Puerto Iguazú","Oberá","Eldorado","Apóstoles","San Ignacio","Montecarlo","Aristóbulo del Valle"],"Neuquen":["Neuquén City","San Martín de los Andes","Villa La Angostura","Zapala","Cutral Có","Plaza Huincul","Chos Malal","Centenario"],"Rio Negro":["Viedma","San Carlos de Bariloche","General Roca","Cipolletti","Las Grutas","San Antonio Oeste","El Bolsón","Choele Choel","Cinco Saltos"],"Salta":["Salta City","San Ramón de la Nueva Orán","Tartagal","Cafayate","Rosario de la Frontera","Metán","General Güemes","Cachi"],"San Juan":["San Juan City","Chimbas","Rawson","Rivadavia","Santa Lucía","Caucete","San José de Jáchal","Barreal"],"San Luis":["San Luis City","Villa Mercedes","Merlo","Juana Koslay","La Punta","Justo Daract","Quines"],"Santa Cruz":["Río Gallegos","El Calafate","Caleta Olivia","Puerto Deseado","El Chaltén","Puerto San Julián","Las Heras","Pico Truncado"],"Santa Fe":["Santa Fe City","Rosario","Rafaela","Venado Tuerto","Reconquista","Santo Tomé","Villa Constitución","Sunchales","San Lorenzo"],"Santiago del Estero":["Santiago del Estero City","La Banda","Termas de Río Hondo","Frías","Añatuya","Quimilí","Clodomira"],"Tierra del Fuego":["Ushuaia","Río Grande","Tolhuin"],"Tucuman":["San Miguel de Tucumán","Yerba Buena","Concepción","Tafí Viejo","Aguilares","Monteros","Tafí del Valle","Famaillá"]},"Australia":{"New South Wales":["Sydney","Newcastle","Wollongong","Central Coast","Tweed Heads","Maitland","Tamworth","Albury","Port Macquarie","Orange","Dubbo","Wagga Wagga","Bathurst","Coffs Harbour","Lismore"],"Queensland":["Brisbane","Gold Coast","Sunshine Coast","Townsville","Cairns","Toowoomba","Mackay","Rockhampton","Bundaberg","Hervey Bay","Gladstone","Mount Isa","Maryborough","Gympie"],"South Australia":["Adelaide","Mount Gambier","Whyalla","Murray Bridge","Port Augusta","Port Pirie","Port Lincoln","Victor Harbor","Gawler","Roxby Downs"],"Tasmania":["Hobart","Launceston","Devonport","Burnie","Ulverstone","New Norfolk","Queenstown","Smithton"],"Victoria":["Melbourne","Ballarat","Bendigo","Shepparton","Wodonga","Mildura","Warrnambool","Traralgon","Wangaratta","Moe","Morwell","Sale"],"Western Australia":["Perth","Bunbury","Geraldton","Kalgoorlie","Albany","Busselton","Karratha","Broome","Port Hedland","Esperance"],"Australian Capital Territory":["Canberra","Hall","Tharwa"],"Northern Territory":["Darwin","Alice Springs","Katherine","Nhulunbuy","Tennant Creek","Jabiru","Yulara"]},"Austria":{"Vienna":["Innere Stadt","Leopoldstadt","Landstraße","Wieden","Margareten","Mariahilf","Neubau","Josefstadt","Alsergrund","Favoriten","Simmering","Meidling","Hietzing","Penzing","Rudolfsheim-Fünfhaus","Ottakring","Hernals","Währing","Döbling","Brigittenau","Floridsdorf","Donaustadt","Liesing"],"Lower Austria":["Sankt Pölten","Wiener Neustadt","Baden bei Wien","Krems an der Donau","Amstetten","Mödling","Klosterneuburg","Tulln an der Donau","Schwechat","Waidhofen an der Ybbs","Zwettl"],"Upper Austria":["Linz","Wels","Steyr","Leonding","Traun","Braunau am Inn","Ansfelden","Bad Ischl","Gmunden","Vöcklabruck","Ried im Innkreis","Enns"],"Styria":["Graz","Leoben","Kapfenberg","Bruck an der Mur","Feldbach","Gratwein-Straßengel","Knittelfeld","Leibnitz","Deutschlandsberg","Weiz","Judenburg","Schladming"],"Tyrol":["Innsbruck","Kufstein","Telfs","Schwaz","Hall in Tirol","Wörgl","Lienz","Imst","Kitzbühel","Landeck","St. Anton am Arlberg"],"Salzburg":["Salzburg City","Hallein","Saalfelden","Sankt Johann im Pongau","Bischofshofen","Zell am See","Seekirchen am Wallersee","Tamsweg","Mittersill"],"Carinthia":["Klagenfurt","Villach","Wolfsberg","Spittal an der Drau","Feldkirchen","Sankt Veit an der Glan","Völkermarkt","Hermagor","Velden am Wörthersee"],"Burgenland":["Eisenstadt","Rust","Neusiedl am See","Mattersburg","Oberpullendorf","Oberwart","Güssing","Jennersdorf"],"Vorarlberg":["Bregenz","Dornbirn","Feldkirch","Lustenau","Bludenz","Hohenems","Götzis","Hard","Lech am Arlberg"]},"Brazil":{"Acre":["Rio Branco","Cruzeiro do Sul","Sena Madureira","Tarauacá","Feijó","Brasiléia","Epitaciolândia","Xapuri"],"Alagoas":["Maceió","Arapiraca","Palmeira dos Índios","Rio Largo","Penedo","União dos Palmares","Marechal Deodoro","Maragogi"],"Amazonas":["Manaus","Parintins","Itacoatiara","Manacapuru","Coari","Tabatinga","Tefé","Maués"],"Bahia":["Salvador","Feira de Santana","Vitória da Conquista","Camaçari","Juazeiro","Itabuna","Ilhéus","Porto Seguro","Barreiras"],"Ceará":["Fortaleza","Caucaia","Juazeiro do Norte","Maracanaú","Sobral","Crato","Itapipoca","Aquiraz","Jericoacoara"],"Distrito Federal":["Brasília","Ceilândia","Taguatinga","Samambaia","Plano Piloto","Águas Claras","Guará","Gama"],"Espírito Santo":["Vitória","Vila Velha","Serra","Cariacica","Cachoeiro de Itapemirim","Linhares","São Mateus","Guarapari"],"Goiás":["Goiânia","Aparecida de Goiânia","Anápolis","Rio Verde","Luziânia","Águas Lindas de Goiás","Trindade","Catalão","Formosa","Caldas Novas"],"Maranhão":["São Luís","Imperatriz","Timon","Caxias","Codó","Açailândia","Bacabal","Balsas","Barreirinhas"],"Mato Grosso":["Cuiabá","Várzea Grande","Rondonópolis","Sinop","Tangará da Serra","Sorriso","Primavera do Leste","Barra do Garças","Cáceres"],"Mato Grosso do Sul":["Campo Grande","Dourados","Três Lagoas","Corumbá","Ponta Porã","Naviraí","Nova Andradina","Bonito"],"Minas Gerais":["Belo Horizonte","Uberlândia","Contagem","Juiz de Fora","Betim","Montes Claros","Ribeirão das Neves","Uberaba","Governador Valadares","Ipatinga","Ouro Preto"],"Pará":["Belém","Ananindeua","Santarém","Marabá","Parauapebas","Castanhal","Abaetetuba","Altamira","Tucuruí"],"Paraíba":["João Pessoa","Campina Grande","Santa Rita","Patos","Bayeux","Sousa","Cajazeiras","Cabedelo"],"Paraná":["Curitiba","Londrina","Maringá","Ponta Grossa","Cascavel","Foz do Iguaçu","São José dos Pinhais","Paranaguá"],"Pernambuco":["Recife","Jaboatão dos Guararapes","Olinda","Caruaru","Petrolina","Paulista","Cabo de Santo Agostinho","Garanhuns","Fernando de Noronha"],"Piauí":["Teresina","Parnaíba","Picos","Floriano","Piripiri","Campo Maior","Oeiras"],"Rio de Janeiro":["Rio de Janeiro City","São Gonçalo","Duque de Caxias","Nova Iguaçu","Niterói","Campos dos Goytacazes","Belford Roxo","São João de Meriti","Petrópolis","Volta Redonda","Cabo Frio","Angra dos Reis"],"Rio Grande do Norte":["Natal","Mossoró","Parnamirim","São Gonçalo do Amarante","Macaíba","Caicó","Ceará-Mirim","Tibau do Sul"],"Rio Grande do Sul":["Porto Alegre","Caxias do Sul","Canoas","Pelotas","Santa Maria","Gravataí","Viamão","Novo Hamburgo","Passo Fundo","Rio Grande","Gramado"],"Rondônia":["Pôrto Velho","Ji-Paraná","Ariquemes","Cacoal","Vilhena","Jaru","Rolim de Moura"],"Roraima":["Boa Vista","Rorainópolis","Caracaraí","Pacaraima","Cantá","Mucajaí"],"Santa Catarina":["Florianópolis","Joinville","Blumenau","São José","Chapecó","Criciúma","Itajaí","Balneário Camboriú","Lages"],"São Paulo":["São Paulo City","Guarulhos","Campinas","São Bernardo do Campo","Santo André","São José dos Campos","Osasco","Ribeirão Preto","Sorocaba","Santos","São José do Rio Preto"],"Sergipe":["Aracaju","Nossa Senhora do Socorro","Lagarto","Itabaiana","São Cristóvão","Estância","Tobias Barreto"],"Tocantins":["Palmas","Araguaína","Gurupi","Porto Nacional","Paraíso do Tocantins","Colinas do Tocantins","Guaraí"]},"Canada":{"Alberta":["Calgary","Edmonton","Red Deer","Lethbridge","Medicine Hat","St. Albert","Grande Prairie","Fort McMurray"],"British Columbia":["Vancouver","Victoria","Surrey","Burnaby","Kelowna","Nanaimo","Prince George","Kamloops"],"Manitoba":["Winnipeg","Brandon","Steinbach","Thompson","Portage la Prairie","Winkler","Selkirk","Churchill"],"New Brunswick":["Moncton","Saint John","Fredericton","Dieppe","Miramichi","Edmundston","Bathurst","Campbellton"],"Newfoundland and Labrador":["St. John's","Mount Pearl","Corner Brook","Conception Bay South","Grand Falls-Windsor","Gander","Happy Valley-Goose Bay","Labrador City"],"Nova Scotia":["Halifax","Sydney","Dartmouth","Truro","New Glasgow","Kentville","Amherst","Yarmouth"],"Ontario":["Toronto","Ottawa","Mississauga","Hamilton","London","Kitchener","Windsor","Thunder Bay"],"Prince Edward Island":["Charlottetown","Summerside","Stratford","Cornwall"],"Quebec":["Montreal","Quebec City","Laval","Gatineau","Longueuil","Sherbrooke","Saguenay","Trois-Rivières"],"Saskatchewan":["Saskatoon","Regina","Prince Albert","Moose Jaw","Yorkton","Swift Current","North Battleford","Lloydminster"],"Northwest Territories":["Yellowknife","Hay River","Inuvik","Fort Smith"],"Nunavut":["Iqaluit","Rankin Inlet","Cambridge Bay","Arviat","Igloolik"],"Yukon":["Whitehorse","Dawson City","Watson Lake","Haines Junction"]},"China":{"Beijing":["Dongcheng","Xicheng","Chaoyang","Haidian","Fengtai","Shijingshan","Shunyi","Changping"],"Shanghai":["Huangpu","Pudong","Xuhui","Jing'an","Changning","Hongkou","Yangpu","Minhang"],"Guangdong":["Guangzhou","Shenzhen","Dongguan","Foshan","Shantou","Zhuhai","Huizhou","Zhanjiang"],"Sichuan":["Chengdu","Mianyang","Nanchong","Yibin","Luzhou","Deyang","Leshan","Zigong"],"Zhejiang":["Hangzhou","Ningbo","Wenzhou","Shaoxing","Jiaxing","Jinhua","Huzhou","Taizhou"],"Jiangsu":["Nanjing","Suzhou","Wuxi","Changzhou","Nantong","Xuzhou","Yangzhou","Lianyungang"],"Shandong":["Jinan","Qingdao","Yantai","Weifang","Zibo","Linyi","Jining","Tai'an"],"Henan":["Zhengzhou","Luoyang","Kaifeng","Nanyang","Anyang","Xinxiang","Pingdingshan","Jiaozuo"],"Hubei":["Wuhan","Xiangyang","Yichang","Jingzhou","Shiyan","Huangshi","Xiaogan","Xianning"],"Hunan":["Changsha","Hengyang","Zhuzhou","Xiangtan","Yueyang","Changde","Yiyang","Zhangjiajie"],"Yunnan":["Kunming","Qujing","Yuxi","Baoshan","Lijiang","Pu'er","Dali","Jinghong"],"Shaanxi":["Xi'an","Baoji","Xianyang","Weinan","Yan'an","Yulin","Hanzhong","Ankang"],"Fujian":["Fuzhou","Xiamen","Quanzhou","Zhangzhou","Putian","Ningde","Sanming","Longyan"],"Anhui":["Hefei","Wuhu","Bengbu","Anqing","Ma'anshan","Huainan","Huangshan City","Bozhou"],"Jiangxi":["Nanchang","Ganzhou","Jiujiang","Jingdezhen","Pingxiang","Xinyu","Yingtan","Shangrao"],"Heilongjiang":["Harbin","Daqing","Qiqihar","Mudanjiang","Jiamusi","Jixi","Hegang","Heihe"],"Jilin":["Changchun","Jilin City","Siping","Liaoyuan","Tonghua","Baishan","Baicheng","Songyuan"],"Liaoning":["Shenyang","Dalian","Anshan","Fushun","Benxi","Dandong","Jinzhou","Yingkou"],"Hebei":["Shijiazhuang","Tangshan","Baoding","Handan","Qinhuangdao","Zhangjiakou","Chengde","Cangzhou"],"Shanxi":["Taiyuan","Datong","Changzhi","Jincheng","Yangquan","Linfen","Yuncheng","Xinzhou"],"Inner Mongolia":["Hohhot","Baotou","Ordos","Chifeng","Tongliao","Hulunbuir","Wuhai","Manzhouli"],"Guangxi":["Nanning","Guilin","Liuzhou","Wuzhou","Beihai","Qinzhou","Guigang","Yulin"],"Xinjiang":["Urumqi","Karamay","Turpan","Hami","Kashgar","Aksu","Korla","Yining"],"Tibet":["Lhasa","Shigatse","Chamdo","Nyingchi","Shannan","Nagqu","Ngari"],"Qinghai":["Xining","Haidong","Golmud","Delingha","Yushu","Tongren"],"Gansu":["Lanzhou","Tianshui","Baiyin","Wuwei","Zhangye","Jiuquan","Dunhuang","Pingliang"],"Ningxia":["Yinchuan","Shizuishan","Wuzhong","Guyuan","Zhongwei"],"Hainan":["Haikou","Sanya","Danzhou","Qionghai","Wenchang","Wanning"],"Guizhou":["Guiyang","Zunyi","Liupanshui","Anshun","Bijie","Tongren","Kaili","Xingyi"],"Chongqing":["Yuzhong","Jiangbei","Nan'an","Shapingba","Jiulongpo","Wanzhou","Fuling"],"Hong Kong":["Central and Western","Wan Chai","Eastern","Yau Tsim Mong","Sham Shui Po","Kwun Tong","Shatin","Tuen Mun"],"Macau":["Sé","Nossa Senhora de Fátima","Santo António","São Lázaro","São Lourenço","Taipa","Coloane","Cotai"]},"Colombia":{"Bogotá":["Chapinero","Usaquén","Santa Fe","Suba","Kennedy","Fontibón","Teusaquillo","Engativá"],"Antioquia":["Medellín","Bello","Itagüí","Envigado","Rionegro","Apartadó","Turbo","Santa Fe de Antioquia"],"Valle del Cauca":["Cali","Buenaventura","Palmira","Tuluá","Buga","Cartago","Jamundí","Yumbo"],"Atlántico":["Barranquilla","Soledad","Malambo","Sabanalarga","Baranoa","Puerto Colombia"],"Santander":["Bucaramanga","Floridablanca","Girón","Piedecuesta","Barrancabermeja","San Gil","Socorro","Barichara"],"Bolívar":["Cartagena","Magangué","Turbaco","Arjona","El Carmen de Bolívar","Mompox"],"Cundinamarca":["Soacha","Facatativá","Chía","Zipaquirá","Girardot","Fusagasugá","Mosquera","Funza"],"Nariño":["Pasto","Tumaco","Ipiales","Tuquerres","Samaniego","Barbacoas"],"Córdoba":["Montería","Lorica","Sahagún","Cereté","Planeta Rica","Tierralta"],"Tolima":["Ibagué","Espinal","Melgar","Honda","Mariquita","Líbano","Chaparral","Prado"],"Meta":["Villavicencio","Acacías","Granada","Puerto López","Puerto Gaitán","La Macarena"],"Huila":["Neiva","Pitalito","Garzón","San Agustín","Campoalegre","Rivera"],"Boyacá":["Tunja","Duitama","Sogamoso","Chiquinquirá","Villa de Leyva","Paipa"],"Caldas":["Manizales","La Dorada","Chinchiná","Riosucio","Villamaría","Anserma"],"Risaralda":["Pereira","Dosquebradas","Santa Rosa de Cabal","Belén de Umbría","Marsella","Quinchía"],"Quindío":["Armenia","Calarcá","Salento","Quimbaya","Montenegro","Filandia"],"Magdalena":["Santa Marta","Ciénaga","El Banco","Fundación","Plato","Aracataca"],"Cesar":["Valledupar","Aguachica","Agustín Codazzi","Bosconia","El Paso","La Jagua de Ibirico"],"Cauca":["Popayán","Santander de Quilichao","Puerto Tejada","El Tambo","Patía","Silvia"]},"Egypt":{"Cairo":["Downtown Cairo","Zamalek","Maadi","Heliopolis","Nasr City","New Cairo","Old Cairo","Islamic Cairo"],"Alexandria":["Alexandria City","Borg El Arab","Abu Qir","Al Agami","Al Amriya","El Alamein"],"Aswan":["Aswan City","Kom Ombo","Edfu","Abu Simbel","Nasr Al Nuba","Sebaiya"],"Luxor":["Esna","Armant","El Bayadiya","El Tod","El Alweat"],"Giza":["Giza City","6th of October City","Sheikh Zayed City","Al Hawamdiya","Al Badrashein","Atfih"],"Hurghada":["Hurghada City","El Gouna","Sahl Hasheesh","Safaga","Marsa Alam"],"Sharm el-Sheikh":["Sharm El Sheikh City","Naama Bay","Hadaba","Montazah","Nabq"],"Sinai":["El Arish","Rafah","Sheikh Zuweid","Bir El Abd","Nekhel"],"Nile Delta":["Tanta","Mansoura","Zagazig","Damanhour","Banha","Shebin El Kom"],"Upper Egypt":["Minya","Assiut","Sohag","Qena","Beni Suef","Faiyum"]},"France":{"Île-de-France":["Paris","Boulogne-Billancourt","Saint-Denis","Argenteuil","Montreuil","Nanterre","Vitry-sur-Seine","Créteil"],"Auvergne-Rhône-Alpes":["Lyon","Saint-Étienne","Grenoble","Villeurbanne","Clermont-Ferrand","Annecy","Vénissieux","Valence"],"Nouvelle-Aquitaine":["Bordeaux","Limoges","Poitiers","Pau","La Rochelle","Mérignac","Pessac","Niort"],"Occitanie":["Toulouse","Montpellier","Nîmes","Perpignan","Béziers","Montauban","Narbonne","Albi"],"Hauts-de-France":["Lille","Amiens","Roubaix","Tourcoing","Dunkerque","Calais","Villeneuve-d'Ascq","Saint-Quentin"],"Grand Est":["Strasbourg","Reims","Metz","Mulhouse","Nancy","Colmar","Troyes","Charleville-Mézières"],"Pays de la Loire":["Nantes","Angers","Le Mans","Saint-Nazaire","La Roche-sur-Yon","Cholet","Laval","Rezé"],"Normandie":["Le Havre","Rouen","Caen","Cherbourg-en-Cotentin","Évreux","Dieppe","Saint-Lô","Alençon"],"Bretagne":["Rennes","Brest","Quimper","Lorient","Vannes","Saint-Malo","Saint-Brieuc","Lanester"],"Bourgogne-Franche-Comté":["Dijon","Besancon","Belfort","Chalon-sur-Saône","Nevers","Auxerre","Mâcon","Sens"],"Provence-Alpes-Côte d'Azur":["Marseille","Nice","Toulon","Aix-en-Provence","Avignon","Antibes","Cannes","La Seyne-sur-Mer"],"Centre-Val de Loire":["Tours","Orléans","Bourges","Blois","Châteauroux","Chartres","Joué-lès-Tours","Dreux"],"Corse":["Ajaccio","Bastia","Porto-Vecchio","Borgo","Corte","Calvi","Propriano"]},"Germany":{"Bavaria":["Munich","Nuremberg","Augsburg","Regensburg","Ingolstadt","Würzburg","Fürth","Erlangen"],"North Rhine-Westphalia":["Cologne","Düsseldorf","Dortmund","Essen","Duisburg","Bochum","Wuppertal","Bielefeld"],"Baden-Württemberg":["Stuttgart","Mannheim","Karlsruhe","Freiburg im Breisgau","Heidelberg","Ulm","Heilbronn","Pforzheim"],"Hesse":["Frankfurt am Main","Wiesbaden","Kassel","Darmstadt","Offenbach am Main","Hanau","Gießen","Marburg"],"Lower Saxony":["Hanover","Braunschweig","Oldenburg","Osnabrück","Wolfsburg","Göttingen","Hildesheim","Salzgitter"],"Saxony":["Leipzig","Dresden","Chemnitz","Zwickau","Plauen","Görlitz","Bautzen","Freiberg"],"Berlin":["Mitte","Pankow","Charlottenburg-Wilmersdorf","Friedrichshain-Kreuzberg","Tempelhof-Schöneberg","Neukölln","Lichtenberg","Spandau"],"Hamburg":["Altona","Bergedorf","Eimsbüttel","Hamburg-Mitte","Hamburg-Nord","Harburg","Wandsbek","St. Pauli"],"Rhineland-Palatinate":["Mainz","Ludwigshafen","Koblenz","Trier","Kaiserslautern","Worms","Neuwied","Neustadt"],"Saxony-Anhalt":["Halle","Magdeburg","Dessau-Roßlau","Bitterfeld-Wolfen","Stendal","Halberstadt","Weißenfels","Lutherstadt Wittenberg"],"Thuringia":["Erfurt","Jena","Gera","Weimar","Gotha","Nordhausen","Eisenach","Suhl"],"Brandenburg":["Potsdam","Cottbus","Brandenburg an der Havel","Frankfurt (Oder)","Oranienburg"],"Mecklenburg-Western Pomerania":["Rostock","Schwerin","Neubrandenburg","Stralsund","Greifswald","Wismar"],"Schleswig-Holstein":["Kiel","Lübeck","Flensburg","Neumünster","Norderstedt","Elmshorn"],"Saarland":["Saarbrücken","Neunkirchen","Homburg","Völklingen","Saarlouis","Merzig"],"Bremen":["Bremen City","Bremerhaven"]},"Ghana":{"Greater Accra":["Accra","Tema","Madina","Ashaiman","Dome","Lashibi","Teshie","Ada Foah"],"Ashanti":["Kumasi","Obuasi","Mampong","Konongo","Tafo","Ejura","Bekwai","Offinso"],"Western":["Sekondi-Takoradi","Tarkwa","Axim","Elubo","Dixcove","Shama","Prestea","Agona Nkwanta"],"Eastern":["Koforidua","Nkawkaw","Suhum","Oda","Asamankese","Manya Krobo","Nsawam","Somanya"],"Central":["Cape Coast","Winneba","Kasoa","Mankessim","Elmina","Agona Swedru","Dunkwa-on-Offin","Saltpond"],"Volta":["Ho","Hohoe","Kpando","Aflao","Keta","Sogakope","Anloga","Dzodze"],"Northern":["Tamale","Yendi","Savelugu","Karaga","Gushiegu","Bimbilla","Kumbungu","Saboba"],"Upper East":["Bolgatanga","Navrongo","Bawku","Paga","Tongo","Sandema","Zebilla","Fumbisi"],"Upper West":["Wa","Tumu","Jirapa","Lawra","Nandom","Gwollu","Issa","Funsi"],"Brong Ahafo":["Sunyani","Berekum","Sampa","Dormaa Ahenkro","Drobo","Wamfie","Nsuatre","Jinijini"],"Bono":["Sunyani","Berekum","Sampa","Dormaa Ahenkro"],"Bono East":["Techiman","Kintampo","Nkoranza","Yeji","Atebubu"],"Ahafo":["Goaso","Mim","Hwidiem","Bechem","Kenyasi"],"Oti":["Dambai","Jasikan","Kete Krachi","Nkwanta"],"Savannah":["Damongo","Bole","Salaga","Buipe"],"North East":["Nalerigu","Gambaga","Walewale","Bunkpurugu"],"Western North":["Sefwi Wiawso","Enchi","Bia Essam","Sefwi Bekwai"]},"India":{"Andhra Pradesh":["Visakhapatnam","Vijayawada","Guntur","Tirupati","Kurnool","Nellore"],"Arunachal Pradesh":["Itanagar","Tawang","Pasighat","Naharlagun"],"Assam":["Guwahati","Dispur","Dibrugarh","Silchar","Jorhat"],"Bihar":["Patna","Gaya","Bhagalpur","Muzaffarpur","Darbhanga"],"Chhattisgarh":["Raipur","Bilaspur","Bhilai","Korba","Raigarh"],"Goa":["Panaji","Margao","Vasco da Gama","Mapusa"],"Gujarat":["Ahmedabad","Surat","Vadodara","Rajkot","Gandhinagar"],"Haryana":["Gurugram","Faridabad","Panipat","Ambala"],"Himachal Pradesh":["Shimla","Dharamshala","Manali","Mandi","Solan"],"Jharkhand":["Ranchi","Jamshedpur","Dhanbad","Bokaro","Deoghar"],"Karnataka":["Bengaluru","Mysuru","Hubballi-Dharwad","Mangaluru","Belagavi"],"Kerala":["Thiruvananthapuram","Kochi","Kozhikode","Thrissur","Kollam"],"Madhya Pradesh":["Bhopal","Indore","Jabalpur","Gwalior","Ujjain"],"Maharashtra":["Mumbai","Pune","Nagpur","Nashik","Aurangabad"],"Manipur":["Imphal","Churachandpur","Thoubal","Bishnupur"],"Meghalaya":["Shillong","Tura","Jowai","Nongpoh"],"Mizoram":["Aizawl","Lunglei","Saiha","Champhai"],"Nagaland":["Kohima","Dimapur","Mokokchung","Tuensang"],"Odisha":["Bhubaneswar","Cuttack","Rourkela","Berhampur","Sambalpur"],"Punjab":["Ludhiana","Amritsar","Jalandhar","Patiala"],"Rajasthan":["Jaipur","Jodhpur","Udaipur","Kota","Ajmer"],"Sikkim":["Gangtok","Namchi","Geyzing","Mangan"],"Tamil Nadu":["Chennai","Coimbatore","Madurai","Tiruchirappalli","Salem"],"Telangana":["Hyderabad","Warangal","Nizamabad","Khammam","Karimnagar"],"Tripura":["Agartala","Udaipur","Dharmanagar","Kailasahar"],"Uttar Pradesh":["Lucknow","Kanpur","Varanasi","Agra","Prayagraj"],"Uttarakhand":["Dehradun","Haridwar","Rishikesh","Haldwani","Nainital"],"West Bengal":["Kolkata","Siliguri","Durgapur","Asansol","Howrah"],"Delhi":["New Delhi","North Delhi","South Delhi","East Delhi","West Delhi"],"Jammu and Kashmir":["Srinagar","Jammu","Anantnag","Baramulla"],"Ladakh":["Leh","Kargil"]},"Indonesia":{"Bali":["Denpasar","Ubud","Singaraja","Kuta","Sanur","Seminyak","Canggu","Nusa Dua"],"Jakarta":["Central Jakarta","South Jakarta","West Jakarta","East Jakarta","North Jakarta"],"West Java":["Bandung","Bekasi","Depok","Bogor","Cirebon"],"East Java":["Surabaya","Malang","Kediri","Jember","Banyuwangi"],"Central Java":["Semarang","Surakarta","Magelang","Tegal","Pekalongan"],"North Sumatra":["Medan","Pematangsiantar","Binjai","Sibolga"],"South Sulawesi":["Makassar","Parepare","Palopo","Watampone"],"Yogyakarta":["Yogyakarta City","Sleman","Bantul","Wates"],"Aceh":["Banda Aceh","Lhokseumawe","Sabang","Langsa","Meulaboh"],"South Sumatra":["Palembang","Prabumulih","Lubuklinggau","Baturaja"],"Riau":["Pekanbaru","Dumai","Bengkalis","Rengat"],"Kalimantan":["Samarinda","Balikpapan","Banjarmasin","Pontianak","Palangka Raya"]},"Iran":{"Tehran":["Tehran Capital","Shahriar","Varamin"],"Isfahan":["Isfahan City","Kashan","Najafabad"],"Fars":["Shiraz","Marvdasht","Jahrom"],"Khorasan Razavi":["Mashhad","Neyshabur","Sabzevar"],"East Azerbaijan":["Tabriz","Maragheh","Marand"],"West Azerbaijan":["Urmia","Khoy","Miandoab"],"Khuzestan":["Ahvaz","Dezful","Abadan"],"Kerman":["Kerman City","Sirjan","Rafsanjan"],"Hormozgan":["Bandar Abbas","Qeshm","Minab"],"Gilan":["Rasht","Bandar-e Anzali","Lahijan"],"Mazandaran":["Sari","Babol","Amol"],"Alborz":["Karaj","Fardis","Nazarabad"],"Hamadan":["Hamadan City","Malayer","Nahavand"],"Kermanshah":["Kermanshah City","Eslamabad-e Gharb","Kangavar"],"Lorestan":["Khorramabad","Borujerd","Dorud"],"Semnan":["Semnan City","Shahrud","Damghan"],"Yazd":["Yazd City","Meybod","Ardakan"],"Zanjan":["Zanjan City","Abhar","Khorramdarreh"],"Ardabil":["Ardabil City","Meshginshahr","Parsabad"],"Bushehr":["Bushehr City","Borazjan","Bandar Ganaveh"],"Golestan":["Gorgan","Gonbad-e Kavus","Bandar Torkaman"],"Ilam":["Ilam City","Dehloran","Eyvan"],"Kohgiluyeh":["Yasuj","Gachsaran","Dehdasht"],"Kurdistan":["Sanandaj","Saqqez","Marivan"],"Markazi":["Arak","Saveh","Khomein"],"Qazvin":["Qazvin City","Takestan","Alvand"],"Qom":["Qom City"],"Sistan and Baluchestan":["Zahedan","Zabol","Chabahar"],"South Khorasan":["Birjand","Qaen","Tabas"],"North Khorasan":["Bojnurd","Shirvan","Esfarayen"],"Chaharmahal and Bakhtiari":["Shahrekord","Borujen","Lordegan"]},"Italy":{"Lombardy":["Milan","Bergamo","Brescia","Como","Monza","Varese","Pavia","Cremona"],"Lazio":["Rome","Latina","Frosinone","Civitavecchia","Rieti","Viterbo"],"Campania":["Naples","Salerno","Caserta","Benevento","Avellino","Torre del Greco"],"Sicily":["Palermo","Catania","Messina","Agrigento","Siracusa","Trapani","Ragusa","Caltanissetta"],"Veneto":["Venice","Verona","Padua","Vicenza","Treviso","Mestre","Belluno","Rovigo"],"Piedmont":["Turin","Novara","Alessandria","Asti","Cuneo","Biella","Verbania","Vercelli"],"Emilia-Romagna":["Bologna","Parma","Modena","Rimini","Ferrara","Reggio Emilia","Ravenna","Forlì"],"Tuscany":["Florence","Pisa","Siena","Livorno","Arezzo","Grosseto","Prato","Pistoia"],"Apulia":["Bari","Lecce","Foggia","Taranto","Brindisi","Andria","Barletta","Altamura"],"Calabria":["Catanzaro","Reggio Calabria","Cosenza","Lamezia Terme","Crotone","Vibo Valentia"],"Sardinia":["Cagliari","Sassari","Nuoro","Olbia","Oristano","Quartu Sant'Elena"],"Liguria":["Genoa","La Spezia","Savona","Imperia","Sanremo"],"Marche":["Ancona","Pesaro","Ascoli Piceno","Macerata","Fermo"],"Abruzzo":["L'Aquila","Pescara","Chieti","Teramo"],"Friuli-Venezia Giulia":["Trieste","Udine","Gorizia","Pordenone"],"Trentino-Alto Adige":["Trento","Bolzano","Rovereto","Merano"],"Umbria":["Perugia","Terni","Foligno","Città di Castello"],"Basilicata":["Potenza","Matera"],"Molise":["Campobasso","Isernia"]},"Japan":{"Tokyo":["Shinjuku","Shibuya","Hachioji","Tachikawa","Ginza","Asakusa","Roppongi","Akihabara"],"Osaka":["Osaka City","Sakai","Higashiosaka","Toyonaka","Neyagawa","Suita","Ibaraki","Takatsuki"],"Kanagawa":["Yokohama","Kawasaki","Sagamihara","Fujisawa","Yokosuka","Chigasaki","Hiratsuka","Odawara"],"Aichi":["Nagoya","Toyota","Toyohashi","Okazaki","Ichinomiya","Kasugai","Nagakute"],"Fukuoka":["Fukuoka City","Kitakyushu","Kurume","Omuta","Iizuka","Kasuga","Chikushino"],"Hokkaido":["Sapporo","Hakodate","Asahikawa","Obihiro","Kushiro","Tomakomai","Chitose"],"Hyogo":["Kobe","Himeji","Amagasaki","Nishinomiya","Akashi","Kakogawa","Takarazuka"],"Kyoto":["Kyoto City","Uji","Kameoka","Muko","Nagaokakyo","Joyo","Maizuru"],"Saitama":["Saitama City","Kawaguchi","Kawagoe","Tokorozawa","Kasukabe","Ageo","Yashio"],"Chiba":["Chiba City","Funabashi","Matsudo","Kashiwa","Ichikawa","Urayasu","Narashino"],"Shizuoka":["Shizuoka City","Hamamatsu","Numazu","Fuji","Mishima","Shimizu"],"Hiroshima":["Hiroshima City","Fukuyama","Kure","Onomichi","Higashihiroshima","Hatsukaichi"],"Miyagi":["Sendai","Ishinomaki","Osaki","Natori","Tome","Kesennuma"],"Nara":["Nara City","Kashihara","Ikoma","Yamato-Koriyama","Tenri"],"Nagano":["Nagano City","Matsumoto","Ueda","Iida","Suwa","Chino"],"Niigata":["Niigata City","Nagaoka","Joetsu","Sanjo","Kashiwazaki"],"Okinawa":["Naha","Okinawa City","Uruma","Urasoe","Ginowan"],"Ibaraki":["Mito","Tsukuba","Hitachi","Tsuchiura","Kasama"],"Tochigi":["Utsunomiya","Ashikaga","Oyama","Koga"],"Gunma":["Maebashi","Takasaki","Ota","Kiryu"],"Fukushima":["Fukushima City","Koriyama","Iwaki","Aizuwakamatsu"],"Yamaguchi":["Yamaguchi City","Shimonoseki","Ube","Hofu"],"Kagoshima":["Kagoshima City","Kirishima","Kanoya","Satsuma"],"Kumamoto":["Kumamoto City","Yatsushiro","Amakusa"],"Ehime":["Matsuyama","Imabari","Niihama"],"Iwate":["Morioka","Hanamaki","Kitakami"],"Kagawa":["Takamatsu","Marugame","Sakaide"],"Okayama":["Okayama City","Kurashiki","Tsuyama"],"Tokushima":["Tokushima City","Naruto","Anan"],"Kochi":["Kochi City","Nankoku","Shimanto"],"Shimane":["Matsue","Izumo","Hamada"],"Tottori":["Tottori City","Yonago","Kurayoshi"],"Oita":["Oita City","Beppu","Nakatsu"],"Miyazaki":["Miyazaki City","Miyakonojo","Nobeoka"],"Saga":["Saga City","Karatsu","Tosu"],"Nagasaki":["Nagasaki City","Sasebo","Isahaya"],"Akita":["Akita City","Yokote","Daisen"],"Aomori":["Aomori City","Hachinohe","Hirosaki"],"Yamagata":["Yamagata City","Tsuruoka","Sakata"],"Toyama":["Toyama City","Takaoka","Imizu"],"Ishikawa":["Kanazawa","Hakusan","Komatsu"],"Fukui":["Fukui City","Echizen","Tsuruga"],"Shiga":["Otsu","Hikone","Kusatsu"],"Mie":["Tsu","Yokkaichi","Matsusaka"],"Wakayama":["Wakayama City","Tanabe","Kinokawa"],"Yamanashi":["Kofu","Fujiyoshida","Minami-Alps"],"Gifu":["Gifu City","Ogaki","Takayama"],"Hokkaido Outermost":["Abashiri","Wakkanai","Nemuro","Rumoi"]}}; // ABBREVIATED — full data in production
 
 // ══════════════════════════════════════════════════════════════════
 // ALL 195 COUNTRIES
@@ -242,6 +203,30 @@ const HOT_ISOS = new Set([
 ]);
 
 // ══════════════════════════════════════════════════════════════════
+// ISO3 TO ISO2 MAP
+// ══════════════════════════════════════════════════════════════════
+const ISO3_TO_ISO2 = {
+  DZA:"DZ",AGO:"AO",BEN:"BJ",BWA:"BW",BFA:"BF",BDI:"BI",CPV:"CV",CMR:"CM",CAF:"CF",TCD:"TD",COM:"KM",COD:"CD",COG:"CG",CIV:"CI",DJI:"DJ",EGY:"EG",GNQ:"GQ",ERI:"ER",SWZ:"SZ",ETH:"ET",GAB:"GA",GMB:"GM",GHA:"GH",GIN:"GN",GNB:"GW",KEN:"KE",LSO:"LS",LBR:"LR",LBY:"LY",MDG:"MG",MWI:"MW",MLI:"ML",MRT:"MR",MUS:"MU",MAR:"MA",MOZ:"MZ",NAM:"NA",NER:"NE",NGA:"NG",RWA:"RW",STP:"ST",SEN:"SN",SLE:"SL",SOM:"SO",ZAF:"ZA",SSD:"SS",SDN:"SD",TZA:"TZ",TGO:"TG",TUN:"TN",UGA:"UG",ZMB:"ZM",ZWE:"ZW",
+  AFG:"AF",ARM:"AM",AZE:"AZ",BHR:"BH",BGD:"BD",BTN:"BT",BRN:"BN",KHM:"KH",CHN:"CN",CYP:"CY",GEO:"GE",IND:"IN",IDN:"ID",IRN:"IR",IRQ:"IQ",ISR:"IL",JPN:"JP",JOR:"JO",KAZ:"KZ",KWT:"KW",KGZ:"KG",LAO:"LA",LBN:"LB",MYS:"MY",MDV:"MV",MNG:"MN",MMR:"MM",NPL:"NP",PRK:"KP",OMN:"OM",PAK:"PK",PSE:"PS",PHL:"PH",QAT:"QA",SAU:"SA",SGP:"SG",KOR:"KR",LKA:"LK",SYR:"SY",TWN:"TW",TJK:"TJ",THA:"TH",TLS:"TL",TUR:"TR",TKM:"TM",ARE:"AE",UZB:"UZ",VNM:"VN",YEM:"YE",
+  ALB:"AL",AND:"AD",AUT:"AT",BLR:"BY",BEL:"BE",BIH:"BA",BGR:"BG",HRV:"HR",CZE:"CZ",DNK:"DK",EST:"EE",FIN:"FI",FRA:"FR",DEU:"DE",GRC:"GR",HUN:"HU",ISL:"IS",IRL:"IE",ITA:"IT",XKX:"XK",LVA:"LV",LIE:"LI",LTU:"LT",LUX:"LU",MLT:"MT",MDA:"MD",MCO:"MC",MNE:"ME",NLD:"NL",MKD:"MK",NOR:"NO",POL:"PL",PRT:"PT",ROU:"RO",RUS:"RU",SMR:"SM",SRB:"RS",SVK:"SK",SVN:"SI",ESP:"ES",SWE:"SE",CHE:"CH",UKR:"UA",GBR:"GB",
+  ATG:"AG",BHS:"BS",BRB:"BB",BLZ:"BZ",CAN:"CA",CRI:"CR",CUB:"CU",DMA:"DM",DOM:"DO",SLV:"SV",GRD:"GD",GTM:"GT",HTI:"HT",HND:"HN",JAM:"JM",MEX:"MX",NIC:"NI",PAN:"PA",KNA:"KN",LCA:"LC",VCT:"VC",TTO:"TT",USA:"US",
+  ARG:"AR",BOL:"BO",BRA:"BR",CHL:"CL",COL:"CO",ECU:"EC",GUY:"GY",PRY:"PY",PER:"PE",SUR:"SR",URY:"UY",VEN:"VE",
+  AUS:"AU",FJI:"FJ",KIR:"KI",MHL:"MH",FSM:"FM",NRU:"NR",NZL:"NZ",PLW:"PW",PNG:"PG",WSM:"WS",SLB:"SB",TON:"TO",TUV:"TV",VUT:"VU",
+};
+
+// ══════════════════════════════════════════════════════════════════
+// CAPITAL COORDINATES
+// ══════════════════════════════════════════════════════════════════
+const geoCoordCache = {
+  DZA:{lat:36.7372,lon:3.0865},AGO:{lat:-8.8368,lon:13.2343},BEN:{lat:6.3654,lon:2.4183},BWA:{lat:-24.6282,lon:25.9231},BFA:{lat:12.3569,lon:-1.5353},BDI:{lat:-3.3869,lon:29.3619},CPV:{lat:14.9315,lon:-23.5087},CMR:{lat:3.8612,lon:11.5217},CAF:{lat:4.3612,lon:18.5550},TCD:{lat:12.1048,lon:15.0445},COM:{lat:-11.7022,lon:43.2551},COD:{lat:-4.3276,lon:15.3215},COG:{lat:-4.2634,lon:15.2429},CIV:{lat:6.8276,lon:-5.2893},DJI:{lat:11.5886,lon:43.1456},EGY:{lat:30.0444,lon:31.2357},GNQ:{lat:3.7523,lon:8.7741},ERI:{lat:15.3229,lon:38.9251},SWZ:{lat:-26.3054,lon:31.1367},ETH:{lat:9.0320,lon:38.7421},GAB:{lat:0.4162,lon:9.4673},GMB:{lat:13.4549,lon:-16.5790},GHA:{lat:5.5502,lon:-0.2174},GIN:{lat:9.5243,lon:-13.6773},GNB:{lat:11.8636,lon:-15.5977},KEN:{lat:-1.2921,lon:36.8219},LSO:{lat:-29.3151,lon:27.4869},LBR:{lat:6.3005,lon:-10.7969},LBY:{lat:32.9021,lon:13.1806},MDG:{lat:-18.9137,lon:47.5361},MWI:{lat:-13.9669,lon:33.7873},MLI:{lat:12.6392,lon:-8.0029},MRT:{lat:18.0735,lon:-15.9582},MUS:{lat:-20.1654,lon:57.4896},MAR:{lat:33.9716,lon:-6.8498},MOZ:{lat:-25.9692,lon:32.5732},NAM:{lat:-22.5609,lon:17.0658},NER:{lat:13.5116,lon:2.1254},NGA:{lat:9.0765,lon:7.3986},RWA:{lat:-1.9441,lon:30.0619},STP:{lat:0.3365,lon:6.7273},SEN:{lat:14.6928,lon:-17.4467},SLE:{lat:8.4897,lon:-13.2344},SOM:{lat:2.0469,lon:45.3182},ZAF:{lat:-25.7479,lon:28.2293},SSD:{lat:4.8517,lon:31.5825},SDN:{lat:15.5007,lon:32.5599},TZA:{lat:-6.1722,lon:35.7395},TGO:{lat:6.1375,lon:1.2123},TUN:{lat:36.8190,lon:10.1658},UGA:{lat:0.3476,lon:32.5825},ZMB:{lat:-15.4166,lon:28.2833},ZWE:{lat:-17.8252,lon:31.0335},
+  AFG:{lat:34.5553,lon:69.2075},ARM:{lat:40.1872,lon:44.5152},AZE:{lat:40.4093,lon:49.8671},BHR:{lat:26.2154,lon:50.5860},BGD:{lat:23.8103,lon:90.4125},BTN:{lat:27.4728,lon:89.6390},BRN:{lat:4.9031,lon:114.9398},KHM:{lat:11.5626,lon:104.9282},CHN:{lat:39.9042,lon:116.4074},CYP:{lat:35.1856,lon:33.3823},GEO:{lat:41.6938,lon:44.8015},IND:{lat:28.6139,lon:77.2090},IDN:{lat:-6.2088,lon:106.8456},IRN:{lat:35.6892,lon:51.3890},IRQ:{lat:33.3406,lon:44.4009},ISR:{lat:31.7683,lon:35.2137},JPN:{lat:35.6762,lon:139.6503},JOR:{lat:31.9566,lon:35.9457},KAZ:{lat:51.1811,lon:71.4460},KWT:{lat:29.3759,lon:47.9774},KGZ:{lat:42.8746,lon:74.5698},LAO:{lat:17.9757,lon:102.6331},LBN:{lat:33.8938,lon:35.5018},MYS:{lat:3.1390,lon:101.6869},MDV:{lat:4.1755,lon:73.5093},MNG:{lat:47.9077,lon:106.8832},MMR:{lat:19.7633,lon:96.0785},NPL:{lat:27.7172,lon:85.3240},PRK:{lat:39.0392,lon:125.7625},OMN:{lat:23.5880,lon:58.3829},PAK:{lat:33.7294,lon:73.0931},PSE:{lat:31.9522,lon:35.2332},PHL:{lat:14.5995,lon:120.9842},QAT:{lat:25.2854,lon:51.5310},SAU:{lat:24.6877,lon:46.7219},SGP:{lat:1.3521,lon:103.8198},KOR:{lat:37.5665,lon:126.9780},LKA:{lat:6.9271,lon:79.8612},SYR:{lat:33.5102,lon:36.2913},TWN:{lat:25.0330,lon:121.5654},TJK:{lat:38.5598,lon:68.7733},THA:{lat:13.7563,lon:100.5018},TLS:{lat:-8.5569,lon:125.5789},TUR:{lat:39.9334,lon:32.8597},TKM:{lat:37.9601,lon:58.3261},ARE:{lat:24.4539,lon:54.3773},UZB:{lat:41.2995,lon:69.2401},VNM:{lat:21.0285,lon:105.8542},YEM:{lat:15.3694,lon:44.1910},
+  ALB:{lat:41.3275,lon:19.8187},AND:{lat:42.5063,lon:1.5218},AUT:{lat:48.2082,lon:16.3738},BLR:{lat:53.9045,lon:27.5615},BEL:{lat:50.8503,lon:4.3517},BIH:{lat:43.8486,lon:18.3564},BGR:{lat:42.6977,lon:23.3219},HRV:{lat:45.8150,lon:15.9819},CZE:{lat:50.0755,lon:14.4378},DNK:{lat:55.6761,lon:12.5683},EST:{lat:59.4370,lon:24.7536},FIN:{lat:60.1699,lon:24.9384},FRA:{lat:48.8566,lon:2.3522},DEU:{lat:52.5200,lon:13.4050},GRC:{lat:37.9838,lon:23.7275},HUN:{lat:47.4979,lon:19.0402},ISL:{lat:64.1266,lon:-21.8174},IRL:{lat:53.3498,lon:-6.2603},ITA:{lat:41.9028,lon:12.4964},XKX:{lat:42.6629,lon:21.1655},LVA:{lat:56.9460,lon:24.1059},LIE:{lat:47.1410,lon:9.5215},LTU:{lat:54.6872,lon:25.2797},LUX:{lat:49.6117,lon:6.1319},MLT:{lat:35.8997,lon:14.5147},MDA:{lat:47.0105,lon:28.8638},MCO:{lat:43.7384,lon:7.4246},MNE:{lat:42.4304,lon:19.2594},NLD:{lat:52.3676,lon:4.9041},MKD:{lat:41.9965,lon:21.4314},NOR:{lat:59.9139,lon:10.7522},POL:{lat:52.2297,lon:21.0122},PRT:{lat:38.7169,lon:-9.1395},ROU:{lat:44.4268,lon:26.1025},RUS:{lat:55.7558,lon:37.6173},SMR:{lat:43.9424,lon:12.4578},SRB:{lat:44.8176,lon:20.4633},SVK:{lat:48.1486,lon:17.1077},SVN:{lat:46.0569,lon:14.5058},ESP:{lat:40.4168,lon:-3.7038},SWE:{lat:59.3293,lon:18.0686},CHE:{lat:46.9480,lon:7.4474},UKR:{lat:50.4501,lon:30.5234},GBR:{lat:51.5074,lon:-0.1278},
+  ATG:{lat:17.1274,lon:-61.8468},BHS:{lat:25.0480,lon:-77.3554},BRB:{lat:13.0969,lon:-59.6145},BLZ:{lat:17.2510,lon:-88.7590},CAN:{lat:45.4215,lon:-75.6972},CRI:{lat:9.9281,lon:-84.0907},CUB:{lat:23.1136,lon:-82.3666},DMA:{lat:15.3092,lon:-61.3794},DOM:{lat:18.4861,lon:-69.9312},SLV:{lat:13.6929,lon:-89.2182},GRD:{lat:12.0561,lon:-61.7488},GTM:{lat:14.6349,lon:-90.5069},HTI:{lat:18.5392,lon:-72.3350},HND:{lat:14.0818,lon:-87.2068},JAM:{lat:17.9970,lon:-76.7936},MEX:{lat:19.4326,lon:-99.1332},NIC:{lat:12.1328,lon:-86.2926},PAN:{lat:8.9936,lon:-79.5197},KNA:{lat:17.3026,lon:-62.7177},LCA:{lat:14.0101,lon:-60.9875},VCT:{lat:13.1600,lon:-61.2248},TTO:{lat:10.6549,lon:-61.5019},USA:{lat:38.8951,lon:-77.0364},
+  ARG:{lat:-34.6037,lon:-58.3816},BOL:{lat:-16.5000,lon:-68.1500},BRA:{lat:-15.7975,lon:-47.8919},CHL:{lat:-33.4489,lon:-70.6693},COL:{lat:4.7110,lon:-74.0721},ECU:{lat:-0.2295,lon:-78.5243},GUY:{lat:6.8013,lon:-58.1553},PRY:{lat:-25.2867,lon:-57.6470},PER:{lat:-12.0464,lon:-77.0428},SUR:{lat:5.8520,lon:-55.2038},URY:{lat:-34.9011,lon:-56.1915},VEN:{lat:10.4806,lon:-66.9036},
+  AUS:{lat:-35.2809,lon:149.1300},FJI:{lat:-18.1416,lon:178.4415},KIR:{lat:1.3290,lon:172.9790},MHL:{lat:7.1095,lon:171.3803},FSM:{lat:6.9248,lon:158.1618},NRU:{lat:-0.5477,lon:166.9209},NZL:{lat:-41.2865,lon:174.7762},PLW:{lat:7.5000,lon:134.6240},PNG:{lat:-9.4438,lon:147.1803},WSM:{lat:-13.8314,lon:-172.1345},SLB:{lat:-9.4456,lon:160.0432},TON:{lat:-21.1393,lon:-175.2049},TUV:{lat:-8.5200,lon:179.1980},VUT:{lat:-17.7333,lon:168.3210},
+};
+
+// ══════════════════════════════════════════════════════════════════
 // SOURCE HEALTH TRACKING
 // ══════════════════════════════════════════════════════════════════
 const sourceHealth = {};
@@ -259,115 +244,159 @@ async function timed(source, fn) {
   catch(e) { recordHealth(source,false,Date.now()-t,e.message); throw e; }
 }
 
+function getHardcodedAreas(stateName, countryName) {
+  const countryData = HARDCODED_GEO[countryName];
+  if (countryData) {
+    if (countryData[stateName]) return countryData[stateName];
+    const stateKey = Object.keys(countryData).find(k =>
+      k.toLowerCase().includes(stateName.toLowerCase()) ||
+      stateName.toLowerCase().includes(k.toLowerCase())
+    );
+    if (stateKey) return countryData[stateKey];
+  }
+  const countryKey = Object.keys(HARDCODED_GEO).find(k =>
+    k.toLowerCase().includes(countryName.toLowerCase()) ||
+    countryName.toLowerCase().includes(k.toLowerCase())
+  );
+  if (countryKey) {
+    const cd = HARDCODED_GEO[countryKey];
+    if (cd[stateName]) return cd[stateName];
+    const sk = Object.keys(cd).find(k =>
+      k.toLowerCase().includes(stateName.toLowerCase()) ||
+      stateName.toLowerCase().includes(k.toLowerCase())
+    );
+    if (sk) return cd[sk];
+  }
+  return [];
+}
+
+function getHardcodedStates(countryName) {
+  const countryData = HARDCODED_GEO[countryName];
+  if (countryData) return Object.keys(countryData);
+  const countryKey = Object.keys(HARDCODED_GEO).find(k =>
+    k.toLowerCase().includes(countryName.toLowerCase()) ||
+    countryName.toLowerCase().includes(k.toLowerCase())
+  );
+  if (countryKey) return Object.keys(HARDCODED_GEO[countryKey]);
+  return [];
+}
+
+function hashCode(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) { const chr = str.charCodeAt(i); hash = ((hash << 5) - hash) + chr; hash |= 0; }
+  return hash;
+}
+
+const BAD_CITY_WORDS = new Set(['list','unknown','n/a','null','undefined','none','other','various','multiple','city','town','village','district','region','area','state','province','territory','country']);
+function isValidCityName(name, stateName, countryName) {
+  if (!name || typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  if (trimmed.length < 2 || trimmed.length > 80) return false;
+  if (BAD_CITY_WORDS.has(trimmed.toLowerCase())) return false;
+  if (stateName && trimmed.toLowerCase() === stateName.toLowerCase()) return false;
+  if (countryName && trimmed.toLowerCase() === countryName.toLowerCase()) return false;
+  if ((trimmed.match(/,/g)||[]).length >= 2) return false;
+  if (!/[a-zA-Z]/.test(trimmed)) return false;
+  return true;
+}
+
+
 // ══════════════════════════════════════════════════════════════════
-// CAPITAL COORDINATES
+// MISTRAL QUEUE (with 401 fast-fail)
 // ══════════════════════════════════════════════════════════════════
-const geoCoordCache = {
-  DZA:{lat:36.7372,lon:3.0865},AGO:{lat:-8.8368,lon:13.2343},
-  BEN:{lat:6.3654,lon:2.4183},BWA:{lat:-24.6282,lon:25.9231},
-  BFA:{lat:12.3569,lon:-1.5353},BDI:{lat:-3.3869,lon:29.3619},
-  CPV:{lat:14.9315,lon:-23.5087},CMR:{lat:3.8612,lon:11.5217},
-  CAF:{lat:4.3612,lon:18.5550},TCD:{lat:12.1048,lon:15.0445},
-  COM:{lat:-11.7022,lon:43.2551},COD:{lat:-4.3276,lon:15.3215},
-  COG:{lat:-4.2634,lon:15.2429},CIV:{lat:6.8276,lon:-5.2893},
-  DJI:{lat:11.5886,lon:43.1456},EGY:{lat:30.0444,lon:31.2357},
-  GNQ:{lat:3.7523,lon:8.7741},ERI:{lat:15.3229,lon:38.9251},
-  SWZ:{lat:-26.3054,lon:31.1367},ETH:{lat:9.0320,lon:38.7421},
-  GAB:{lat:0.4162,lon:9.4673},GMB:{lat:13.4549,lon:-16.5790},
-  GHA:{lat:5.5502,lon:-0.2174},GIN:{lat:9.5243,lon:-13.6773},
-  GNB:{lat:11.8636,lon:-15.5977},KEN:{lat:-1.2921,lon:36.8219},
-  LSO:{lat:-29.3151,lon:27.4869},LBR:{lat:6.3005,lon:-10.7969},
-  LBY:{lat:32.9021,lon:13.1806},MDG:{lat:-18.9137,lon:47.5361},
-  MWI:{lat:-13.9669,lon:33.7873},MLI:{lat:12.6392,lon:-8.0029},
-  MRT:{lat:18.0735,lon:-15.9582},MUS:{lat:-20.1654,lon:57.4896},
-  MAR:{lat:33.9716,lon:-6.8498},MOZ:{lat:-25.9692,lon:32.5732},
-  NAM:{lat:-22.5609,lon:17.0658},NER:{lat:13.5116,lon:2.1254},
-  NGA:{lat:9.0765,lon:7.3986},RWA:{lat:-1.9441,lon:30.0619},
-  STP:{lat:0.3365,lon:6.7273},SEN:{lat:14.6928,lon:-17.4467},
-  SLE:{lat:8.4897,lon:-13.2344},SOM:{lat:2.0469,lon:45.3182},
-  ZAF:{lat:-25.7479,lon:28.2293},SSD:{lat:4.8517,lon:31.5825},
-  SDN:{lat:15.5007,lon:32.5599},TZA:{lat:-6.1722,lon:35.7395},
-  TGO:{lat:6.1375,lon:1.2123},TUN:{lat:36.8190,lon:10.1658},
-  UGA:{lat:0.3476,lon:32.5825},ZMB:{lat:-15.4166,lon:28.2833},
-  ZWE:{lat:-17.8252,lon:31.0335},
-  AFG:{lat:34.5553,lon:69.2075},ARM:{lat:40.1872,lon:44.5152},
-  AZE:{lat:40.4093,lon:49.8671},BHR:{lat:26.2154,lon:50.5860},
-  BGD:{lat:23.8103,lon:90.4125},BTN:{lat:27.4728,lon:89.6390},
-  BRN:{lat:4.9031,lon:114.9398},KHM:{lat:11.5626,lon:104.9282},
-  CHN:{lat:39.9042,lon:116.4074},CYP:{lat:35.1856,lon:33.3823},
-  GEO:{lat:41.6938,lon:44.8015},IND:{lat:28.6139,lon:77.2090},
-  IDN:{lat:-6.2088,lon:106.8456},IRN:{lat:35.6892,lon:51.3890},
-  IRQ:{lat:33.3406,lon:44.4009},ISR:{lat:31.7683,lon:35.2137},
-  JPN:{lat:35.6762,lon:139.6503},JOR:{lat:31.9566,lon:35.9457},
-  KAZ:{lat:51.1811,lon:71.4460},KWT:{lat:29.3759,lon:47.9774},
-  KGZ:{lat:42.8746,lon:74.5698},LAO:{lat:17.9757,lon:102.6331},
-  LBN:{lat:33.8938,lon:35.5018},MYS:{lat:3.1390,lon:101.6869},
-  MDV:{lat:4.1755,lon:73.5093},MNG:{lat:47.9077,lon:106.8832},
-  MMR:{lat:19.7633,lon:96.0785},NPL:{lat:27.7172,lon:85.3240},
-  PRK:{lat:39.0392,lon:125.7625},OMN:{lat:23.5880,lon:58.3829},
-  PAK:{lat:33.7294,lon:73.0931},PSE:{lat:31.9522,lon:35.2332},
-  PHL:{lat:14.5995,lon:120.9842},QAT:{lat:25.2854,lon:51.5310},
-  SAU:{lat:24.6877,lon:46.7219},SGP:{lat:1.3521,lon:103.8198},
-  KOR:{lat:37.5665,lon:126.9780},LKA:{lat:6.9271,lon:79.8612},
-  SYR:{lat:33.5102,lon:36.2913},TWN:{lat:25.0330,lon:121.5654},
-  TJK:{lat:38.5598,lon:68.7733},THA:{lat:13.7563,lon:100.5018},
-  TLS:{lat:-8.5569,lon:125.5789},TUR:{lat:39.9334,lon:32.8597},
-  TKM:{lat:37.9601,lon:58.3261},ARE:{lat:24.4539,lon:54.3773},
-  UZB:{lat:41.2995,lon:69.2401},VNM:{lat:21.0285,lon:105.8542},
-  YEM:{lat:15.3694,lon:44.1910},
-  ALB:{lat:41.3275,lon:19.8187},AND:{lat:42.5063,lon:1.5218},
-  AUT:{lat:48.2082,lon:16.3738},BLR:{lat:53.9045,lon:27.5615},
-  BEL:{lat:50.8503,lon:4.3517},BIH:{lat:43.8486,lon:18.3564},
-  BGR:{lat:42.6977,lon:23.3219},HRV:{lat:45.8150,lon:15.9819},
-  CZE:{lat:50.0755,lon:14.4378},DNK:{lat:55.6761,lon:12.5683},
-  EST:{lat:59.4370,lon:24.7536},FIN:{lat:60.1699,lon:24.9384},
-  FRA:{lat:48.8566,lon:2.3522},DEU:{lat:52.5200,lon:13.4050},
-  GRC:{lat:37.9838,lon:23.7275},HUN:{lat:47.4979,lon:19.0402},
-  ISL:{lat:64.1266,lon:-21.8174},IRL:{lat:53.3498,lon:-6.2603},
-  ITA:{lat:41.9028,lon:12.4964},XKX:{lat:42.6629,lon:21.1655},
-  LVA:{lat:56.9460,lon:24.1059},LIE:{lat:47.1410,lon:9.5215},
-  LTU:{lat:54.6872,lon:25.2797},LUX:{lat:49.6117,lon:6.1319},
-  MLT:{lat:35.8997,lon:14.5147},MDA:{lat:47.0105,lon:28.8638},
-  MCO:{lat:43.7384,lon:7.4246},MNE:{lat:42.4304,lon:19.2594},
-  NLD:{lat:52.3676,lon:4.9041},MKD:{lat:41.9965,lon:21.4314},
-  NOR:{lat:59.9139,lon:10.7522},POL:{lat:52.2297,lon:21.0122},
-  PRT:{lat:38.7169,lon:-9.1395},ROU:{lat:44.4268,lon:26.1025},
-  RUS:{lat:55.7558,lon:37.6173},SMR:{lat:43.9424,lon:12.4578},
-  SRB:{lat:44.8176,lon:20.4633},SVK:{lat:48.1486,lon:17.1077},
-  SVN:{lat:46.0569,lon:14.5058},ESP:{lat:40.4168,lon:-3.7038},
-  SWE:{lat:59.3293,lon:18.0686},CHE:{lat:46.9480,lon:7.4474},
-  UKR:{lat:50.4501,lon:30.5234},GBR:{lat:51.5074,lon:-0.1278},
-  ATG:{lat:17.1274,lon:-61.8468},BHS:{lat:25.0480,lon:-77.3554},
-  BRB:{lat:13.0969,lon:-59.6145},BLZ:{lat:17.2510,lon:-88.7590},
-  CAN:{lat:45.4215,lon:-75.6972},CRI:{lat:9.9281,lon:-84.0907},
-  CUB:{lat:23.1136,lon:-82.3666},DMA:{lat:15.3092,lon:-61.3794},
-  DOM:{lat:18.4861,lon:-69.9312},SLV:{lat:13.6929,lon:-89.2182},
-  GRD:{lat:12.0561,lon:-61.7488},GTM:{lat:14.6349,lon:-90.5069},
-  HTI:{lat:18.5392,lon:-72.3350},HND:{lat:14.0818,lon:-87.2068},
-  JAM:{lat:17.9970,lon:-76.7936},MEX:{lat:19.4326,lon:-99.1332},
-  NIC:{lat:12.1328,lon:-86.2926},PAN:{lat:8.9936,lon:-79.5197},
-  KNA:{lat:17.3026,lon:-62.7177},LCA:{lat:14.0101,lon:-60.9875},
-  VCT:{lat:13.1600,lon:-61.2248},TTO:{lat:10.6549,lon:-61.5019},
-  USA:{lat:38.8951,lon:-77.0364},
-  ARG:{lat:-34.6037,lon:-58.3816},BOL:{lat:-16.5000,lon:-68.1500},
-  BRA:{lat:-15.7975,lon:-47.8919},CHL:{lat:-33.4489,lon:-70.6693},
-  COL:{lat:4.7110,lon:-74.0721},ECU:{lat:-0.2295,lon:-78.5243},
-  GUY:{lat:6.8013,lon:-58.1553},PRY:{lat:-25.2867,lon:-57.6470},
-  PER:{lat:-12.0464,lon:-77.0428},SUR:{lat:5.8520,lon:-55.2038},
-  URY:{lat:-34.9011,lon:-56.1915},VEN:{lat:10.4806,lon:-66.9036},
-  AUS:{lat:-35.2809,lon:149.1300},FJI:{lat:-18.1416,lon:178.4415},
-  KIR:{lat:1.3290,lon:172.9790},MHL:{lat:7.1095,lon:171.3803},
-  FSM:{lat:6.9248,lon:158.1618},NRU:{lat:-0.5477,lon:166.9209},
-  NZL:{lat:-41.2865,lon:174.7762},PLW:{lat:7.5000,lon:134.6240},
-  PNG:{lat:-9.4438,lon:147.1803},WSM:{lat:-13.8314,lon:-172.1345},
-  SLB:{lat:-9.4456,lon:160.0432},TON:{lat:-21.1393,lon:-175.2049},
-  TUV:{lat:-8.5200,lon:179.1980},VUT:{lat:-17.7333,lon:168.3210},
+const mistralQueue = {
+  _lastCallAt: 0,
+  _min_gap_ms: 6000,
+  _backoff_ms: 0,
+  _consecutive429s: 0,
+
+  async call(fn) {
+    if (!mistralAvailable()) {
+      const err = new Error("Mistral API key invalid or missing");
+      err.isFatal = true;
+      err.isKeyError = true;
+      throw err;
+    }
+    const now = Date.now();
+    const gap = this._min_gap_ms + this._backoff_ms;
+    const wait = Math.max(0, gap - (now - this._lastCallAt));
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    this._lastCallAt = Date.now();
+    try {
+      const result = await fn();
+      if (this._consecutive429s > 0) {
+        this._consecutive429s = 0;
+        this._backoff_ms = 0;
+        console.log("[MistralQueue] 429 backoff cleared");
+      }
+      return result;
+    } catch(e) {
+      if (e.response?.status === 401) {
+        markMistral401();
+        const fatal = new Error("Mistral 401 Unauthorized");
+        fatal.isFatal = true;
+        fatal.isKeyError = true;
+        throw fatal;
+      }
+      if (e.response?.status === 429) {
+        this._consecutive429s++;
+        this._backoff_ms = Math.min(120000, 10000 * Math.pow(2, this._consecutive429s - 1));
+        console.log(`[MistralQueue] 429 — backing off ${this._backoff_ms/1000}s`);
+      }
+      throw e;
+    }
+  }
 };
 
-// ══════════════════════════════════════════════════════════════════
-// DATA FETCHERS (unchanged from original)
-// ══════════════════════════════════════════════════════════════════
+function repairJson(text) {
+  const s = text.replace(/```json|```/g, "").trim();
+  try { return JSON.parse(s); } catch(e) {}
+  let depth = 0; let lastGood = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") { depth--; if (depth === 0) lastGood = i + 1; }
+  }
+  const candidates = [
+    s.slice(0, lastGood),
+    s + "}".repeat(Math.max(0, depth)),
+    s.replace(/,\s*$/, "") + "}".repeat(Math.max(0, depth)),
+  ];
+  for (const c of candidates) {
+    try { return JSON.parse(c); } catch(e) {} }
+  const m = s.match(/^\s*\{[\s\S]+/);
+  if (m) {
+    let d = 0; let end = 0;
+    for (let i = 0; i < m[0].length; i++) {
+      if (m[0][i] === "{") d++;
+      else if (m[0][i] === "}") { d--; if (d === 0) { end = i + 1; break; } }
+    }
+    if (end > 0) { try { return JSON.parse(m[0].slice(0, end)); } catch(e) {} }
+  }
+  return null;
+}
 
+// ══════════════════════════════════════════════════════════════════
+// SERVER STATUS
+// ══════════════════════════════════════════════════════════════════
+const SELF       = process.env.RENDER_EXTERNAL_URL || "https://globevoyage-admin.onrender.com";
+const serverBoot = new Date().toISOString();
+let   pingCount  = 0;
+let   lastPingAt = null;
+let   pipelineStatus = { running:false, lastRunAt:null, lastRunName:null, nextRuns:["06:00 UTC","14:00 UTC","22:00 UTC"], countriesLastRun:0 };
+
+setInterval(() => {
+  const mod = SELF.startsWith("https") ? https : http;
+  mod.get(SELF+"/", r=>r.resume()).on("error",()=>{});
+  pingCount++;
+  lastPingAt = new Date().toISOString();
+}, 5000);
+
+const WIKI_UA = "GlobeVoyage/2.0 (travel-intelligence-app; nodejs-axios)";
+
+// ══════════════════════════════════════════════════════════════════
+// API FETCHERS (unchanged from original)
+// ══════════════════════════════════════════════════════════════════
 async function fetchWikipedia(countryName) {
   return timed("wikipedia", async () => {
     const headers = { "User-Agent": WIKI_UA };
@@ -456,11 +485,7 @@ async function fetchPlacesByCoords(lat, lon) {
       params:{ radius:50000, lon, lat, kinds:"interesting_places,tourist_facilities,cultural,historic", rate:"3", format:"json", limit:10, apikey:"5ae2e3f221c38a28845f05b681b7e8e0898a39f3f1d2a7c3b24d7c12" },
       timeout:8000
     });
-    return (r.data||[]).slice(0,8).map(p=>({
-      name:p.name||"Attraction",
-      categories:[p.kinds?.split(",")[0]?.replace(/_/g," ")||"attraction"],
-      lat:p.point?.lat, lng:p.point?.lon
-    })).filter(p=>p.name!=="Attraction");
+    return (r.data||[]).slice(0,8).map(p=>({ name:p.name||"Attraction", categories:[p.kinds?.split(",")[0]?.replace(/_/g," ")||"attraction"], lat:p.point?.lat, lng:p.point?.lon })).filter(p=>p.name!=="Attraction");
   });
 }
 
@@ -492,28 +517,21 @@ async function fetchWAQIByCoords(lat, lon, name) {
   return null;
 }
 
-// Geocode rate limit: Nominatim allows 1 req/sec; use a queue
 let _lastGeocodeAt = 0;
 async function geocodePlace(placeName, countryName) {
-  // Respect Nominatim 1 req/sec rate limit
   const now = Date.now();
   const wait = Math.max(0, 1200 - (now - _lastGeocodeAt));
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   _lastGeocodeAt = Date.now();
-
   try {
     const r = await axios.get("https://nominatim.openstreetmap.org/search", {
       params:{ q:`${placeName}, ${countryName}`, format:"json", limit:1, addressdetails:1 },
       headers:{ "User-Agent": WIKI_UA },
       timeout:8000
     });
-    if(r.data?.[0]) {
-      return { lat:parseFloat(r.data[0].lat), lon:parseFloat(r.data[0].lon) };
-    }
+    if(r.data?.[0]) return { lat:parseFloat(r.data[0].lat), lon:parseFloat(r.data[0].lon) };
   } catch(e) {
-    console.log(`[Geocode] Nominatim failed for ${placeName}: ${e.message?.slice(0,50)}`);
-    // Fallback to Geoapify on 429 or timeout
-    if (ENV.GEOAPIFY_API_KEY && (e.response?.status === 429 || e.code === 'ECONNABORTED' || e.code === 'ERR_BAD_RESPONSE')) {
+    if (ENV.GEOAPIFY_API_KEY && (e.response?.status === 429 || e.code === 'ECONNABORTED')) {
       try {
         await new Promise(r => setTimeout(r, 500));
         const gr = await axios.get("https://api.geoapify.com/v1/geocode/search", {
@@ -521,11 +539,8 @@ async function geocodePlace(placeName, countryName) {
           timeout: 8000
         });
         const feat = gr.data?.features?.[0];
-        if (feat) {
-          console.log(`[Geocode] Geoapify fallback OK for ${placeName}`);
-          return { lat: feat.geometry.coordinates[1], lon: feat.geometry.coordinates[0] };
-        }
-      } catch(ge) { console.log(`[Geocode] Geoapify also failed: ${ge.message?.slice(0,50)}`); }
+        if (feat) return { lat: feat.geometry.coordinates[1], lon: feat.geometry.coordinates[0] };
+      } catch(ge) {}
     }
   }
   return null;
@@ -542,26 +557,14 @@ const gnewsCache = {};
 let gnewsCallsToday = 0;
 let gnewsResetAt    = Date.now() + 24*60*60*1000;
 const GNEWS_DAILY_CAP = 8;
-
-function gnewsResetIfNeeded() {
-  if(Date.now() > gnewsResetAt) { gnewsCallsToday = 0; gnewsResetAt = Date.now() + 24*60*60*1000; }
-}
+function gnewsResetIfNeeded() { if(Date.now() > gnewsResetAt) { gnewsCallsToday = 0; gnewsResetAt = Date.now() + 24*60*60*1000; } }
 function gnewsBudgetAvailable() { gnewsResetIfNeeded(); return gnewsCallsToday < GNEWS_DAILY_CAP; }
-function hoursUntilReset() { return Math.max(0, Math.round((gnewsResetAt - Date.now()) / 3600000)); }
 
 const ALPHA2 = {
-  DZA:"dz",EGY:"eg",GHA:"gh",KEN:"ke",MAR:"ma",NGA:"ng",ZAF:"za",TUN:"tn",
-  ETH:"et",TZA:"tz",UGA:"ug",CMR:"cm",SEN:"sn",CIV:"ci",AGO:"ao",SDN:"sd",
-  CHN:"cn",IND:"in",IDN:"id",JPN:"jp",KOR:"kr",MYS:"my",PAK:"pk",PHL:"ph",
-  SAU:"sa",SGP:"sg",LKA:"lk",THA:"th",TUR:"tr",ARE:"ae",VNM:"vn",BGD:"bd",
-  IRN:"ir",IRQ:"iq",ISR:"il",JOR:"jo",KWT:"kw",LBN:"lb",QAT:"qa",SYR:"sy",
-  AUT:"at",BEL:"be",BGR:"bg",HRV:"hr",CZE:"cz",DNK:"dk",FIN:"fi",FRA:"fr",
-  DEU:"de",GRC:"gr",HUN:"hu",IRL:"ie",ITA:"it",NLD:"nl",NOR:"no",POL:"pl",
-  PRT:"pt",ROU:"ro",RUS:"ru",SRB:"rs",SVK:"sk",ESP:"es",SWE:"se",CHE:"ch",
-  UKR:"ua",GBR:"gb",BLR:"by",AZE:"az",GEO:"ge",ARM:"am",
-  CAN:"ca",MEX:"mx",USA:"us",CUB:"cu",DOM:"do",GTM:"gt",HND:"hn",CRI:"cr",
-  ARG:"ar",BRA:"br",CHL:"cl",COL:"co",PER:"pe",VEN:"ve",ECU:"ec",BOL:"bo",
-  AUS:"au",NZL:"nz",
+  DZA:"dz",EGY:"eg",GHA:"gh",KEN:"ke",MAR:"ma",NGA:"ng",ZAF:"za",TUN:"tn",ETH:"et",TZA:"tz",UGA:"ug",CMR:"cm",SEN:"sn",CIV:"ci",AGO:"ao",SDN:"sd",
+  CHN:"cn",IND:"in",IDN:"id",JPN:"jp",KOR:"kr",MYS:"my",PAK:"pk",PHL:"ph",SAU:"sa",SGP:"sg",LKA:"lk",THA:"th",TUR:"tr",ARE:"ae",VNM:"vn",BGD:"bd",IRN:"ir",IRQ:"iq",ISR:"il",JOR:"jo",KWT:"kw",LBN:"lb",QAT:"qa",SYR:"sy",
+  AUT:"at",BEL:"be",BGR:"bg",HRV:"hr",CZE:"cz",DNK:"dk",FIN:"fi",FRA:"fr",DEU:"de",GRC:"gr",HUN:"hu",IRL:"ie",ITA:"it",NLD:"nl",NOR:"no",POL:"pl",PRT:"pt",ROU:"ro",RUS:"ru",SRB:"rs",SVK:"sk",ESP:"es",SWE:"se",CHE:"ch",UKR:"ua",GBR:"gb",BLR:"by",AZE:"az",GEO:"ge",ARM:"am",
+  CAN:"ca",MEX:"mx",USA:"us",CUB:"cu",DOM:"do",GTM:"gt",HND:"hn",CRI:"cr",ARG:"ar",BRA:"br",CHL:"cl",COL:"co",PER:"pe",VEN:"ve",ECU:"ec",BOL:"bo",AUS:"au",NZL:"nz",
 };
 
 async function fetchNews(countryName, iso) {
@@ -628,9 +631,7 @@ async function fetchEventbrite(countryName) {
       const parsed = await xml2js.parseStringPromise(r.data,{explicitArray:false});
       const items = parsed?.rss?.channel?.item||[];
       const arr = Array.isArray(items)?items:[items];
-      arr.filter(i=>i&&i.title).slice(0,6).forEach(i=>{
-        results.push({ name:typeof i.title==="object"?i.title._:i.title, date:i.pubDate?new Date(i.pubDate).toISOString().split("T")[0]:null, url:i.link||"", source:"Google News Events" });
-      });
+      arr.filter(i=>i&&i.title).slice(0,6).forEach(i=>{ results.push({ name:typeof i.title==="object"?i.title._:i.title, date:i.pubDate?new Date(i.pubDate).toISOString().split("T")[0]:null, url:i.link||"", source:"Google News Events" }); });
     } catch(e) {}
     if(results.length===0) throw new Error("No event sources returned data");
     return results.slice(0,8);
@@ -651,14 +652,12 @@ async function fetchPredictHQ(countryName) {
 async function fetchGeoapify(countryName, iso) {
   if(!ENV.GEOAPIFY_API_KEY) return {};
   return timed("geoapify", async () => {
-    const g = await axios.get("https://api.geoapify.com/v1/geocode/search",{
-      params:{text:countryName,type:"country",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000});
+    const g = await axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:countryName,type:"country",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000});
     const place = g.data?.features?.[0];
     if(!place) return {};
     const {lat,lon} = place.properties;
     if(iso) geoCoordCache[iso] = {lat, lon};
-    const p = await axios.get("https://api.geoapify.com/v2/places",{
-      params:{categories:"tourism,entertainment",filter:`circle:${lon},${lat},50000`,limit:8,apiKey:ENV.GEOAPIFY_API_KEY},timeout:8000});
+    const p = await axios.get("https://api.geoapify.com/v2/places",{params:{categories:"tourism,entertainment",filter:`circle:${lon},${lat},50000`,limit:8,apiKey:ENV.GEOAPIFY_API_KEY},timeout:8000});
     return {
       capital_coords:{lat,lon},
       pois:(p.data?.features||[]).slice(0,8).map(f=>({name:f.properties.name,category:f.properties.categories?.[0],address:f.properties.formatted,lat:f.properties.lat,lon:f.properties.lon}))
@@ -675,9 +674,7 @@ async function fetchSocialTrends(countryName) {
       const parsed = await xml2js.parseStringPromise(r.data,{explicitArray:false});
       const items = parsed?.rss?.channel?.item||[];
       const arr = Array.isArray(items)?items:[items];
-      arr.filter(i=>i&&i.title).slice(0,4).forEach(i=>{
-        results.push({ platform:"Google News", caption:typeof i.title==="object"?i.title._:i.title, url:i.link||"", sentiment:"neutral" });
-      });
+      arr.filter(i=>i&&i.title).slice(0,4).forEach(i=>{ results.push({ platform:"Google News", caption:typeof i.title==="object"?i.title._:i.title, url:i.link||"", sentiment:"neutral" }); });
     } catch(e){}
     try {
       const bq = encodeURIComponent(`${countryName} tourism`);
@@ -685,9 +682,7 @@ async function fetchSocialTrends(countryName) {
       const parsed2 = await xml2js.parseStringPromise(br.data,{explicitArray:false});
       const items2 = parsed2?.rss?.channel?.item||[];
       const arr2 = Array.isArray(items2)?items2:[items2];
-      arr2.filter(i=>i&&i.title).slice(0,3).forEach(i=>{
-        results.push({ platform:"Bing News", caption:typeof i.title==="object"?i.title._:i.title, url:i.link||"", sentiment:"neutral" });
-      });
+      arr2.filter(i=>i&&i.title).slice(0,3).forEach(i=>{ results.push({ platform:"Bing News", caption:typeof i.title==="object"?i.title._:i.title, url:i.link||"", sentiment:"neutral" }); });
     } catch(e){}
     return results.slice(0,6);
   });
@@ -716,7 +711,7 @@ function calcAQI(pm25) {
   return null;
 }
 function aqiLabel(aqi) {
-  if(aqi<=50)  return "Good";
+  if(aqi<=50) return "Good";
   if(aqi<=100) return "Moderate";
   if(aqi<=150) return "Unhealthy for Sensitive Groups";
   if(aqi<=200) return "Unhealthy";
@@ -726,18 +721,11 @@ function aqiLabel(aqi) {
 
 async function fetchAirQuality(countryName, iso) {
   return timed("openaq", async () => {
-    const ALPHA2_AQ = {
-      DZA:"DZ",EGY:"EG",GHA:"GH",KEN:"KE",MAR:"MA",NGA:"NG",ZAF:"ZA",TUN:"TN",ETH:"ET",TZA:"TZ",UGA:"UG",CMR:"CM",SEN:"SN",CIV:"CI",AGO:"AO",SDN:"SD",
-      CHN:"CN",IND:"IN",IDN:"ID",JPN:"JP",KOR:"KR",MYS:"MY",PAK:"PK",PHL:"PH",SAU:"SA",SGP:"SG",LKA:"LK",THA:"TH",TUR:"TR",ARE:"AE",VNM:"VN",BGD:"BD",IRN:"IR",IRQ:"IQ",ISR:"IL",JOR:"JO",KWT:"KW",LBN:"LB",QAT:"QA",SYR:"SY",
-      AUT:"AT",BEL:"BE",BGR:"BG",HRV:"HR",CZE:"CZ",DNK:"DK",FIN:"FI",FRA:"FR",DEU:"DE",GRC:"GR",HUN:"HU",IRL:"IE",ITA:"IT",NLD:"NL",NOR:"NO",POL:"PL",PRT:"PT",ROU:"RO",RUS:"RU",SRB:"RS",SVK:"SK",ESP:"ES",SWE:"SE",CHE:"CH",UKR:"UA",GBR:"GB",BLR:"BY",AZE:"AZ",GEO:"GE",ARM:"AM",
-      CAN:"CA",MEX:"MX",USA:"US",CUB:"CU",DOM:"DO",GTM:"GT",HND:"HN",CRI:"CR",ARG:"AR",BRA:"BR",CHL:"CL",COL:"CO",PER:"PE",VEN:"VE",ECU:"EC",BOL:"BO",AUS:"AU",NZL:"NZ",
-    };
+    const ALPHA2_AQ = { DZA:"DZ",EGY:"EG",GHA:"GH",KEN:"KE",MAR:"MA",NGA:"NG",ZAF:"ZA",TUN:"TN",ETH:"ET",TZA:"TZ",UGA:"UG",CMR:"CM",SEN:"SN",CIV:"CI",AGO:"AO",SDN:"SD",CHN:"CN",IND:"IN",IDN:"ID",JPN:"JP",KOR:"KR",MYS:"MY",PAK:"PK",PHL:"PH",SAU:"SA",SGP:"SG",LKA:"LK",THA:"TH",TUR:"TR",ARE:"AE",VNM:"VN",BGD:"BD",IRN:"IR",IRQ:"IQ",ISR:"IL",JOR:"JO",KWT:"KW",LBN:"LB",QAT:"QA",SYR:"SY",AUT:"AT",BEL:"BE",BGR:"BG",HRV:"HR",CZE:"CZ",DNK:"DK",FIN:"FI",FRA:"FR",DEU:"DE",GRC:"GR",HUN:"HU",IRL:"IE",ITA:"IT",NLD:"NL",NOR:"NO",POL:"PL",PRT:"PT",ROU:"RO",RUS:"RU",SRB:"RS",SVK:"SK",ESP:"ES",SWE:"SE",CHE:"CH",UKR:"UA",GBR:"GB",BLR:"BY",AZE:"AZ",GEO:"GE",ARM:"AM",CAN:"CA",MEX:"MX",USA:"US",CUB:"CU",DOM:"DO",GTM:"GT",HND:"HN",CRI:"CR",ARG:"AR",BRA:"BR",CHL:"CL",COL:"CO",PER:"PE",VEN:"VE",ECU:"EC",BOL:"BO",AUS:"AU",NZL:"NZ" };
     const cc = ALPHA2_AQ[iso];
     if(!cc) return null;
     const headers = ENV.OPENAQ_API_KEY ? { "X-API-Key": ENV.OPENAQ_API_KEY } : {};
-    const r = await axios.get("https://api.openaq.org/v3/locations", {
-      params:{ countries_id:cc, limit:5, order_by:"lastUpdated", sort_order:"desc" }, headers, timeout:8000,
-    });
+    const r = await axios.get("https://api.openaq.org/v3/locations", { params:{ countries_id:cc, limit:5, order_by:"lastUpdated", sort_order:"desc" }, headers, timeout:8000 });
     const locations = r.data?.results||[];
     if(!locations.length) return null;
     const locId = locations[0].id;
@@ -748,11 +736,7 @@ async function fetchAirQuality(countryName, iso) {
     const pm25 = byParam["pm25"] ?? byParam["pm2.5"] ?? null;
     const pm10 = byParam["pm10"] ?? null;
     const aqi  = pm25 !== null ? calcAQI(pm25) : null;
-    return {
-      location:locations[0].name||countryName, pm25:pm25!==null?Math.round(pm25*10)/10:null,
-      pm10:pm10!==null?Math.round(pm10*10)/10:null, aqi, aqi_label:aqi!==null?aqiLabel(aqi):null,
-      updated:locations[0].lastUpdated||null, source:"OpenAQ",
-    };
+    return { location:locations[0].name||countryName, pm25:pm25!==null?Math.round(pm25*10)/10:null, pm10:pm10!==null?Math.round(pm10*10)/10:null, aqi, aqi_label:aqi!==null?aqiLabel(aqi):null, updated:locations[0].lastUpdated||null, source:"OpenAQ" };
   });
 }
 
@@ -779,11 +763,7 @@ async function fetchWAQI(countryName, iso) {
       } catch(e) {}
     }
     if(!d) return null;
-    const data = {
-      aqi:d.aqi, aqi_label:aqiLabel(d.aqi), city:d.city?.name||countryName,
-      pm25:d.iaqi?.pm25?.v||null, pm10:d.iaqi?.pm10?.v||null,
-      o3:d.iaqi?.o3?.v||null, no2:d.iaqi?.no2?.v||null, updated:d.time?.s||null, source:"WAQI",
-    };
+    const data = { aqi:d.aqi, aqi_label:aqiLabel(d.aqi), city:d.city?.name||countryName, pm25:d.iaqi?.pm25?.v||null, pm10:d.iaqi?.pm10?.v||null, o3:d.iaqi?.o3?.v||null, no2:d.iaqi?.no2?.v||null, updated:d.time?.s||null, source:"WAQI" };
     waqiCache[iso] = { data, expires: Date.now()+60*60*1000 };
     return data;
   });
@@ -795,9 +775,7 @@ async function fetchFlights(countryName, iso) {
   const cached = aviationCache[iso];
   if(cached && Date.now() < cached.expires) return cached.data;
   return timed("aviationstack", async () => {
-    const r = await axios.get("http://api.aviationstack.com/v1/airports", {
-      params:{ access_key:ENV.AVIATIONSTACK_API_KEY, country_name:countryName, limit:5 }, timeout:10000,
-    });
+    const r = await axios.get("http://api.aviationstack.com/v1/airports", { params:{ access_key:ENV.AVIATIONSTACK_API_KEY, country_name:countryName, limit:5 }, timeout:10000 });
     const airports = (r.data?.data||[]).map(a=>({name:a.airport_name,iata:a.iata_code,city:a.city_iata_code||a.city||"",latitude:a.latitude,longitude:a.longitude})).filter(a=>a.iata);
     const data = { airports, major_hub:airports[0]||null };
     aviationCache[iso] = { data, expires: Date.now()+24*60*60*1000 };
@@ -809,9 +787,7 @@ const numbeoCache = {};
 let numbeoCallsThisMonth = 0;
 let numbeoResetAt = Date.now() + 30*24*60*60*1000;
 const NUMBEO_MONTHLY_CAP = 8;
-function numbeoResetIfNeeded() {
-  if(Date.now() > numbeoResetAt) { numbeoCallsThisMonth=0; numbeoResetAt=Date.now()+30*24*60*60*1000; }
-}
+function numbeoResetIfNeeded() { if(Date.now() > numbeoResetAt) { numbeoCallsThisMonth=0; numbeoResetAt=Date.now()+30*24*60*60*1000; } }
 
 async function fetchCostOfLiving(countryName) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -828,15 +804,7 @@ async function fetchCostOfLiving(countryName) {
     numbeoCallsThisMonth++;
     const items = r.data?.prices||[];
     const get = (name) => items.find(i=>i.item_name?.toLowerCase().includes(name.toLowerCase()))?.avg||null;
-    const data = {
-      city:r.data?.city_name||countryName, country:r.data?.country_name||countryName,
-      meal_cheap:get("inexpensive restaurant"), meal_mid:get("mid-range restaurant"),
-      coffee:get("cappuccino"), beer_local:get("domestic beer"), water_bottle:get("water (0.33"),
-      one_bed_city_rent:get("1 bedroom apartment in city"), one_bed_outside_rent:get("1 bedroom apartment outside"),
-      monthly_transport:get("monthly pass"), taxi_per_km:get("taxi 1km"),
-      internet_monthly:get("internet"), avg_salary:get("average monthly net salary"),
-      currency:"USD", raw_count:items.length,
-    };
+    const data = { city:r.data?.city_name||countryName, country:r.data?.country_name||countryName, meal_cheap:get("inexpensive restaurant"), meal_mid:get("mid-range restaurant"), coffee:get("cappuccino"), beer_local:get("domestic beer"), water_bottle:get("water (0.33"), one_bed_city_rent:get("1 bedroom apartment in city"), one_bed_outside_rent:get("1 bedroom apartment outside"), monthly_transport:get("monthly pass"), taxi_per_km:get("taxi 1km"), internet_monthly:get("internet"), avg_salary:get("average monthly net salary"), currency:"USD", raw_count:items.length };
     numbeoCache[countryName] = { data, expires: Date.now()+24*60*60*1000 };
     return data;
   });
@@ -849,16 +817,7 @@ async function fetchRestCountries(iso) {
     const r = await axios.get(`https://restcountries.com/v3.1/alpha/${iso}`,{timeout:8000});
     const c = r.data?.[0];
     if(!c) return null;
-    const data = {
-      name:c.name?.common, official:c.name?.official, capital:c.capital?.[0]||null,
-      region:c.region, subregion:c.subregion, population:c.population, area_km2:c.area,
-      languages:Object.values(c.languages||{}), currencies:Object.values(c.currencies||{}).map(x=>({name:x.name,symbol:x.symbol})),
-      timezones:c.timezones||[], calling_code:c.idd?.root+(c.idd?.suffixes?.[0]||""),
-      flag_png:c.flags?.png, flag_svg:c.flags?.svg, coat_of_arms:c.coatOfArms?.png||null,
-      maps:c.maps?.googleMaps||null, borders:c.borders||[], landlocked:c.landlocked,
-      un_member:c.unMember, driving_side:c.car?.side||null, start_of_week:c.startOfWeek||null,
-      tlds:c.tld||[], gini:c.gini?Object.values(c.gini)[0]:null,
-    };
+    const data = { name:c.name?.common, official:c.name?.official, capital:c.capital?.[0]||null, region:c.region, subregion:c.subregion, population:c.population, area_km2:c.area, languages:Object.values(c.languages||{}), currencies:Object.values(c.currencies||{}).map(x=>({name:x.name,symbol:x.symbol})), timezones:c.timezones||[], calling_code:c.idd?.root+(c.idd?.suffixes?.[0]||""), flag_png:c.flags?.png, flag_svg:c.flags?.svg, coat_of_arms:c.coatOfArms?.png||null, maps:c.maps?.googleMaps||null, borders:c.borders||[], landlocked:c.landlocked, un_member:c.unMember, driving_side:c.car?.side||null, start_of_week:c.startOfWeek||null, tlds:c.tld||[], gini:c.gini?Object.values(c.gini)[0]:null };
     restCountriesCache[iso] = data;
     return data;
   });
@@ -874,16 +833,10 @@ async function fetchAirbnb(countryName, iso) {
   return timed("airbnb", async () => {
     const r = await axios.get("https://airbnb13.p.rapidapi.com/search-location", {
       params:{ location:countryName, checkin:getFutureDate(14), checkout:getFutureDate(17), adults:2, children:0, infants:0, pets:0, page:1, currency:"USD" },
-      headers:{ "X-RapidAPI-Key":ENV.RAPIDAPI_KEY, "X-RapidAPI-Host":"airbnb13.p.rapidapi.com" },
-      timeout:12000,
+      headers:{ "X-RapidAPI-Key":ENV.RAPIDAPI_KEY, "X-RapidAPI-Host":"airbnb13.p.rapidapi.com" }, timeout:12000,
     });
     const results = r.data?.results||[];
-    const listings = results.slice(0,6).map(l=>({
-      id:l.id, name:l.name, type:l.type, beds:l.beds, bathrooms:l.bathrooms,
-      price:l.price?.rate, currency:l.price?.currency||"USD",
-      rating:l.rating?.guestSatisfactionOverall, reviews:l.reviewsCount,
-      image:l.images?.[0]||null, url:l.url||null, city:l.city||countryName,
-    }));
+    const listings = results.slice(0,6).map(l=>({ id:l.id, name:l.name, type:l.type, beds:l.beds, bathrooms:l.bathrooms, price:l.price?.rate, currency:l.price?.currency||"USD", rating:l.rating?.guestSatisfactionOverall, reviews:l.reviewsCount, image:l.images?.[0]||null, url:l.url||null, city:l.city||countryName }));
     const prices = listings.map(l=>l.price).filter(Boolean);
     const data = { listings, avg_price_per_night:prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null, currency:"USD", sample_size:listings.length };
     airbnbCache[iso] = { data, expires: Date.now()+6*60*60*1000 };
@@ -895,238 +848,6 @@ function getFutureDate(daysAhead) {
   const d = new Date(); d.setDate(d.getDate()+daysAhead); return d.toISOString().split("T")[0];
 }
 
-// ══════════════════════════════════════════════════════════════════
-// GEO HIERARCHY — Multi-source with HARDCODED primary
-// ══════════════════════════════════════════════════════════════════
-const ISO3_TO_ISO2 = {
-  DZA:"DZ",AGO:"AO",BEN:"BJ",BWA:"BW",BFA:"BF",BDI:"BI",CPV:"CV",CMR:"CM",CAF:"CF",TCD:"TD",COM:"KM",COD:"CD",COG:"CG",CIV:"CI",DJI:"DJ",EGY:"EG",GNQ:"GQ",ERI:"ER",SWZ:"SZ",ETH:"ET",GAB:"GA",GMB:"GM",GHA:"GH",GIN:"GN",GNB:"GW",KEN:"KE",LSO:"LS",LBR:"LR",LBY:"LY",MDG:"MG",MWI:"MW",MLI:"ML",MRT:"MR",MUS:"MU",MAR:"MA",MOZ:"MZ",NAM:"NA",NER:"NE",NGA:"NG",RWA:"RW",STP:"ST",SEN:"SN",SLE:"SL",SOM:"SO",ZAF:"ZA",SSD:"SS",SDN:"SD",TZA:"TZ",TGO:"TG",TUN:"TN",UGA:"UG",ZMB:"ZM",ZWE:"ZW",
-  AFG:"AF",ARM:"AM",AZE:"AZ",BHR:"BH",BGD:"BD",BTN:"BT",BRN:"BN",KHM:"KH",CHN:"CN",CYP:"CY",GEO:"GE",IND:"IN",IDN:"ID",IRN:"IR",IRQ:"IQ",ISR:"IL",JPN:"JP",JOR:"JO",KAZ:"KZ",KWT:"KW",KGZ:"KG",LAO:"LA",LBN:"LB",MYS:"MY",MDV:"MV",MNG:"MN",MMR:"MM",NPL:"NP",PRK:"KP",OMN:"OM",PAK:"PK",PSE:"PS",PHL:"PH",QAT:"QA",SAU:"SA",SGP:"SG",KOR:"KR",LKA:"LK",SYR:"SY",TWN:"TW",TJK:"TJ",THA:"TH",TLS:"TL",TUR:"TR",TKM:"TM",ARE:"AE",UZB:"UZ",VNM:"VN",YEM:"YE",
-  ALB:"AL",AND:"AD",AUT:"AT",BLR:"BY",BEL:"BE",BIH:"BA",BGR:"BG",HRV:"HR",CZE:"CZ",DNK:"DK",EST:"EE",FIN:"FI",FRA:"FR",DEU:"DE",GRC:"GR",HUN:"HU",ISL:"IS",IRL:"IE",ITA:"IT",XKX:"XK",LVA:"LV",LIE:"LI",LTU:"LT",LUX:"LU",MLT:"MT",MDA:"MD",MCO:"MC",MNE:"ME",NLD:"NL",MKD:"MK",NOR:"NO",POL:"PL",PRT:"PT",ROU:"RO",RUS:"RU",SMR:"SM",SRB:"RS",SVK:"SK",SVN:"SI",ESP:"ES",SWE:"SE",CHE:"CH",UKR:"UA",GBR:"GB",
-  ATG:"AG",BHS:"BS",BRB:"BB",BLZ:"BZ",CAN:"CA",CRI:"CR",CUB:"CU",DMA:"DM",DOM:"DO",SLV:"SV",GRD:"GD",GTM:"GT",HTI:"HT",HND:"HN",JAM:"JM",MEX:"MX",NIC:"NI",PAN:"PA",KNA:"KN",LCA:"LC",VCT:"VC",TTO:"TT",USA:"US",
-  ARG:"AR",BOL:"BO",BRA:"BR",CHL:"CL",COL:"CO",ECU:"EC",GUY:"GY",PRY:"PY",PER:"PE",SUR:"SR",URY:"UY",VEN:"VE",
-  AUS:"AU",FJI:"FJ",KIR:"KI",MHL:"MH",FSM:"FM",NRU:"NR",NZL:"NZ",PLW:"PW",PNG:"PG",WSM:"WS",SLB:"SB",TON:"TO",TUV:"TV",VUT:"VU",
-};
-
-function hashCode(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) { const chr = str.charCodeAt(i); hash = ((hash << 5) - hash) + chr; hash |= 0; }
-  return hash;
-}
-
-const BAD_CITY_WORDS = new Set(['list','unknown','n/a','null','undefined','none','other','various','multiple','city','town','village','district','region','area','state','province','territory','country']);
-function isValidCityName(name, stateName, countryName) {
-  if (!name || typeof name !== 'string') return false;
-  const trimmed = name.trim();
-  if (trimmed.length < 2 || trimmed.length > 80) return false;
-  if (BAD_CITY_WORDS.has(trimmed.toLowerCase())) return false;
-  if (stateName && trimmed.toLowerCase() === stateName.toLowerCase()) return false;
-  if (countryName && trimmed.toLowerCase() === countryName.toLowerCase()) return false;
-  if ((trimmed.match(/,/g)||[]).length >= 2) return false;
-  if (!/[a-zA-Z]/.test(trimmed)) return false;
-  return true;
-}
-
-// ── SAVE STATES ───────────────────────────────────────────────────
-async function saveStatesFromResponse(states, iso, countryName) {
-  const rows = states.map((s,idx) => ({
-    country_iso:iso, geoname_id:Math.abs(hashCode(`${iso}-state-${s.name||idx}`)),
-    name:s.name||"Unknown", ascii_name:s.name||"Unknown", state_code:s.state_code||null,
-    type:"state", population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString(),
-  })).filter(r=>r.name!=="Unknown");
-  if (!rows.length) return 0;
-  const { error } = await supabase.from("states").upsert(rows, { onConflict:"geoname_id" });
-  if (error) { console.error(`[GeoPipeline] States upsert ${iso}:`, error.message); return 0; }
-  console.log(`[GeoPipeline] ✓ ${iso} (${countryName}) — ${rows.length} states saved`);
-  return rows.length;
-}
-
-async function fetchAndSaveStates(iso) {
-  const country = COUNTRIES.find(c => c.iso === iso);
-  if (!country) return 0;
-
-  // SOURCE 1: HARDCODED (primary — instant, no API calls)
-  const hardcodedStates = getHardcodedStates(country.name);
-  if (hardcodedStates.length > 0) {
-    const statesData = hardcodedStates.map(name => ({ name, state_code: null }));
-    const saved = await saveStatesFromResponse(statesData, iso, country.name);
-    console.log(`[GeoPipeline] ${iso} ✓ Hardcoded — ${saved} states`);
-    return saved;
-  }
-
-  // SOURCE 2: Mistral AI — skip if state gen is running (avoid Mistral 429 interference)
-  if (ENV.MISTRAL_API_KEY && !stateGenProgress.running) {
-    try {
-      const prompt = `List ALL official states, provinces, regions, or first-level administrative divisions of ${country.name} (ISO: ${iso}).
-Return ONLY a valid JSON array — no markdown, no explanation, nothing else:
-[{"name":"Full Official Division Name","state_code":"CODE_OR_NULL","type":"state"}]
-Be comprehensive and accurate — include every single first-level administrative division.`;
-      const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
-        { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:2500 },
-        { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:30000 }
-      ));
-      const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const states = parsed.map(s=>({ name:(s.name||'').trim(), state_code:s.state_code||null })).filter(s=>s.name);
-        console.log(`[GeoMulti] ${iso} ✓ Mistral AI — ${states.length} states`);
-        return await saveStatesFromResponse(states, iso, country.name);
-      }
-    } catch(e) { console.log(`[GeoMulti] ${iso} AI failed: ${e.message?.slice(0,50)}`); }
-  }
-
-  // SOURCE 3: CountriesNow
-  try {
-    const r = await axios.post("https://countriesnow.space/api/v0.1/countries/states",
-      { country: country.name }, { timeout:12000, headers:{"Content-Type":"application/json"} });
-    if (!r.data?.error && r.data?.data?.states?.length > 0) {
-      const states = r.data.data.states.map(s=>({ name:s.name||"", state_code:s.state_code||null })).filter(s=>s.name);
-      console.log(`[GeoMulti] ${iso} ✓ CountriesNow — ${states.length} states`);
-      return await saveStatesFromResponse(states, iso, country.name);
-    }
-  } catch(e) {}
-
-  console.log(`[GeoMulti] ${iso} — All sources exhausted`);
-  return 0;
-}
-
-async function fetchAndSaveAreas(stateId, _unused, countryIso) {
-  try {
-    const { data: stateRow } = await supabase.from("states").select("name").eq("id",stateId).single();
-    const stateName = stateRow?.name || "";
-    if (!stateName) return 0;
-    const country = COUNTRIES.find(c => c.iso === countryIso);
-    const countryName = country?.name || countryIso;
-
-    // SOURCE 1: HARDCODED (primary)
-    const hardcodedAreas = getHardcodedAreas(stateName, countryName);
-    let cityNames = hardcodedAreas.length > 0 ? hardcodedAreas : [];
-
-    // SOURCE 2: Mistral AI — skip if state gen running to avoid 429 interference
-    if (cityNames.length === 0 && ENV.MISTRAL_API_KEY && !stateGenProgress.running) {
-      try {
-        const prompt = `List ALL cities, towns, districts, local government areas, and municipalities in ${stateName}, ${countryName}.
-Return ONLY a valid JSON array of names — no markdown, no explanation:
-["City1","Town2","District3"]
-Be comprehensive — include at least 10-30 locations. Be accurate.`;
-        const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
-          { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:800 },
-          { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:20000 }
-        ));
-        const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
-        const parsed = JSON.parse(text);
-        if (Array.isArray(parsed) && parsed.length > 0) cityNames = parsed.filter(Boolean);
-      } catch(e) {}
-    }
-
-    // SOURCE 3: CountriesNow (if still empty)
-    if (cityNames.length === 0) {
-      try {
-        const r = await axios.post("https://countriesnow.space/api/v0.1/countries/state/cities",
-          { country:countryName, state:stateName }, { timeout:10000, headers:{"Content-Type":"application/json"} });
-        if (!r.data?.error && r.data?.data?.length > 0) cityNames = r.data.data.filter(Boolean);
-      } catch(e) {}
-    }
-
-    if (!cityNames.length) return 0;
-
-    const rows = cityNames
-      .slice(0,150)
-      .filter(n => isValidCityName(n, stateName, countryName))
-      .map((cityName,idx) => ({
-        state_id:stateId, country_iso:countryIso, geoname_id:Math.abs(hashCode(`${stateId}-city-${cityName||idx}`)),
-        name:cityName.trim(), ascii_name:cityName.trim(), type:"city",
-        population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString(),
-      }));
-    if (!rows.length) return 0;
-    // Deduplicate by geoname_id to avoid "ON CONFLICT DO UPDATE command cannot affect row a second time"
-    const seen = new Set();
-    const deduped = rows.filter(r => { if (seen.has(r.geoname_id)) return false; seen.add(r.geoname_id); return true; });
-    const { error } = await supabase.from("areas").upsert(deduped, { onConflict:"geoname_id" });
-    if (error) { console.error(`Areas upsert error:`, error.message); return 0; }
-    return deduped.length;
-  } catch(e) {
-    console.error(`fetchAndSaveAreas error:`, e.message);
-    return 0;
-  }
-}
-
-let geoPipelineRunning = false;
-const geoStatus = { total_states:0, total_areas:0, countries_done:0, current_country:null, last_error:null, started_at:null, completed_at:null };
-
-async function runGeoPipeline(forceAll=false) {
-  if(geoPipelineRunning) { console.log("[GeoPipeline] Already running"); return; }
-  geoPipelineRunning = true;
-  geoStatus.started_at = new Date().toISOString();
-  geoStatus.last_error = null;
-  console.log(`[GeoPipeline] Starting with HARDCODED primary source...`);
-
-  try {
-    const [sr, ar] = await Promise.all([
-      supabase.from("states").select("*", { count:"exact", head:true }),
-      supabase.from("areas").select("*",  { count:"exact", head:true }),
-    ]);
-    geoStatus.total_states = sr.count || 0;
-    geoStatus.total_areas  = ar.count || 0;
-  } catch(e) {}
-
-  let alreadyLoaded = new Set();
-  try {
-    const { data: existing } = await supabase.from("states").select("country_iso");
-    (existing || []).forEach(r => alreadyLoaded.add(r.country_iso));
-    console.log(`[GeoPipeline] ${alreadyLoaded.size}/195 countries already in DB`);
-  } catch(e) {}
-
-  geoStatus.countries_done = alreadyLoaded.size;
-  const toProcess = forceAll ? COUNTRIES : COUNTRIES.filter(c => !alreadyLoaded.has(c.iso));
-  console.log(`🌍 [GeoPipeline] Processing ${toProcess.length} countries...`);
-
-  for(const country of toProcess) {
-    if (!geoPipelineRunning) break;
-    try {
-      geoStatus.current_country = country.name;
-      const statesAdded = await fetchAndSaveStates(country.iso);
-      geoStatus.total_states += statesAdded;
-      if(statesAdded > 0) {
-        const { data: savedStates } = await supabase.from("states").select("id, geoname_id, name").eq("country_iso", country.iso);
-        for(const state of savedStates||[]) {
-          const areasAdded = await fetchAndSaveAreas(state.id, state.geoname_id, country.iso);
-          geoStatus.total_areas += areasAdded;
-          await new Promise(r => setTimeout(r, 50));
-        }
-      }
-      geoStatus.countries_done++;
-      alreadyLoaded.add(country.iso);
-      const pct = Math.round(geoStatus.countries_done / COUNTRIES.length * 100);
-      console.log(`✅ [GeoPipeline] ${country.name} — ${statesAdded} states | ${geoStatus.countries_done}/${COUNTRIES.length} (${pct}%)`);
-      await new Promise(r => setTimeout(r, 100));
-    } catch(e) {
-      geoStatus.last_error = `${country.name}: ${e.message}`;
-      console.error(`[GeoPipeline] Error for ${country.name}:`, e.message);
-      geoStatus.countries_done++;
-      await new Promise(r => setTimeout(r, 200));
-    }
-  }
-  geoPipelineRunning = false;
-  geoStatus.current_country = null;
-  geoStatus.completed_at = new Date().toISOString();
-  console.log(`🎉 [GeoPipeline] Complete — ${geoStatus.total_states} states, ${geoStatus.total_areas} cities`);
-}
-
-async function resumeGeoPipelineIfIncomplete() {
-  try {
-    await new Promise(r => setTimeout(r, 12000));
-    const { data: existing } = await supabase.from("states").select("country_iso");
-    const loaded  = new Set((existing || []).map(r => r.country_iso));
-    const missing = COUNTRIES.filter(c => !loaded.has(c.iso));
-    if(missing.length === 0) { console.log(`✅ [GeoPipeline] Auto-resume: all 195 countries loaded`); return; }
-    console.log(`🔄 [GeoPipeline] Auto-resume: ${missing.length} countries missing — starting pipeline...`);
-    runGeoPipeline(false).catch(console.error);
-  } catch(e) { console.error("[GeoPipeline] Auto-resume failed:", e.message); }
-}
-
-// ══════════════════════════════════════════════════════════════════
-// BOOKING / TRAVEL PLATFORM FETCHERS
-// ══════════════════════════════════════════════════════════════════
 const bookingCache = {};
 async function fetchBooking(countryName, iso) {
   if(!ENV.RAPIDAPI_KEY) return null;
@@ -1148,23 +869,12 @@ async function fetchBooking(countryName, iso) {
     const hotels = (h.data?.data?.hotels||[]).slice(0,8).map(hotel => {
       const hotelId = hotel.hotel_id||hotel.property?.id;
       const hotelName = hotel.property?.name||"";
-      const bookingUrl = hotelId
-        ? `https://www.booking.com/hotel/xx/${String(hotelName).toLowerCase().replace(/[^a-z0-9]+/g,"-")}.html?aid=304142&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=1&group_adults=2`
-        : `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(countryName)}&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=1&group_adults=2`;
-      return {
-        hotel_id:hotelId, name:hotelName, rating:hotel.property?.reviewScore,
-        review_count:hotel.property?.reviewCount, price_per_night:hotel.property?.priceBreakdown?.grossPrice?.value,
-        currency:hotel.property?.priceBreakdown?.grossPrice?.currency||"USD", stars:hotel.property?.propertyClass,
-        photo:hotel.property?.photoUrls?.[0]||null, booking_url:bookingUrl,
-      };
+      const bookingUrl = hotelId ? `https://www.booking.com/hotel/xx/${String(hotelName).toLowerCase().replace(/[^a-z0-9]+/g,"-")}.html?aid=304142&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=1&group_adults=2` : `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(countryName)}&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=1&group_adults=2`;
+      return { hotel_id:hotelId, name:hotelName, rating:hotel.property?.reviewScore, review_count:hotel.property?.reviewCount, price_per_night:hotel.property?.priceBreakdown?.grossPrice?.value, currency:hotel.property?.priceBreakdown?.grossPrice?.currency||"USD", stars:hotel.property?.propertyClass, photo:hotel.property?.photoUrls?.[0]||null, booking_url:bookingUrl };
     });
     const prices = hotels.map(h=>h.price_per_night).filter(Boolean);
     const searchUrl = `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(countryName)}&checkin=${encodeURIComponent(checkin)}&checkout=${encodeURIComponent(checkout)}&no_rooms=1&group_adults=2&order=popularity`;
-    const data = {
-      hotels, avg_price_per_night:prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null,
-      min_price:prices.length?Math.round(Math.min(...prices)):null,
-      destination:dest.city_name||countryName, dest_id:dest.dest_id, currency:"USD", checkin, checkout, search_url:searchUrl,
-    };
+    const data = { hotels, avg_price_per_night:prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null, min_price:prices.length?Math.round(Math.min(...prices)):null, destination:dest.city_name||countryName, dest_id:dest.dest_id, currency:"USD", checkin, checkout, search_url:searchUrl };
     bookingCache[iso] = { data, expires: Date.now()+6*60*60*1000 };
     return data;
   });
@@ -1180,10 +890,7 @@ async function fetchTripadvisor(countryName, iso) {
       params:{ geoId:"1", searchQuery:countryName, language:"en" },
       headers:{ "X-RapidAPI-Key":ENV.RAPIDAPI_KEY, "X-RapidAPI-Host":"tripadvisor16.p.rapidapi.com" }, timeout:10000,
     });
-    const attractions = (r.data?.data?.data||[]).slice(0,8).map(a=>({
-      name:a.title, rating:a.averageRating, review_count:a.userReviewCount,
-      category:a.primaryInfo?.text, ranking:a.ranking?.text,
-    }));
+    const attractions = (r.data?.data?.data||[]).slice(0,8).map(a=>({ name:a.title, rating:a.averageRating, review_count:a.userReviewCount, category:a.primaryInfo?.text, ranking:a.ranking?.text }));
     const data = { attractions };
     tripadvisorCache[iso] = { data, expires: Date.now()+12*60*60*1000 };
     return data;
@@ -1265,10 +972,7 @@ async function fetchHotelDeals(countryName, iso) {
       headers:{ "X-RapidAPI-Key":ENV.RAPIDAPI_KEY, "X-RapidAPI-Host":"hotels4.p.rapidapi.com" }, timeout:10000,
     });
     const suggestions = (r.data?.sr||[]).filter(s=>s.type==="CITY"||s.type==="REGION").slice(0,1);
-    const data = {
-      destination:suggestions[0]?.regionNames?.fullName||countryName,
-      search_url:`https://www.hotels.com/search.do?q-destination=${encodeURIComponent(countryName)}&q-check-in=${getFutureDate(14)}&q-check-out=${getFutureDate(17)}`,
-    };
+    const data = { destination:suggestions[0]?.regionNames?.fullName||countryName, search_url:`https://www.hotels.com/search.do?q-destination=${encodeURIComponent(countryName)}&q-check-in=${getFutureDate(14)}&q-check-out=${getFutureDate(17)}` };
     hotelsCache[iso] = { data, expires: Date.now()+24*60*60*1000 };
     return data;
   });
@@ -1284,1948 +988,282 @@ async function fetchYoutubeVideos(countryName, iso) {
       params:{ query:`${countryName} travel guide 2025`, type:"v", sort:"r", nextToken:"" },
       headers:{ "X-RapidAPI-Key":ENV.RAPIDAPI_KEY, "X-RapidAPI-Host":"youtube-search-and-download.p.rapidapi.com" }, timeout:10000,
     });
-    const videos = (r.data?.contents||[]).filter(v=>v.video).slice(0,5).map(v=>({
-      id:v.video?.videoId, title:v.video?.title, channel:v.video?.channelName,
-      views:v.video?.viewCountText, thumbnail:v.video?.thumbnails?.[0]?.url||null,
-      url:`https://youtube.com/watch?v=${v.video?.videoId}`, length:v.video?.lengthText,
-    }));
+    const videos = (r.data?.contents||[]).filter(v=>v.video).slice(0,5).map(v=>({ id:v.video?.videoId, title:v.video?.title, channel:v.video?.channelName, views:v.video?.viewCountText, thumbnail:v.video?.thumbnails?.[0]?.url||null, url:`https://youtube.com/watch?v=${v.video?.videoId}`, length:v.video?.lengthText }));
     const data = { videos };
     youtubeCache[iso] = { data, expires: Date.now()+12*60*60*1000 };
     return data;
   });
 }
 
+
 // ══════════════════════════════════════════════════════════════════
 // NATIONAL NEWS FEEDS
 // ══════════════════════════════════════════════════════════════════
-const NATIONAL_NEWS_FEEDS = {
-  USA:{name:"Fox News",url:"https://moxie.foxnews.com/google-publisher/latest.xml"},
-  CAN:{name:"CBC News",url:"https://www.cbc.ca/cmlink/rss-topstories"},
-  MEX:{name:"El Universal",url:"https://www.eluniversal.com.mx/rss.xml"},
-  GBR:{name:"BBC News",url:"https://feeds.bbci.co.uk/news/rss.xml"},
-  DEU:{name:"Deutsche Welle",url:"https://rss.dw.com/rdf/rss-en-all"},
-  FRA:{name:"France 24",url:"https://www.france24.com/en/rss"},
-  ITA:{name:"RAI News",url:"https://www.rainews.it/dl/rainews/media/rss.xml"},
-  ESP:{name:"El País",url:"https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada"},
-  NLD:{name:"NOS News",url:"https://feeds.nos.nl/nosnieuwsalgemeen"},
-  RUS:{name:"RT News",url:"https://www.rt.com/rss/"},
-  CHE:{name:"SWI swissinfo",url:"https://www.swissinfo.ch/eng/rss/rss_headlines"},
-  POL:{name:"TVP World",url:"https://tvpworld.com/rss"},
-  PRT:{name:"RTP News",url:"https://www.rtp.pt/noticias/rss"},
-  SWE:{name:"SVT Nyheter",url:"https://www.svt.se/nyheter/rss.xml"},
-  NOR:{name:"NRK News",url:"https://www.nrk.no/nyheter/rss.xml"},
-  DNK:{name:"DR News",url:"https://www.dr.dk/nyheder/service/feeds/allenyheder"},
-  GRC:{name:"Ekathimerini",url:"https://www.ekathimerini.com/rss/?cat=1"},
-  UKR:{name:"Ukrinform",url:"https://www.ukrinform.net/rss/block-lastnews"},
-  AUT:{name:"ORF News",url:"https://rss.orf.at/news.xml"},
-  HRV:{name:"N1 Croatia",url:"https://hr.n1info.com/feed/"},
-  CZE:{name:"Czech Radio",url:"https://english.radio.cz/rss/english"},
-  CHN:{name:"Xinhua News",url:"https://www.xinhuanet.com/english/rss/worldrss.xml"},
-  JPN:{name:"NHK World",url:"https://www3.nhk.or.jp/rss/news/cat0.xml"},
-  IND:{name:"NDTV",url:"https://feeds.feedburner.com/ndtvnews-top-stories"},
-  KOR:{name:"KBS World",url:"https://world.kbs.co.kr/rss/rss_news.htm"},
-  SGP:{name:"Channel News Asia",url:"https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml"},
-  ARE:{name:"Al Arabiya",url:"https://www.alarabiya.net/tools/rss"},
-  SAU:{name:"Arab News",url:"https://www.arabnews.com/rss.xml"},
-  QAT:{name:"Al Jazeera",url:"https://www.aljazeera.com/xml/rss/all.xml"},
-  TUR:{name:"Hurriyet Daily News",url:"https://www.hurriyetdailynews.com/rss"},
-  IRN:{name:"Press TV",url:"https://www.presstv.ir/rss"},
-  PAK:{name:"Geo News",url:"https://www.geo.tv/rss/1"},
-  BGD:{name:"The Daily Star BD",url:"https://www.thedailystar.net/rss.xml"},
-  LKA:{name:"Daily Mirror LK",url:"https://www.dailymirror.lk/rss"},
-  THA:{name:"Bangkok Post",url:"https://www.bangkokpost.com/rss/data/topstories.xml"},
-  VNM:{name:"VnExpress",url:"https://vnexpress.net/rss/tin-moi-nhat.rss"},
-  IDN:{name:"Antara News",url:"https://en.antaranews.com/rss/news.xml"},
-  MYS:{name:"Bernama",url:"https://www.bernama.com/en/rss.php"},
-  PHL:{name:"ABS-CBN News",url:"https://news.abs-cbn.com/rss"},
-  ISR:{name:"Haaretz",url:"https://www.haaretz.com/cmlink/1.4526661"},
-  JOR:{name:"Jordan Times",url:"https://jordantimes.com/rss.xml"},
-  NGA:{name:"Channels TV",url:"https://www.channelstv.com/feed/"},
-  ZAF:{name:"News24",url:"https://feeds.news24.com/articles/news24/TopStories/rss"},
-  KEN:{name:"Nation Africa",url:"https://nation.africa/kenya/rss"},
-  GHA:{name:"Ghana Web",url:"https://www.ghanaweb.com/GhanaHomePage/NewsArchive/rssfeed2.php"},
-  ETH:{name:"Addis Standard",url:"https://addisstandard.com/feed/"},
-  EGY:{name:"Al-Ahram",url:"https://english.ahram.org.eg/rss.aspx"},
-  MAR:{name:"Morocco World News",url:"https://www.moroccoworldnews.com/feed"},
-  TUN:{name:"Tunisia Live",url:"https://www.tunisia-live.net/feed/"},
-  TZA:{name:"The Citizen TZ",url:"https://www.thecitizen.co.tz/feed"},
-  UGA:{name:"Monitor UG",url:"https://www.monitor.co.ug/ugd/feed"},
-  SEN:{name:"Dakar Actu",url:"https://www.dakaractu.com/feed"},
-  BRA:{name:"Folha de S.Paulo",url:"https://feeds.folha.uol.com.br/emcimadahora/rss091.xml"},
-  ARG:{name:"Infobae",url:"https://www.infobae.com/feeds/rss/"},
-  CHL:{name:"La Tercera",url:"https://www.latercera.com/feed/"},
-  COL:{name:"El Tiempo",url:"https://www.eltiempo.com/rss/noticias.xml"},
-  PER:{name:"El Comercio PE",url:"https://elcomercio.pe/rss/portada.xml"},
-  VEN:{name:"El Nacional",url:"https://www.el-nacional.com/feed/"},
-  AUS:{name:"ABC News AU",url:"https://www.abc.net.au/news/feed/1948/rss.xml"},
-  NZL:{name:"RNZ News",url:"https://www.rnz.co.nz/rss/top.xml"},
+const NATIONAL_RSS = {
+  USA:"https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+  GBR:"https://feeds.bbci.co.uk/news/uk/rss.xml",
+  FRA:"https://www.lemonde.fr/rss/une.xml",
+  DEU:"https://www.dw.com/rss/rss.xml",
+  ITA:"https://www.ansa.it/sito/notizie/mondo/mondo_rss.xml",
+  ESP:"https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada",
+  JPN:"https://www3.nhk.or.jp/nhkworld/en/news/rss.xml",
+  CHN:"http://www.xinhuanet.com/english/rss/worldrss.xml",
+  IND:"https://feeds.feedburner.com/ndtvnews-india-news",
+  BRA:"https://feeds.folha.uol.com.br/mundo/rss091.xml",
+  RUS:"https://tass.ru/rss/v2.xml",
+  AUS:"https://www.abc.net.au/news/feed/51120/rss.xml",
+  CAN:"https://www.cbc.ca/cmlink/rss-world",
+  MEX:"https://feeds.feedburner.com/eluniversal/rss",
+  ZAF:"https://feeds.feedburner.com/24com/politics",
+  NGA:"https://punchng.com/feed/",
+  KEN:"https://nation.co.ke/news/rss.xml",
+  EGY:"https://english.ahram.org.eg/News.aspx",
+  ARE:"https://www.thenationalnews.com/rss",
+  SGP:"https://www.channelnewsasia.com/rssfeeds/8395884",
+  THA:"https://www.bangkokpost.com/rss/data/topstories.xml",
+  MYS:"https://www.malaymail.com/feed",
+  IDN:"https://rss.kompas.com/rss/tag/indonesia",
+  PHL:"https://www.philstar.com/rss/nation",
+  KOR:"https://feeds.feedburner.com/koreaheraldnews",
+  SAU:"https://www.arabnews.com/rss.xml",
+  TUR:"https://www.hurriyetdailynews.com/rss.aspx",
+  ARG:"https://www.clarin.com/rss/",
+  CHL:"https://www.latercera.com/feed/",
+  COL:"https://www.semana.com/rss",
 };
 
-const nationalNewsCache = {};
-async function fetchNationalNews(iso) {
-  const feed = NATIONAL_NEWS_FEEDS[iso];
-  if (!feed) return null;
-  const cached = nationalNewsCache[iso];
-  if (cached && Date.now() < cached.expires) return cached.data;
-  return timed("national_news", async () => {
-    const r = await axios.get(feed.url, { timeout:8000, headers:{"User-Agent":"GlobeVoyage/2.0"} });
-    const parsed = await xml2js.parseStringPromise(r.data, { explicitArray:false });
-    const items  = parsed?.rss?.channel?.item || parsed?.feed?.entry || [];
-    const arr    = Array.isArray(items) ? items : [items];
-    const articles = arr.filter(i=>i&&(i.title||i.title?._)).slice(0,8).map(i=>({
-      title:typeof i.title==="object"?(i.title._||i.title.__text||""):(i.title||""),
-      url:i.link?.href||i.link||i.guid?._||i.guid||"", source:feed.name, country_iso:iso,
-      published_at:i.pubDate||i.updated||i["dc:date"]||null,
-      description:typeof i.description==="object"?(i.description._||"").replace(/<[^>]*>/g,"").slice(0,200):(i.description||"").replace(/<[^>]*>/g,"").slice(0,200),
-      risk_level:riskScore(typeof i.title==="object"?i.title._:i.title||""),
-    })).filter(a=>a.title);
-    const data = { source:feed.name, articles };
-    nationalNewsCache[iso] = { data, expires: Date.now()+2*60*60*1000 };
-    return data;
-  });
-}
+async function fetchNationalNews(countryName, iso) {
+  const iso2 = ISO3_TO_ISO2[iso] || null;
+  const rssUrl = NATIONAL_RSS[iso] || NATIONAL_RSS[iso2] || null;
+  const results = [];
 
-// ══════════════════════════════════════════════════════════════════
-// MISTRAL AI — COUNTRY SYNTHESIS
-// ══════════════════════════════════════════════════════════════════
-
-// ══════════════════════════════════════════════════════════════════
-// GLOBAL MISTRAL RATE LIMITER — all Mistral calls go through this
-// Ensures minimum gap between calls, handles 429 with backoff
-// ══════════════════════════════════════════════════════════════════
-const mistralQueue = {
-  _lastCallAt: 0,
-  _min_gap_ms: 6000,        // 6s minimum between any Mistral calls
-  _backoff_ms: 0,           // Extra backoff after 429
-  _consecutive429s: 0,
-
-  async call(fn) {
-    // Apply minimum gap
-    const now = Date.now();
-    const gap = this._min_gap_ms + this._backoff_ms;
-    const wait = Math.max(0, gap - (now - this._lastCallAt));
-    if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    this._lastCallAt = Date.now();
-
+  if (rssUrl) {
     try {
-      const result = await fn();
-      // Success — reset backoff
-      if (this._consecutive429s > 0) {
-        this._consecutive429s = 0;
-        this._backoff_ms = 0;
-        console.log("[MistralQueue] 429 backoff cleared — calls flowing normally");
-      }
-      return result;
-    } catch(e) {
-      if (e.response?.status === 429) {
-        this._consecutive429s++;
-        // Exponential backoff: 10s, 20s, 40s, max 120s
-        this._backoff_ms = Math.min(120000, 10000 * Math.pow(2, this._consecutive429s - 1));
-        console.log(`[MistralQueue] 429 — backing off ${this._backoff_ms/1000}s (${this._consecutive429s} consecutive)`);
-      }
-      throw e;
-    }
-  }
-};
-
-async function runMistral(countryName, continent, rawData) {
-  if(!ENV.MISTRAL_API_KEY){ recordHealth("mistral",false,0,"No API key"); return null; }
-  const prompt = `You are the AI brain of GlobeVoyage travel intelligence platform.
-Analyse this data for ${countryName} (${continent}) and produce travel intelligence.
-
-WIKIPEDIA: ${(rawData.wiki?.summary||"").slice(0,500)}
-WIKIVOYAGE SEE: ${(rawData.wv?.sections?.See||"").slice(0,300)}
-WIKIVOYAGE DO: ${(rawData.wv?.sections?.Do||"").slice(0,300)}
-WIKIVOYAGE SAFE: ${(rawData.wv?.sections?.["Stay safe"]||"").slice(0,200)}
-PLACES: ${JSON.stringify(rawData.places||[]).slice(0,350)}
-WEATHER: ${JSON.stringify(rawData.weather?.now||{})}
-NEWS: ${(rawData.news||[]).map(n=>`[${n.risk_level}] ${n.title}`).join(" | ").slice(0,500)}
-GDACS: ${JSON.stringify(rawData.gdacs||[]).slice(0,250)}
-EVENTS: ${(rawData.events||[]).map(e=>`${e.name} (${e.date})`).join(" | ").slice(0,350)}
-AIR QUALITY: ${rawData.airQuality ? "AQI "+rawData.airQuality.aqi+" ("+rawData.airQuality.aqi_label+")" : "N/A"}
-COST OF LIVING: ${rawData.costOfLiving ? "Cheap meal $"+rawData.costOfLiving.meal_cheap+", 1-bed rent $"+rawData.costOfLiving.one_bed_city_rent+"/mo" : "N/A"}
-
-Output ONLY valid JSON, no markdown fences:
-{
-  "briefing": "2-3 sentences about what travellers need to know RIGHT NOW",
-  "vibe": "One evocative sentence capturing the country's current energy",
-  "recommendations": [{"title":"","type":"cultural|food|adventure|nature|nightlife|shopping|family","when":"","why":"","rating":5,"risk":"none|low|medium|high"}],
-  "calendar": [{"date":"YYYY-MM-DD","label":"","color":"green|amber|red","reason":""}],
-  "trending_now": [{"name":"","why_trending":"","best_time":"","warning":null}],
-  "safety_summary": "One honest sentence about current safety",
-  "best_months": ["Jan","Feb"],
-  "avoid_if": "Who should not visit right now",
-  "hidden_gem": "One under-the-radar recommendation"
-}
-Max: 6 recommendations, 14 calendar days, 4 trending items.`;
-
-  return timed("mistral", async () => {
-    const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
-      {model:"mistral-large-latest",messages:[{role:"user",content:prompt}],temperature:0.3,max_tokens:2000},
-      {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"},timeout:35000}
-    ));
-    const text = r.data?.choices?.[0]?.message?.content||"";
-    return JSON.parse(text.replace(/```json|```/g,"").trim());
-  });
-}
-
-// ══════════════════════════════════════════════════════════════════
-// MISTRAL AI — STATE-LEVEL INTEL (expanded)
-// ══════════════════════════════════════════════════════════════════
-// Shared JSON repair — close truncated JSON from Mistral
-function repairJson(text) {
-  const s = text.replace(/```json|```/g, "").trim();
-  try { return JSON.parse(s); } catch(e) {}
-  // Find last complete property and close open braces/brackets
-  let depth = 0; let lastGood = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (c === "{" || c === "[") depth++;
-    else if (c === "}" || c === "]") { depth--; if (depth === 0) lastGood = i + 1; }
-  }
-  // Try closing from the last known good position
-  const candidates = [
-    s.slice(0, lastGood),
-    s + "}".repeat(Math.max(0, depth)),
-    s.replace(/,\s*$/, "") + "}".repeat(Math.max(0, depth)),
-  ];
-  for (const c of candidates) {
-    try { return JSON.parse(c); } catch(e) {}
-  }
-  // Extract just the outer object
-  const m = s.match(/^\s*\{[\s\S]+/);
-  if (m) {
-    let d = 0; let end = 0;
-    for (let i = 0; i < m[0].length; i++) {
-      if (m[0][i] === "{") d++;
-      else if (m[0][i] === "}") { d--; if (d === 0) { end = i + 1; break; } }
-    }
-    if (end > 0) { try { return JSON.parse(m[0].slice(0, end)); } catch(e) {} }
-  }
-  return null;
-}
-
-async function runMistralForState(stateName, countryName, continent, rawData) {
-  if(!ENV.MISTRAL_API_KEY) return null;
-
-  // Compact prompt — fewer fields, shorter instructions
-  // Each field kept to 1 sentence to stay well under token limit
-  const wx  = rawData.weather?.now;
-  const aqi = rawData.airQuality;
-  const prompt = `Travel intel for ${stateName}, ${countryName} (${continent}).
-Context: Weather=${wx ? wx.temp+"°C "+wx.condition : "N/A"} | AQI=${aqi ? aqi.aqi+" "+aqi.aqi_label : "N/A"} | Top news: ${(rawData.news||[]).slice(0,3).map(n=>n.title).join(" / ").slice(0,300)} | Cities: ${(rawData.areas||[]).slice(0,15).map(a=>a.name).join(", ")}
-
-Return ONLY valid compact JSON — no markdown, no explanation, no trailing commas:
-{"briefing":"2-3 sentences on character/history/vibe of ${stateName}","vibe":"One evocative sentence","best_months":["Jan","Feb","Mar"],"avoid_if":"Who/when to avoid","hidden_gem":"Specific hidden spot with name","safety_summary":"Current safety in one sentence","food_scene":"Signature dishes and where","transport_overview":"Getting here and around","climate_summary":"Weather across the year","history_brief":"Key history in 2 sentences","culture_brief":"Culture and traditions","health_overview":"Health tips","connectivity_overview":"Internet and mobile","accommodation_overview":"Where to stay and prices","shopping_overview":"What to buy and where","nightlife_overview":"Nightlife scene","cost_estimate":{"budget":"$X-Y/day","mid":"$Y-Z/day","luxury":"$Z+/day"},"safety_detail":{"rating":"safe|moderate|caution|dangerous","night":"","solo_female":"","risks":"","emergency":""},"traveler_scores":{"solo":7,"couples":7,"families":6,"backpackers":7,"luxury":5,"digital_nomad":6,"adventure":7,"culture":8,"foodie":7},"recommendations":[{"title":"","type":"","why":"","rating":4.5},{"title":"","type":"","why":"","rating":4},{"title":"","type":"","why":"","rating":4.5}],"local_tips":["Tip 1","Tip 2","Tip 3"],"day_itinerary":"Morning: ... | Afternoon: ... | Evening: ...","sensory_description":"Walking the main street: you see..., hear..., smell..."}`;
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
-        {model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.2, max_tokens:3500},
-        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"}, timeout:50000}
-      ));
-      const text  = r.data?.choices?.[0]?.message?.content || "";
-      const finish = r.data?.choices?.[0]?.finish_reason;
-      if (finish === "length") console.warn(`[MistralState] ${stateName} truncated (finish=length) attempt ${attempt}`);
-      const parsed = repairJson(text);
-      if (parsed) {
-        console.log(`[MistralState] ✓ ${stateName} parsed OK (attempt ${attempt}, finish=${finish})`);
-        return parsed;
-      }
-      console.error(`[MistralState] ${stateName} parse failed attempt ${attempt}, raw len=${text.length}`);
-    } catch(e) {
-      console.error(`[MistralState] ${stateName} attempt ${attempt}:`, e.message?.slice(0, 80));
-      if (attempt < 2) await new Promise(r => setTimeout(r, 6000));
-    }
-  }
-  return null;
-}
-
-// ══════════════════════════════════════════════════════════════════
-// MISTRAL AI — FULL AREA INTEL (comprehensive, covers all spec categories)
-// ══════════════════════════════════════════════════════════════════
-async function runMistralForArea(areaName, stateName, countryName, continent, rawData) {
-  if(!ENV.MISTRAL_API_KEY) return null;
-  const location = `${areaName}${stateName ? ", " + stateName : ""}, ${countryName}`;
-  const wx  = rawData.weather?.now || {};
-  const aqi = rawData.airQuality || {};
-
-  // Compact but comprehensive prompt covering ALL spec categories
-  const prompt = `You are GlobeVoyage AI. Generate COMPREHENSIVE travel intelligence for: ${location}
-
-LIVE DATA:
-- Weather: ${wx.temp != null ? wx.temp + "°C, " + (wx.condition||"") + ", humidity " + (wx.humidity||"?") + "%, wind " + (wx.wind_speed||"?") + "km/h" : "unavailable"}
-- AQI: ${aqi.aqi != null ? aqi.aqi + " (" + (aqi.aqi_label||"") + ")" : "unavailable"}
-- News: ${(rawData.news||[]).slice(0,5).map(n=>n.title).join(" | ").slice(0,400) || "none"}
-- Nearby places: ${JSON.stringify((rawData.places||[]).slice(0,4).map(p=>p.name)).slice(0,200)}
-
-Return ONLY valid compact JSON (no markdown). Cover ALL categories:
-{
-"geography":{"full_name":"","local_name":"","classification":"city/district/etc","coordinates":"lat,lon","elevation_m":0,"area_km2":0,"population":0,"population_density":0,"founding_year":"","timezone":"","demonym":"","topography":"","borders":[],"distance_capital_km":0,"nearest_airport":"","special_status":""},
-"weather":{"current":{"temp_c":0,"feels_like_c":0,"condition":"","humidity_pct":0,"wind_kmh":0,"uv_index":0,"visibility_km":0,"pressure_hpa":0},"forecast_7d":[{"day":"","high":0,"low":0,"condition":""}],"climate_type":"","rainy_season":"","dry_season":"","best_months":[],"worst_months":"","record_high_c":0,"record_low_c":0,"annual_rainfall_mm":0,"current_season":""},
-"air_environment":{"aqi":0,"aqi_category":"","pm25":0,"pm10":0,"main_sources":[],"water_quality":"","flood_risk":"low|medium|high","earthquake_risk":"","green_space_pct":0,"deforestation":"","disaster_alerts":[]},
-"history_culture":{"background":"2-3 sentence historical overview","indigenous_groups":[],"key_events":[],"colonial_history":"","famous_figures":[],"traditional_music":"","traditional_food":"","festivals":[{"name":"","month":"","description":""}],"etiquette":[],"taboos":[],"architecture_style":"","heritage_sites":[]},
-"food_drink":{"signature_dishes":[],"street_food":[],"local_drinks":[],"top_restaurants":[{"name":"","cuisine":"","price_range":"$|$$|$$$","rating":0}],"markets":[],"vegetarian_options":"","halal_options":"","avg_cheap_meal_usd":0,"avg_mid_meal_usd":0,"avg_coffee_usd":0,"food_safety":"","delivery_apps":[]},
-"accommodation":{"luxury":[{"name":"","price_night_usd":0,"rating":0}],"mid_range":[{"name":"","price_night_usd":0}],"budget":[{"name":"","price_night_usd":0}],"airbnb_avg_usd":0,"best_areas_to_stay":[],"areas_to_avoid":[],"unique_stays":[],"digital_nomad_friendly":""},
-"transport":{"nearest_airport":"","direct_flights":[],"taxi_cost_per_km_usd":0,"ride_apps":[],"public_transport":"","road_quality":"poor|fair|good|excellent","avg_traffic":"low|medium|high","rush_hours":"","fuel_available":true,"ev_charging":false,"walkability":"poor|fair|good|excellent","cycling":""},
-"cost_of_living":{"cheap_meal_usd":0,"mid_meal_usd":0,"water_usd":0,"local_beer_usd":0,"coffee_usd":0,"1bed_city_rent_usd":0,"monthly_internet_usd":0,"mobile_data_per_gb_usd":0,"avg_salary_usd":0,"cost_vs_national":"cheaper|same|expensive","atm_available":true,"card_acceptance":"low|medium|high","tipping":"","bargaining":""},
-"health":{"risk_level":"low|medium|high","vaccinations":[],"malaria_risk":"","water_safe_to_drink":false,"nearest_hospital":"","ambulance_reliable":false,"medical_tourism":false,"air_quality_health":"","mosquito_risk":"","altitude_sickness_risk":""},
-"safety":{"overall_rating":0,"crime_index":"low|medium|high","violent_crime":"","petty_theft":"","scams":[],"kidnapping_risk":"","terrorism_level":"","police_effectiveness":"","night_safety":"","safe_areas":[],"unsafe_areas":[],"women_safety":"","lgbtq_safety":"","emergency_police":"","current_advisories":[]},
-"nightlife_entertainment":{"overview":"","best_areas":[],"venues":[{"name":"","type":"bar|club|lounge","vibe":""}],"closing_time":"","dress_code":"","alcohol_laws":"","lgbtq_friendly":false,"clubs":[],"cinemas":[],"live_music":[]},
-"attractions":{"top_10":[{"name":"","type":"","why":"","hours":"","cost_usd":"","tip":""}],"hidden_gems":[],"free_attractions":[],"best_viewpoints":[],"instagrammable_spots":[],"day_trips":[],"child_friendly":[],"adventure_activities":[]},
-"shopping":{"major_malls":[],"local_markets":[{"name":"","specialty":"","days":"","hours":""}],"what_to_buy":[],"what_not_to_buy":[],"bargaining":true,"card_vs_cash":"","opening_hours":"","souvenir_shops":[]},
-"connectivity":{"avg_download_mbps":0,"avg_upload_mbps":0,"best_networks":[],"4g_coverage":"poor|fair|good|excellent","5g_available":false,"wifi_availability":"","coworking_spaces":[{"name":"","price_day_usd":0}],"power_reliability":"poor|fair|good|excellent","voltage":220,"plug_type":"","vpn_recommended":true,"internet_censored":false},
-"religion":{"dominant_religions":[],"breakdown":{},"major_mosques":[],"major_churches":[],"holy_sites":[],"visitor_restrictions":"","interfaith_relations":"peaceful|tense"},
-"languages":{"official":[],"local_dialects":[],"english_level":"none|basic|good|excellent","useful_phrases":{"hello":"","thanks":"","how_much":"","help":""},"whatsapp_dominant":true},
-"demographics":{"population":0,"male_female_ratio":"","age_under18_pct":0,"ethnic_groups":[],"expat_community":"small|medium|large","lgbtq_visibility":"","hospitality_rating":""},
-"environment":{"renewable_energy_pct":0,"plastic_pollution":"low|medium|high","waste_management":"poor|fair|good","recycling_rate":0,"climate_vulnerability":"low|medium|high","eco_friendly_businesses":[]},
-"events":{"annual_festivals":[{"name":"","month":"","description":""}],"upcoming_14_days":[],"public_holidays":[],"market_days":"","best_season_to_visit":""},
-"visa":{"visa_free_countries":[],"visa_on_arrival":[],"evisa_available":false,"visa_cost_usd":0,"yellow_fever_required":false,"entry_requirements":[],"overstay_consequences":""},
-"ai_intel":{"briefing":"3 sentences on current state","vibe":"one evocative sentence","safety_assessment":"current honest safety","hidden_gem":"specific with exact name","best_time":"month and why","avoid_if":"who should not come","trending_topic":"what locals are talking about","recommendations":[{"title":"","why":"","type":"","rating":4.5,"price":"$|$$|$$$","duration":"","best_for":""}],"cost_3day_trip_usd":0,"local_tip":"something only locals know","packing_list":[],"traveler_scores":{"solo":7,"couples":7,"families":6,"backpackers":7,"luxury":5,"digital_nomad":6,"adventure":7,"culture":8,"foodie":8},"day_itinerary":"Morning: | Afternoon: | Evening: ","sensory":"walking the main street you see... hear... smell...","comparison":"feels like a cross between X and Y because...","sub_areas":[],"overtourism_risk":"low|medium|high"}
-}`;
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
-        {model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.2, max_tokens:6000},
-        {headers:{Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`,"Content-Type":"application/json"}, timeout:75000}
-      ));
-      const text   = r.data?.choices?.[0]?.message?.content || "";
-      const finish = r.data?.choices?.[0]?.finish_reason;
-      if (finish === "length") console.warn(`[MistralArea] ${areaName} truncated attempt ${attempt}`);
-      const parsed = repairJson(text);
-      if (parsed) {
-        console.log(`[MistralArea] ✓ ${areaName} parsed OK (attempt ${attempt}, finish=${finish})`);
-        return parsed;
-      }
-      console.error(`[MistralArea] ${areaName} parse failed attempt ${attempt}, raw len=${text.length}`);
-    } catch(e) {
-      console.error(`[MistralArea] ${areaName} attempt ${attempt}:`, e.message?.slice(0,80));
-      if (attempt < 2) await new Promise(r => setTimeout(r, 6000));
-    }
-  }
-  return null;
-}
-
-async function verifyAreaIntel(areaName, stateName, countryName, aiIntel) {
-  if (!ENV.MISTRAL_API_KEY) return { verified: false, confidence: 0, reason: "No API key" };
-
-  const location = `${areaName}${stateName ? ", " + stateName : ""}, ${countryName}`;
-
-  // Key claims to verify from the generated intel
-  const briefing   = aiIntel?.ai_intel?.briefing || "";
-  const safety     = aiIntel?.safety?.overall_rating || "";
-  const population = aiIntel?.geography?.population || 0;
-  const dominated  = aiIntel?.history_culture?.background || "";
-
-  const verifyPrompt = `You are a fact-checking AI for GlobeVoyage travel intelligence.
-
-LOCATION: ${location}
-GENERATED INTEL TO VERIFY:
-- Briefing: "${briefing.slice(0, 300)}"
-- Safety rating: "${safety}"
-- Population estimate: ${population}
-- History: "${dominated.slice(0, 200)}"
-
-Your task:
-1. Search the web for 3+ RECENT sources (within 4 months) about ${location}
-2. Check if the generated intel aligns with what those sources say
-3. Flag any outdated or incorrect claims
-
-Return ONLY valid JSON:
-{
-  "verified": true,
-  "confidence": 0.85,
-  "sources_found": 3,
-  "sources": [
-    {"url": "https://example.com", "title": "...", "relevance": "confirms safety/population/history"},
-    {"url": "https://example2.com", "title": "...", "relevance": "..."},
-    {"url": "https://example3.com", "title": "...", "relevance": "..."}
-  ],
-  "corrections": {},
-  "flags": [],
-  "freshness": "current",
-  "reason": "Intel verified against 3 sources published within 4 months",
-  "regenerate": false
-}
-
-If fewer than 3 sources found OR major facts conflict, set "verified": false and "regenerate": true.
-If intel appears stale (facts from 6+ months ago), set "freshness": "stale" and "regenerate": true.`;
-
-  try {
-    const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
-      {
-        model: "mistral-large-latest",
-        messages: [{ role: "user", content: verifyPrompt }],
-        temperature: 0.1,
-        max_tokens: 1500,
-        tools: [{
-          type: "web_search_preview",
-          web_search_preview: {}
-        }]
-      },
-      { headers: { Authorization: `Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type": "application/json" }, timeout: 60000 }
-    ));
-
-    const text = r.data?.choices?.[0]?.message?.content || "";
-    const parsed = repairJson(text);
-    if (parsed) {
-      console.log(`[VerifyArea] ${areaName}: verified=${parsed.verified}, sources=${parsed.sources_found}, confidence=${parsed.confidence}`);
-      return parsed;
-    }
-  } catch(e) {
-    // Web search tool may not be available on Mistral — fall back to text-only verification
-    console.log(`[VerifyArea] Web search unavailable (${e.message?.slice(0,60)}) — using text-only verification`);
-  }
-
-  // Fallback: text-only verification (no web search tool)
-  const fallbackPrompt = `You are a travel intelligence fact-checker.
-Location: ${location}
-Intel to check: "${briefing.slice(0, 200)}"
-
-Based on your training knowledge, assess if this intel seems accurate and current.
-Return JSON: {"verified": true/false, "confidence": 0.0-1.0, "sources_found": 0, "flags": [], "reason": "explanation", "freshness": "current|stale", "regenerate": false}`;
-
-  try {
-    const r2 = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
-      { model: "mistral-large-latest", messages: [{ role: "user", content: fallbackPrompt }], temperature: 0.1, max_tokens: 400 },
-      { headers: { Authorization: `Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type": "application/json" }, timeout: 30000 }
-    ));
-    const text2 = r2.data?.choices?.[0]?.message?.content || "";
-    const parsed2 = repairJson(text2);
-    if (parsed2) return { ...parsed2, sources_found: parsed2.sources_found || 0, fallback_verification: true };
-  } catch(e2) {
-    console.error(`[VerifyArea] Fallback verification failed:`, e2.message?.slice(0,60));
-  }
-
-  // If verification completely fails, allow the intel through with low confidence
-  return { verified: true, confidence: 0.5, sources_found: 0, reason: "Verification unavailable — intel passed through", regenerate: false };
-}
-
-// ══════════════════════════════════════════════════════════════════
-// AREA INTEL PRE-GENERATION PIPELINE
-// Full process: Sources → Mistral → Verify → Store (max 3 attempts)
-// ══════════════════════════════════════════════════════════════════
-async function runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso) {
-  const location = `${areaName}${stateName ? ", " + stateName : ""}, ${countryName}`;
-  console.log(`[AreaPipeline] Starting for ${location}`);
-
-  const country = COUNTRIES.find(c => c.iso === countryIso || c.name === countryName);
-  const continent = country?.continent || "";
-  const iso2 = ISO3_TO_ISO2[countryIso || ""] || "US";
-
-  // ── PHASE 1: Gather data from all API sources ──────────────────
-  let coords = null;
-  try { coords = await geocodePlace(`${areaName}${stateName ? ", " + stateName : ""}`, countryName); } catch(e) {}
-  if (!coords && countryIso) coords = geoCoordCache[countryIso] || null;
-
-  const safe = async (fn, fallback) => { try { return await fn(); } catch(e) { return fallback; } };
-
-  const [weather, newsRaw, photos, waqiData, places, eventsRaw] = await Promise.all([
-    coords ? safe(() => fetchWeatherByCoords(coords.lat, coords.lon), { now: null, forecast: [] }) : Promise.resolve({ now: null, forecast: [] }),
-    safe(() => fetchGoogleNewsByQuery(`"${areaName}" "${countryName}"`, iso2), []),
-    safe(() => fetchUnsplash(`${areaName} ${countryName}`), []),
-    coords ? safe(() => fetchWAQIByCoords(coords.lat, coords.lon, areaName), null) : Promise.resolve(null),
-    coords ? safe(() => fetchPlacesByCoords(coords.lat, coords.lon), []) : Promise.resolve([]),
-    safe(() => fetchGoogleNewsByQuery(`"${areaName}" events festival 2025 2026`, iso2), []),
-  ]);
-
-  const rawData = { weather, news: newsRaw, places, airQuality: waqiData, events: eventsRaw };
-
-  // ── PHASE 2 + 3: Generate AI intel and verify (up to 3 attempts) ─
-  let finalIntel = null;
-  let verificationResult = null;
-  const MAX_ATTEMPTS = 3;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    console.log(`[AreaPipeline] ${areaName} — AI generation attempt ${attempt}/${MAX_ATTEMPTS}`);
-
-    // Generate with Mistral
-    const aiIntel = await runMistralForArea(areaName, stateName, countryName, continent, rawData);
-    if (!aiIntel) {
-      console.log(`[AreaPipeline] ${areaName} attempt ${attempt}: Mistral returned null`);
-      if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 10000));
-      continue;
-    }
-
-    // Verify with web search
-    verificationResult = await verifyAreaIntel(areaName, stateName, countryName, aiIntel);
-
-    if (verificationResult.regenerate && attempt < MAX_ATTEMPTS) {
-      console.log(`[AreaPipeline] ${areaName} attempt ${attempt}: verification says regenerate — ${verificationResult.reason}`);
-      await new Promise(r => setTimeout(r, 8000));
-      continue;
-    }
-
-    // Intel verified (or max attempts reached)
-    finalIntel = aiIntel;
-    console.log(`[AreaPipeline] ${areaName} ✓ verified (attempt ${attempt}, confidence=${verificationResult.confidence})`);
-    break;
-  }
-
-  if (!finalIntel) {
-    console.log(`[AreaPipeline] ${areaName}: all attempts failed — storing partial data`);
-  }
-
-  // ── PHASE 4: Compile and store ─────────────────────────────────
-  const nextUpdate = new Date(Date.now() + AREA_INTEL_REFRESH_MS).toISOString();
-  const cacheKey = `${areaName}||${stateName || ""}||${countryName}`;
-
-  const fi = finalIntel || {};
-  const ai = fi.ai_intel || {};
-
-  const record = {
-    area_name:     areaName,
-    state_name:    stateName || null,
-    country_name:  countryName,
-    country_iso:   countryIso || null,
-    continent,
-    last_updated:  new Date().toISOString(),
-    next_update_at: nextUpdate,
-    lat:  coords?.lat || null,
-    lon:  coords?.lon || null,
-
-    // Verification metadata
-    verification_score:    verificationResult?.confidence || 0,
-    verification_sources:  verificationResult?.sources_found || 0,
-    verification_flags:    verificationResult?.flags || [],
-    verification_result:   verificationResult || null,
-
-    // All spec categories as JSONB columns
-    ai_geography:     fi.geography     || null,
-    ai_weather:       fi.weather       || null,
-    ai_air_environment: fi.air_environment || null,
-    ai_history_culture: fi.history_culture || null,
-    ai_food_drink:    fi.food_drink    || null,
-    ai_accommodation: fi.accommodation || null,
-    ai_transport:     fi.transport     || null,
-    ai_cost_of_living: fi.cost_of_living || null,
-    ai_health:        fi.health        || null,
-    ai_safety:        fi.safety        || null,
-    ai_nightlife:     fi.nightlife_entertainment || null,
-    ai_attractions:   fi.attractions   || null,
-    ai_shopping:      fi.shopping      || null,
-    ai_connectivity:  fi.connectivity  || null,
-    ai_religion:      fi.religion      || null,
-    ai_languages:     fi.languages     || null,
-    ai_demographics:  fi.demographics  || null,
-    ai_environment:   fi.environment   || null,
-    ai_events:        fi.events        || null,
-    ai_visa:          fi.visa          || null,
-
-    // AI Intel fields (top-level for easy access)
-    ai_briefing:           ai.briefing          || null,
-    ai_vibe:               ai.vibe              || null,
-    ai_hidden_gem:         ai.hidden_gem        || null,
-    ai_best_time:          ai.best_time         || null,
-    ai_avoid_if:           ai.avoid_if          || null,
-    ai_trending:           ai.trending_topic    || null,
-    ai_recommendations:    ai.recommendations   || [],
-    ai_local_tips:         ai.local_tip ? [ai.local_tip] : [],
-    ai_packing_list:       ai.packing_list      || [],
-    ai_cost_estimate:      ai.cost_3day_trip_usd ? { three_day_usd: ai.cost_3day_trip_usd } : null,
-    ai_day_itinerary:      ai.day_itinerary     || null,
-    ai_sensory_description: ai.sensory          || null,
-    ai_traveler_scores:    ai.traveler_scores   || null,
-    ai_sub_areas:          ai.sub_areas         || [],
-    ai_etiquette:          fi.history_culture?.etiquette || [],
-    ai_culture:            fi.history_culture   || null,
-    ai_history:            fi.history_culture   || null,
-    ai_finance:            fi.cost_of_living    || null,
-    ai_climate:            fi.weather           || null,
-
-    // Media
-    photos:          (photos || []).slice(0, 9),
-    news:            newsRaw || [],
-    events_data:     eventsRaw || [],
-    weather_now:     weather?.now || null,
-    weather_forecast: weather?.forecast || [],
-    top_places:      places || [],
-  };
-
-  try {
-    const { error } = await supabase.from("area_intel")
-      .upsert(record, { onConflict: "area_name,state_name,country_name" });
-    if (error) console.error(`[AreaPipeline] DB upsert error for ${areaName}:`, error.message);
-    else console.log(`[AreaPipeline] ✓ ${areaName} stored (next refresh: ${nextUpdate})`);
-  } catch(e) {
-    console.error(`[AreaPipeline] DB error for ${areaName}:`, e.message);
-  }
-
-  areaIntelMemCache[cacheKey] = record;
-  return record;
-}
-
-async function generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso) {
-  // Delegate to the full pipeline (source gathering → AI → verification → store)
-  return runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso);
-}
-
-async function getOrGenerateAreaIntel(areaName, stateName, countryName, countryIso) {
-  const cacheKey = `${areaName}||${stateName||''}||${countryName}`;
-
-  // Check memory cache
-  if(areaIntelMemCache[cacheKey] && !areaIntelNeedsRefresh(areaIntelMemCache[cacheKey])) {
-    return { data: areaIntelMemCache[cacheKey], fresh: true, source: 'memory' };
-  }
-
-  // Check DB cache
-  try {
-    const query = supabase.from("area_intel").select("*")
-      .eq("area_name", areaName)
-      .eq("country_name", countryName);
-    if(stateName) query.eq("state_name", stateName);
-    const { data } = await query.maybeSingle();
-    if(data) {
-      areaIntelMemCache[cacheKey] = data;
-      const hasAiData = !!(data.ai_briefing || data.ai_vibe || data.ai_recommendations?.length);
-      if(!areaIntelNeedsRefresh(data) && hasAiData) {
-        return { data, fresh: true, source: 'db' };
-      }
-      // Stale OR missing AI data (Mistral failed last time) — refresh in background
-      const reason = !hasAiData ? 'missing AI data' : 'stale';
-      console.log(`[AreaIntel] ${areaName} needs refresh (${reason}), regenerating...`);
-      generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso).catch(console.error);
-      return { data, fresh: false, source: hasAiData ? 'db_stale' : 'db_no_ai' };
-    }
-  } catch(e) { console.error(`[AreaIntel] DB lookup error:`, e.message); }
-
-  // Not in cache — generate now
-  const data = await generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso);
-  return { data, fresh: true, source: 'generated' };
-}
-
-// ── Refresh stale area intel in background ────────────────────────
-let areaIntelRefreshRunning = false;
-async function refreshStaleAreaIntel() {
-  if(areaIntelRefreshRunning) return;
-  areaIntelRefreshRunning = true;
-  try {
-    const now = new Date().toISOString();
-    const { data: stale } = await supabase.from("area_intel")
-      .select("area_name,state_name,country_name,country_iso")
-      .lt("next_update_at", now)
-      .limit(3);
-    if(stale && stale.length > 0) {
-      console.log(`[AreaRefresh] Refreshing ${stale.length} stale area intel records...`);
-      for(const s of stale) {
-        await generateAndStoreAreaIntel(s.area_name, s.state_name, s.country_name, s.country_iso)
-          .catch(e => console.error(`[AreaRefresh] ${s.area_name}:`, e.message));
-        await new Promise(r => setTimeout(r, 6000));
-      }
-    }
-  } catch(e) { console.error("[AreaRefresh] Error:", e.message); }
-  finally { areaIntelRefreshRunning = false; }
-}
-
-// ── Cron: refresh stale intel every hour ─────────────────────────
-cron.schedule("0 * * * *", () => {
-  refreshStaleAreaIntel().catch(console.error);
-  refreshStaleStateIntel().catch(console.error);
-}, { timezone:"UTC" });
-
-// ══════════════════════════════════════════════════════════════════
-// MAIN PIPELINE — Country-level intel
-// ══════════════════════════════════════════════════════════════════
-async function runPipeline(iso, countryName, continent) {
-  const start = Date.now();
-  console.log(`🌍 Pipeline: ${countryName} (${iso})`);
-  const safe = async (fn, fallback, retries = 0) => {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try { return await fn(); }
-      catch(e) {
-        if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
-        } else {
-          console.log(`  ✗ ${countryName}: ${e.message.slice(0,80)}`);
-          return fallback;
-        }
-      }
-    }
-  };
-  const geo = await safe(() => fetchGeoapify(countryName, iso), {});
-  const [wiki, wv, places, weather, news, gNews, gdacs, tm, eb, phq, social,
-         photos, airQualityRaw, flights, costOfLiving, countryMeta, airbnb,
-         booking, tripadvisor, flightPrices, currencyRates, googlePlaces,
-         travelAdvisor, hotelDeals, youtubeVideos, waqiData, nationalNews] = await Promise.all([
-    safe(() => fetchWikipedia(countryName),          { summary:"" }),
-    safe(() => fetchWikivoyage(countryName),         { sections:{}, highlights:[] }),
-    safe(() => fetchFoursquare(countryName, iso),    []),
-    safe(() => fetchWeather(countryName),            { now:null, forecast:[] }),
-    safe(() => fetchNews(countryName, iso),          []),
-    safe(() => fetchGoogleNews(countryName),         []),
-    safe(() => fetchGDACS(countryName),              []),
-    safe(() => fetchTicketmaster(countryName, iso),  [], 1),
-    safe(() => fetchEventbrite(countryName),         [], 1),
-    safe(() => fetchPredictHQ(countryName),          [], 1),
-    safe(() => fetchSocialTrends(countryName),       []),
-    safe(() => fetchUnsplash(countryName),           [], 1),
-    safe(() => fetchAirQuality(countryName, iso),    null, 1),
-    safe(() => fetchFlights(countryName, iso),       null, 1),
-    safe(() => fetchCostOfLiving(countryName),       null, 1),
-    safe(() => fetchRestCountries(iso),              null),
-    safe(() => fetchAirbnb(countryName, iso),        null, 1),
-    safe(() => fetchBooking(countryName, iso),       null, 1),
-    safe(() => fetchTripadvisor(countryName, iso),   null, 1),
-    safe(() => fetchFlightPrices(countryName, iso),  null, 1),
-    safe(() => fetchCurrencyRates(iso),              null),
-    safe(() => fetchGooglePlaces(countryName, iso),  null, 1),
-    safe(() => fetchTravelAdvisor(countryName, iso), null, 1),
-    safe(() => fetchHotelDeals(countryName, iso),    null, 1),
-    safe(() => fetchYoutubeVideos(countryName, iso), null, 1),
-    safe(() => fetchWAQI(countryName, iso),          null),
-    safe(() => fetchNationalNews(iso),               null),
-  ]);
-  const airQuality = airQualityRaw || waqiData || null;
-  const allNews   = [...(news||[]),...(gNews||[])].slice(0,10);
-  const allEvents = [...(tm||[]),...(eb||[]),...(phq||[])].sort((a,b)=>(a.date||"").localeCompare(b.date||"")).slice(0,12);
-  const safetyFlags = [
-    ...(gdacs||[]).map(g=>({...g,type:"disaster"})),
-    ...allNews.filter(n=>n.risk_level==="high").map(n=>({date:n.published_at?.split("T")[0],type:"news",description:n.title,severity:"high"}))
-  ].slice(0,6);
-  const ai = await safe(() => runMistral(countryName, continent, {
-    wiki, wv, places, weather, news:allNews, gdacs, events:allEvents, social,
-    airQuality, costOfLiving, countryMeta, booking, tripadvisor, travelAdvisor
-  }), null);
-  const verification = await safe(() => runVerificationAI(countryName, continent, {
-    weather, news:allNews, events:allEvents, costOfLiving, airQuality, nationalNews, ai,
-  }), null);
-  const {error} = await supabase.from("country_intel").upsert({
-    iso, country_name:countryName, continent, last_updated:new Date().toISOString(),
-    wiki_summary:wiki?.summary||"", wiki_highlights:wv?.highlights||[], wiki_sections:wv?.sections||{},
-    top_places:places||[], weather_now:weather?.now, weather_forecast:weather?.forecast||[],
-    news_headlines:allNews, safety_flags:safetyFlags, gdacs_alerts:gdacs||[], events:allEvents,
-    geoapify:geo||{}, trending_spots:social||{}, sentiment:{},
-    ai_briefing:ai?.briefing||null, ai_vibe:ai?.vibe||null, ai_recommendations:ai?.recommendations||[],
-    ai_calendar:ai?.calendar||[], ai_trending_now:ai?.trending_now||[],
-    ai_safety_summary:ai?.safety_summary||null, ai_best_months:ai?.best_months||[],
-    ai_avoid_if:ai?.avoid_if||null, ai_hidden_gem:ai?.hidden_gem||null,
-    photos:photos||[], air_quality:airQuality, flights:flights||null, cost_of_living:costOfLiving||null,
-    country_meta:countryMeta||null, airbnb:airbnb||null, booking:booking||null,
-    tripadvisor:tripadvisor||null, flight_prices:flightPrices||null, currency_rates:currencyRates||null,
-    google_places:googlePlaces||null, restaurants:travelAdvisor||null, hotel_deals:hotelDeals||null,
-    youtube_videos:youtubeVideos||null, national_news:nationalNews||null, verification:verification||null,
-  },{onConflict:"iso"});
-  const duration = Date.now()-start;
-  if(error) console.error(`❌ DB error ${countryName}:`, error.message);
-  else console.log(`✅ ${countryName} done in ${Math.round(duration/1000)}s`);
-  await supabase.from("pipeline_runs").insert({
-    iso, status:error?"error":"success",
-    sources:Object.fromEntries(Object.entries(sourceHealth).map(([k,v])=>[k,v.ok?"ok":"fail"])),
-    duration_ms:duration, error:error?.message||null, ran_at:new Date().toISOString(),
-  });
-  try {
-    const { data: runs } = await supabase.from("pipeline_runs").select("id, ran_at").eq("iso",iso).order("ran_at",{ascending:false});
-    if(runs && runs.length > 3) {
-      const toDelete = runs.slice(3).map(r=>r.id);
-      await supabase.from("pipeline_runs").delete().in("id",toDelete);
-    }
-  } catch(e) {}
-  return {success:!error, duration};
-}
-
-async function runFullPipeline(triggerName) {
-  console.log(`🚀 [${triggerName}] Pipeline starting for ${COUNTRIES.length} countries...`);
-  pipelineStatus.running = true;
-  pipelineStatus.lastRunAt = new Date().toISOString();
-  pipelineStatus.lastRunName = triggerName;
-  pipelineStatus.countriesLastRun = 0;
-  let ran=0;
-  for(let i=0;i<COUNTRIES.length;i++){
-    const {iso,name,continent} = COUNTRIES[i];
-    try { await runPipeline(iso,name,continent); ran++; pipelineStatus.countriesLastRun=ran; }
-    catch(e) { console.error(`Pipeline error for ${name}:`, e.message); }
-    await new Promise(r=>setTimeout(r,20000));
-  }
-  pipelineStatus.running = false;
-  console.log(`✅ [${triggerName}] Pipeline complete — ${ran} ran`);
-  // Start background state intel generation after full pipeline
-  setTimeout(() => preGenerateAllStateIntel().catch(console.error), 30000);
-}
-
-cron.schedule("0 6  * * *", () => runFullPipeline("06:00"), { timezone:"UTC" });
-// Every 2 hours: fill in any states that are missing intel (skip if already running)
-cron.schedule("0 */2 * * *", () => {
-  if (!stateGenProgress.running) {
-    generateAllStateIntel({ force: false }).catch(console.error);
-  } else {
-    console.log("[Cron] State gen already running — skipping 2hr trigger");
-  }
-}, { timezone:"UTC" });
-cron.schedule("0 14 * * *", () => runFullPipeline("14:00"), { timezone:"UTC" });
-cron.schedule("0 22 * * *", () => runFullPipeline("22:00"), { timezone:"UTC" });
-
-async function runStartupPipeline() {
-  console.log("🚀 [Startup] Checking for countries with no data...");
-  const { data:existing } = await supabase.from("country_intel").select("iso");
-  const existingISOs = new Set((existing||[]).map(r=>r.iso));
-  const missing = COUNTRIES.filter(c => !existingISOs.has(c.iso));
-  if(missing.length === 0) { console.log("✅ [Startup] All countries already have data"); return; }
-  console.log(`🌍 [Startup] ${missing.length} countries have no data — running pipeline...`);
-  for(const c of missing) {
-    try { await runPipeline(c.iso,c.name,c.continent); } catch(e) { console.error(e.message); }
-    await new Promise(r=>setTimeout(r,20000));
-  }
-  console.log("✅ [Startup] Missing countries pipeline complete");
-  // After country intel is done, pre-generate state intel in background
-  console.log("[Startup] Scheduling state intel pre-generation in 60 seconds...");
-  setTimeout(() => preGenerateAllStateIntel().catch(console.error), 60000);
-}
-
-// ══════════════════════════════════════════════════════════════════
-// STATE_INTEL TABLE CHECK
-// ══════════════════════════════════════════════════════════════════
-let stateIntelTableExists = false;
-let areaIntelTableExists  = false;
-
-async function checkTables() {
-  try {
-    const { error: se } = await supabase.from("state_intel").select("state_id").limit(1);
-    stateIntelTableExists = !se;
-    if(se) console.log("⚠️  state_intel table missing — run geo_migration.sql");
-    else   console.log("✓ state_intel table found");
-  } catch(e) { stateIntelTableExists = false; }
-  try {
-    const { error: ae } = await supabase.from("area_intel").select("id").limit(1);
-    areaIntelTableExists = !ae;
-    if(ae) console.log("⚠️  area_intel table missing — run geo_migration.sql");
-    else   console.log("✓ area_intel table found");
-  } catch(e) { areaIntelTableExists = false; }
-}
-
-// ══════════════════════════════════════════════════════════════════
-// API ENDPOINTS
-// ══════════════════════════════════════════════════════════════════
-
-function requireAdminAuth(req, res, next) {
-  const authHeader = req.headers["authorization"]||"";
-  const b64 = authHeader.startsWith("Basic ") ? authHeader.slice(6) : "";
-  const decoded = Buffer.from(b64, "base64").toString();
-  const colonIndex = decoded.indexOf(":");
-  const user = decoded.slice(0, colonIndex);
-  const pass = decoded.slice(colonIndex + 1);
-  const validUser = process.env.ADMIN_USERNAME || "admin";
-  const validPass = process.env.ADMIN_PASSWORD || "changeme";
-  if (user === validUser && pass === validPass) return next();
-  res.setHeader("WWW-Authenticate", 'Basic realm="GlobeVoyage Mission Control"');
-  res.status(401).send("Unauthorized");
-}
-
-app.post("/api/auth/verify", (req, res) => {
-  const authHeader = req.headers["authorization"] || "";
-  const b64 = authHeader.startsWith("Basic ") ? authHeader.slice(6) : "";
-  if (!b64) return res.status(401).json({ ok:false, error:"No credentials provided" });
-  const decoded = Buffer.from(b64, "base64").toString();
-  const colonIndex = decoded.indexOf(":");
-  if (colonIndex === -1) return res.status(401).json({ ok:false, error:"Invalid credentials format" });
-  const user = decoded.slice(0, colonIndex);
-  const pass = decoded.slice(colonIndex + 1);
-  const validUser = process.env.ADMIN_USERNAME || "admin";
-  const validPass = process.env.ADMIN_PASSWORD || "changeme";
-  if (user === validUser && pass === validPass) { console.log(`[Auth] ✅ Login: ${user}`); return res.json({ ok:true, user }); }
-  console.log(`[Auth] ❌ Failed: ${user}`);
-  return res.status(401).json({ ok:false, error:"Invalid username or password" });
-});
-
-const fs2 = require("fs");
-const path2 = require("path");
-app.get("/admin_control", requireAdminAuth, (req, res) => {
-  const filePath = path2.join(__dirname, "admin_control.html");
-  if(fs2.existsSync(filePath)) { res.setHeader("Content-Type","text/html"); res.setHeader("Cache-Control","no-store"); res.sendFile(filePath); }
-  else res.status(404).send("admin_control.html not found");
-});
-app.get("/admin_control.html", (req,res) => res.status(404).end());
-app.get("/index.js", (req,res) => res.status(404).end());
-app.get("/package.json", (req,res) => res.status(404).end());
-
-app.get("/", (req,res) => {
-  const uptimeSecs = Math.round((Date.now() - new Date(serverBoot).getTime()) / 1000);
-  res.json({ status:"GlobeVoyage API is live 🌍", countries:COUNTRIES.length, uptime_secs:uptimeSecs, ping_count:pingCount, last_ping:lastPingAt, booted_at:serverBoot });
-});
-
-app.get("/api/status", (req,res) => {
-  const now = Date.now();
-  const uptimeSecs = Math.round((now - new Date(serverBoot).getTime()) / 1000);
-  const uptimeMins = Math.round(uptimeSecs / 60);
-  const uptimeHrs  = (uptimeSecs / 3600).toFixed(1);
-  const runHours = [6, 14, 22];
-  const nowDate  = new Date();
-  const nextRuns = runHours.map(h => {
-    const next = new Date(); next.setUTCHours(h, 0, 0, 0);
-    if(next <= nowDate) next.setUTCDate(next.getUTCDate() + 1);
-    const diffMs=next-nowDate, diffHrs=Math.floor(diffMs/3600000), diffMins=Math.floor((diffMs%3600000)/60000);
-    return { time_utc:`${String(h).padStart(2,"0")}:00 UTC`, runs_in:diffHrs>0?`${diffHrs}h ${diffMins}m`:`${diffMins}m`, timestamp:next.toISOString() };
-  });
-  const pingAgeMs  = lastPingAt ? now - new Date(lastPingAt).getTime() : null;
-  const pingHealthy = pingAgeMs !== null && pingAgeMs < 15000;
-  res.json({
-    server:{ booted_at:serverBoot, uptime_secs:uptimeSecs, uptime_display:uptimeSecs<120?`${uptimeSecs}s`:uptimeSecs<7200?`${uptimeMins}m`:`${uptimeHrs}h` },
-    keepalive:{ healthy:pingHealthy, ping_count:pingCount, last_ping_at:lastPingAt, ping_age_ms:pingAgeMs, ping_interval:"5s", status:pingHealthy?"✅ Pinging every 5s":"⚠️ Ping gap" },
-    pipeline:{ running:pipelineStatus.running, last_run_at:pipelineStatus.lastRunAt, countries_processed_last_run:pipelineStatus.countriesLastRun, next_runs:nextRuns },
-    state_intel_table:stateIntelTableExists,
-    area_intel_table:areaIntelTableExists,
-  });
-});
-
-// ── UNIFIED SEARCH ─────────────────────────────────────────────
-app.get("/api/search", async (req, res) => {
-  const q = (req.query.q || "").trim().toLowerCase();
-  if(q.length < 2) return res.json({ results:[] });
-  const countries = COUNTRIES.filter(c => c.name.toLowerCase().includes(q)).slice(0, 5)
-    .map(c => ({ type:"country", iso:c.iso, name:c.name, continent:c.continent }));
-  let stateResults = [];
-  try {
-    const { data: states } = await supabase.from("states").select("id,name,country_iso,state_code").ilike("name", `%${q}%`).limit(7);
-    stateResults = (states || []).map(s => {
-      const country = COUNTRIES.find(c => c.iso === s.country_iso);
-      return { type:"state", state_id:s.id, name:s.name, country_iso:s.country_iso, country_name:country?.name||s.country_iso, state_code:s.state_code };
-    });
-  } catch(e) {}
-  res.json({ results: [...countries, ...stateResults] });
-});
-
-app.get("/api/search/news", async (req, res) => {
-  const q = req.query.q || "";
-  if(!q) return res.json({ articles:[] });
-  try { const articles = await fetchGoogleNewsByQuery(q); res.json({ articles }); }
-  catch(e) { res.json({ articles:[], error:e.message }); }
-});
-
-// ── STATE INTEL ─────────────────────────────────────────────────
-app.get("/api/intel/state/:stateId", async (req, res) => {
-  const stateId = parseInt(req.params.stateId);
-  if(isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
-
-  // Check memory cache
-  const memCached = stateIntelMemCache[stateId];
-  if(memCached && !stateIntelNeedsRefresh(memCached)) return res.json(memCached);
-
-  // Check Supabase
-  if(stateIntelTableExists) {
-    try {
-      const { data, error } = await supabase.from("state_intel").select("*").eq("state_id", stateId).single();
-      if(data && !error) {
-        stateIntelMemCache[stateId] = data;
-        // If stale, refresh in background but still return existing data
-        if(stateIntelNeedsRefresh(data)) {
-          console.log(`[StateIntel] ${data.state_name} stale — refreshing in background`);
-          runStatePipeline(stateId).catch(console.error);
-        }
-        return res.json(data);
-      }
+      const r = await axios.get(rssUrl, { timeout:8000, headers:{"User-Agent":"GlobeVoyage/2.0"} });
+      const parsed = await xml2js.parseStringPromise(r.data, { explicitArray:false });
+      const items = parsed?.rss?.channel?.item || parsed?.feed?.entry || [];
+      const arr = Array.isArray(items) ? items : [items];
+      arr.filter(i => i).slice(0, 6).forEach(i => {
+        const title = typeof i.title === "object" ? (i.title._ || i.title["#text"] || "") : (i.title || "");
+        const url = i.link?.$ ? Object.values(i.link.$)[0] : (i.link || "");
+        if (title) results.push({ title, url, source: countryName + " News", published_at: i.pubDate || i.updated || null, risk_level: riskScore(title) });
+      });
     } catch(e) {}
   }
 
-  // Not cached — auto-trigger generation and return 202
-  const { data: state } = await supabase.from("states").select("name,country_iso").eq("id", stateId).single();
-  if(!state) return res.status(404).json({ error:"State not found in database" });
-  // Immediately kick off background generation
-  runStatePipeline(stateId).catch(console.error);
-  res.status(202).json({
-    loading: true, state_id: stateId, state_name: state.name,
-    message: `Generating intel for ${state.name}…`
-  });
-});
-
-app.post("/api/intel/state/:stateId/run", async (req, res) => {
-  const stateId = parseInt(req.params.stateId);
-  if(isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
-  const { data: state } = await supabase.from("states").select("name,country_iso").eq("id", stateId).single();
-  if(!state) return res.status(404).json({ error:"State not found" });
-  delete stateIntelMemCache[stateId];
-  res.json({ message:`Intel pipeline started for ${state.name}`, state_id:stateId });
-  runStatePipeline(stateId).catch(console.error);
-});
-
-// ── AREA INTEL — pre-generated, stored, 8hr refresh ─────────────
-app.post("/api/intel/area", async (req, res) => {
-  const { area, state, country } = req.body;
-  if (!area || !country) return res.status(400).json({ error:"Missing area or country" });
-
-  // Find country ISO
-  const countryObj = COUNTRIES.find(c => c.name === country || c.name.toLowerCase() === country.toLowerCase());
-  const countryIso = countryObj?.iso || null;
-
-  try {
-    const result = await getOrGenerateAreaIntel(area, state||null, country, countryIso);
-    if(!result.data) return res.status(202).json({ loading:true, message:"Generating intel — please retry in 30 seconds" });
-
-    // Transform to match what the admin dashboard expects
-    const d = result.data;
-    res.json({
-      // Core briefing fields (mapped to dashboard expectations)
-      briefing:     d.ai_briefing,
-      hidden_gem:   d.ai_hidden_gem,
-      best_time:    d.ai_best_time,
-      trending:     d.ai_trending,
-      avoid:        d.ai_safety?.areas_to_avoid?.join(", ") || null,
-      safety:       d.ai_safety?.overview || d.ai_safety?.night_safety || null,
-      transport:    d.ai_transport?.getting_around || null,
-      food_scene:   d.ai_food?.signature_dishes ? `Signature dishes: ${d.ai_food.signature_dishes.join(", ")}` : null,
-      cost_estimate:d.ai_cost_estimate?.budget_per_day || null,
-      language_tips:d.ai_languages?.languages ? `Languages: ${d.ai_languages.languages.join(", ")}` : null,
-      local_tips:   d.ai_local_tips||[],
-      day_itinerary:d.ai_day_itinerary,
-      recommendations:d.ai_recommendations||[],
-      events:       (d.ai_events?.annual_festivals||[]).map(f=>({name:f.name,description:f.description,when:f.month})),
-      photos:       d.photos||[],
-      news:         d.news||[],
-      sub_areas:    d.ai_sub_areas||[],
-      weather_note: d.weather_now ? `${d.weather_now.temp}°C, ${d.weather_now.condition}` : null,
-      // Full data for expanded view
-      full_intel:   d,
-      // Metadata
-      last_updated: d.last_updated,
-      next_update_at: d.next_update_at,
-      source:       result.source,
-    });
-  } catch(e) {
-    console.error("[AreaIntel API]", e.message);
-    res.status(500).json({ error:e.message });
-  }
-});
-
-// ── AREA INTEL — get by ID or refresh ───────────────────────────
-app.get("/api/intel/area/:id", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if(isNaN(id)) return res.status(400).json({ error:"Invalid ID" });
-  try {
-    const { data } = await supabase.from("area_intel").select("*").eq("id", id).single();
-    if(!data) return res.status(404).json({ error:"Area intel not found" });
-    res.json(data);
-  } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-app.post("/api/intel/area/:id/refresh", async (req, res) => {
-  const id = parseInt(req.params.id);
-  if(isNaN(id)) return res.status(400).json({ error:"Invalid ID" });
-  try {
-    const { data } = await supabase.from("area_intel").select("area_name,state_name,country_name,country_iso").eq("id", id).single();
-    if(!data) return res.status(404).json({ error:"Area intel not found" });
-    res.json({ message:`Refreshing intel for ${data.area_name}` });
-    generateAndStoreAreaIntel(data.area_name, data.state_name, data.country_name, data.country_iso).catch(console.error);
-  } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-// ── SQL MODAL info ───────────────────────────────────────────────
-app.get("/api/setup/state-intel", (req, res) => {
-  res.json({
-    state_intel_table_exists: stateIntelTableExists,
-    area_intel_table_exists:  areaIntelTableExists,
-    message: (!stateIntelTableExists || !areaIntelTableExists)
-      ? "Run geo_migration.sql in your Supabase SQL Editor to enable full intel persistence"
-      : "All tables ready"
-  });
-});
-
-// ── COUNTRY INTEL ────────────────────────────────────────────────
-app.get("/api/intel/:iso", async (req,res) => {
-  const {data,error} = await supabase.from("country_intel").select("*").eq("iso",req.params.iso.toUpperCase()).single();
-  if(error||!data) return res.status(404).json({error:"No intel yet for this country"});
-  res.json(data);
-});
-app.get("/api/intel", async (req,res) => {
-  const {continent,q} = req.query;
-  let query = supabase.from("country_intel").select("iso,country_name,continent,last_updated,ai_briefing,ai_vibe,ai_safety_summary,weather_now,ai_best_months,ai_hidden_gem");
-  if(continent) query = query.eq("continent",continent);
-  if(q) query = query.ilike("country_name",`%${q}%`);
-  const {data} = await query.order("country_name");
-  res.json({countries:data||[],total:(data||[]).length});
-});
-app.get("/api/countries", (req,res) => {
-  const byCont={};
-  COUNTRIES.forEach(c=>{if(!byCont[c.continent])byCont[c.continent]=[];byCont[c.continent].push(c);});
-  res.json({total:COUNTRIES.length,by_continent:byCont,all:COUNTRIES});
-});
-
-// ── PIPELINE CONTROL ─────────────────────────────────────────────
-app.post("/api/pipeline/run/:iso", async (req,res) => {
-  const iso = req.params.iso.toUpperCase();
-  const c = COUNTRIES.find(x=>x.iso===iso);
-  if(!c) return res.status(404).json({error:"Country not in pipeline list"});
-  res.json({message:`Pipeline started for ${c.name}`});
-  runPipeline(iso,c.name,c.continent);
-});
-app.post("/api/pipeline/run-all", async (req,res) => {
-  res.json({message:`Full pipeline started for ${COUNTRIES.length} countries`});
-  runStartupPipeline();
-});
-app.post("/api/pipeline/pregen-areas", async (req,res) => {
-  if (areaGenProgress.running) return res.json({ message:"Already running", progress: areaGenProgress });
-  const force = req.query.force === "true";
-  res.json({ message: force ? "Force-regenerating ALL area intel" : "Generating missing area intel", started: true });
-  generateAllAreaIntel({ force }).catch(console.error);
-});
-
-app.post("/api/pipeline/pregen-areas/stop", (req,res) => {
-  areaGenProgress.running = false;
-  res.json({ message: "Area gen stop signal sent" });
-});
-
-app.get("/api/pipeline/pregen-areas/status", (req,res) => {
-  res.json({ ...areaGenProgress, log: areaGenProgress.log.slice(0, 30) });
-});
-
-app.get("/api/pipeline/area-coverage", async (req,res) => {
-  try {
-    const [areasRes, intelRes] = await Promise.all([
-      supabase.from("areas").select("*", { count:"exact", head:true }),
-      supabase.from("area_intel").select("*", { count:"exact", head:true }).not("ai_briefing","is",null),
-    ]);
-    const total = areasRes.count || 0;
-    const withIntel = intelRes.count || 0;
-    res.json({
-      total_areas: total,
-      areas_with_intel: withIntel,
-      areas_missing_intel: total - withIntel,
-      coverage_pct: total > 0 ? Math.round(withIntel / total * 100) : 0,
-    });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post("/api/pipeline/pregen-states", async (req,res) => {
-  if (stateGenProgress.running) {
-    return res.json({ message:"Already running", progress: stateGenProgress });
-  }
-  const force = req.query.force === "true";
-  res.json({ message: force ? "Force-regenerating ALL state intel" : "Generating missing state intel", started: true });
-  generateAllStateIntel({ force }).catch(console.error);
-});
-
-app.post("/api/pipeline/pregen-states/stop", (req,res) => {
-  stateGenProgress.running = false;
-  res.json({ message: "Stop signal sent" });
-});
-
-// ── Table primary key map ────────────────────────────────────────
-// state_intel uses state_id (INTEGER), area_intel uses id (BIGSERIAL)
-const TABLE_PK = {
-  "state_intel": "state_id",
-  "area_intel":  "id",
-};
-
-// ── Helper: delete all rows from a table reliably ───────────────
-async function deleteAllRows(tableName) {
-  const pk = TABLE_PK[tableName] || "id";
-  console.log(`[Reset] Deleting all from ${tableName} using pk=${pk}`);
-
-  // Strategy 1: NOT NULL on primary key (works regardless of value range)
-  const { error: e1, count: c1 } = await supabase
-    .from(tableName).delete().not(pk, "is", null);
-  if (!e1) {
-    console.log(`[Reset] ✓ ${tableName} deleted ${c1 || 0} rows via NOT NULL`);
-    return { deleted: c1 || 0 };
-  }
-  console.log(`[Reset] NOT NULL failed for ${tableName}: ${e1.message} — trying gt`);
-
-  // Strategy 2: gt primary key > 0
-  const { error: e2, count: c2 } = await supabase
-    .from(tableName).delete().gt(pk, 0);
-  if (!e2) {
-    console.log(`[Reset] ✓ ${tableName} deleted ${c2 || 0} rows via gt`);
-    return { deleted: c2 || 0 };
-  }
-  console.log(`[Reset] gt failed for ${tableName}: ${e2.message} — trying batch delete`);
-
-  // Strategy 3: fetch PKs then delete in batches of 500
-  let totalDeleted = 0;
-  let page = 0;
-  while (true) {
-    const { data: rows, error: fetchErr } = await supabase
-      .from(tableName).select(pk).range(page * 500, (page + 1) * 500 - 1);
-    if (fetchErr) {
-      console.log(`[Reset] Batch fetch failed: ${fetchErr.message}`);
-      break;
-    }
-    if (!rows || rows.length === 0) break;
-    const pkValues = rows.map(r => r[pk]);
-    const { error: delErr, count: dc } = await supabase
-      .from(tableName).delete().in(pk, pkValues);
-    if (delErr) throw new Error(`Batch delete failed on ${tableName}: ${delErr.message}`);
-    totalDeleted += dc || pkValues.length;
-    console.log(`[Reset] Batch ${page + 1}: deleted ${dc || pkValues.length} from ${tableName}`);
-    if (rows.length < 500) break;
-    page++;
-  }
-  console.log(`[Reset] ✓ ${tableName} batch total: ${totalDeleted} rows`);
-  return { deleted: totalDeleted };
-}
-
-function resetGenProgress() {
-  stateGenProgress.running     = false;
-  stateGenProgress.done        = 0;
-  stateGenProgress.failed      = 0;
-  stateGenProgress.failedStates = [];
-  stateGenProgress.log         = [];
-  stateGenProgress.current     = null;
-  stateGenProgress.completedAt = null;
-  areaGenProgress.running      = false;
-}
-
-// ── RESET endpoints ──────────────────────────────────────────────
-app.post("/api/pipeline/reset/state-intel", async (req, res) => {
-  try {
-    resetGenProgress(); // Stop gen + clear tracker
-    // Give the gen loop one tick to see the stop signal
-    await new Promise(r => setTimeout(r, 500));
-    const result = await deleteAllRows("state_intel");
-    res.json({ message: `State intel deleted (${result.deleted} rows)`, ...result });
-  } catch(e) {
-    console.error("[Reset] state-intel error:", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/pipeline/reset/area-intel", async (req, res) => {
-  try {
-    const result = await deleteAllRows("area_intel");
-    res.json({ message: `Area intel deleted (${result.deleted} rows)`, ...result });
-  } catch(e) {
-    console.error("[Reset] area-intel error:", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/pipeline/reset/all-intel", async (req, res) => {
-  try {
-    resetGenProgress();
-    await new Promise(r => setTimeout(r, 500));
-    const [sr, ar] = await Promise.all([
-      deleteAllRows("state_intel"),
-      deleteAllRows("area_intel"),
-    ]);
-    res.json({
-      message: `All intel deleted — state: ${sr.deleted} rows, area: ${ar.deleted} rows`,
-      state_deleted: sr.deleted,
-      area_deleted: ar.deleted,
-    });
-  } catch(e) {
-    console.error("[Reset] all-intel error:", e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get("/api/pipeline/pregen-status", (req,res) => {
-  // Get counts from DB in background for the response
-  const resp = {
-    ...stateGenProgress,
-    log: stateGenProgress.log.slice(0, 30),
-    area_intel_refresh_running: areaIntelRefreshRunning,
-  };
-  res.json(resp);
-});
-
-app.get("/api/pipeline/intel-coverage", async (req,res) => {
-  try {
-    const [statesRes, intelRes] = await Promise.all([
-      supabase.from("states").select("*", { count:"exact", head:true }),
-      supabase.from("state_intel").select("*", { count:"exact", head:true }).not("ai_briefing","is",null),
-    ]);
-    const totalStates = statesRes.count || 0;
-    const statesWithIntel = intelRes.count || 0;
-    res.json({
-      total_states: totalStates,
-      states_with_intel: statesWithIntel,
-      states_missing_intel: totalStates - statesWithIntel,
-      coverage_pct: totalStates > 0 ? Math.round(statesWithIntel / totalStates * 100) : 0,
-    });
-  } catch(e) { res.status(500).json({ error: e.message }); }
-});
-app.get("/api/pipeline/status", async (req,res) => {
-  const {data:runs}  = await supabase.from("pipeline_runs").select("iso,status,duration_ms,ran_at,error").order("ran_at",{ascending:false}).limit(100);
-  const {data:intel} = await supabase.from("country_intel").select("iso,country_name,continent,last_updated").order("last_updated",{ascending:false});
-  const freshCut = Date.now()-6*60*60*1000;
-  const fresh = (intel||[]).filter(r=>new Date(r.last_updated).getTime()>freshCut).length;
-  res.json({total_countries:COUNTRIES.length,countries_processed:(intel||[]).length,coverage_pct:Math.round((intel||[]).length/COUNTRIES.length*100),fresh,recent_runs:runs||[],country_freshness:intel||[]});
-});
-
-// ── BOOKING ───────────────────────────────────────────────────────
-app.get("/api/booking/:iso", async (req, res) => {
-  const iso = req.params.iso.toUpperCase();
-  const { data } = await supabase.from("country_intel").select("booking, country_name").eq("iso",iso).single();
-  if (!data) return res.status(404).json({ error:"No booking data" });
-  if (!data.booking) {
-    const country = COUNTRIES.find(c=>c.iso===iso);
-    if (country) fetchBooking(country.name, iso).catch(console.error);
-    return res.status(202).json({ message:"Booking data loading — check back in 30 seconds" });
-  }
-  res.json({ iso, country:data.country_name, ...data.booking });
-});
-
-// ── DESTINATIONS CRUD ─────────────────────────────────────────────
-app.get("/api/destinations",async(req,res)=>{const{data,error}=await supabase.from("destinations").select("*");if(error)return res.status(500).json({error:error.message});res.json(data);});
-app.get("/api/destinations/:id",async(req,res)=>{const{data,error}=await supabase.from("destinations").select("*").eq("id",req.params.id).single();if(error)return res.status(404).json({error:error.message});res.json(data);});
-app.post("/api/destinations",async(req,res)=>{const{name,country,description,image_url,price,iso,lat,lng}=req.body;const{data,error}=await supabase.from("destinations").insert([{name,country,description,image_url,price,iso,lat,lng}]).select();if(error)return res.status(500).json({error:error.message});res.status(201).json(data[0]);});
-app.put("/api/destinations/:id",async(req,res)=>{const{name,country,description,image_url,price}=req.body;const{data,error}=await supabase.from("destinations").update({name,country,description,image_url,price}).eq("id",req.params.id).select();if(error)return res.status(500).json({error:error.message});res.json(data[0]);});
-app.delete("/api/destinations/:id",async(req,res)=>{const{error}=await supabase.from("destinations").delete().eq("id",req.params.id);if(error)return res.status(500).json({error:error.message});res.json({message:"Deleted"});});
-
-// ── GEO HIERARCHY ENDPOINTS ───────────────────────────────────────
-app.get("/api/geo/countries/:iso/states", async (req, res) => {
-  const iso = req.params.iso.toUpperCase();
-  const country = COUNTRIES.find(c => c.iso === iso);
-  try {
-    const { data, error } = await supabase.from("states")
-      .select("id,name,ascii_name,state_code,type,capital,population,area_km2,latitude,longitude,timezone")
-      .eq("country_iso",iso).order("name");
-    if(error) return res.status(500).json({ error:error.message });
-    if(!data || data.length === 0) {
-      // Try hardcoded first before triggering AI pipeline
-      const hardcoded = country ? getHardcodedStates(country.name) : [];
-      if(hardcoded.length > 0) {
-        fetchAndSaveStates(iso).catch(console.error);
-        // Return hardcoded immediately while saving in background
-        return res.json({
-          states: hardcoded.map((name,i) => ({ id:-(i+1), name, state_code:null, type:"state", country_iso:iso })),
-          total: hardcoded.length, source:"hardcoded_loading"
-        });
-      }
-      fetchAndSaveStates(iso).catch(console.error);
-      return res.json({ states:[], loading:true, message:"States loading — check back in 30 seconds" });
-    }
-    res.json({ states:data, total:data.length });
-  } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-app.get("/api/geo/states/:id/areas", async (req, res) => {
-  const stateId = parseInt(req.params.id);
-  if(isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
-  try {
-    const { data:state } = await supabase.from("states").select("id,geoname_id,name,country_iso").eq("id",stateId).single();
-    if(!state) return res.status(404).json({ error:"State not found" });
-
-    // HARDCODED TAKES PRIORITY — always check hardcoded first
-    const country = COUNTRIES.find(c => c.iso === state.country_iso);
-    const hardcodedNames = country ? getHardcodedAreas(state.name, country.name) : [];
-
-    if(hardcodedNames.length > 0) {
-      // Refresh DB from hardcoded in background (delete stale, insert fresh)
-      (async () => {
-        try {
-          await supabase.from("areas").delete().eq("state_id", stateId);
-          const rows = hardcodedNames.filter(Boolean).map((name,idx) => ({
-            state_id:stateId, country_iso:state.country_iso,
-            geoname_id:Math.abs(hashCode(`${stateId}-hc2-${name}-${idx}`)),
-            name:name.trim(), ascii_name:name.trim(), type:"city",
-            population:0, latitude:null, longitude:null, timezone:null,
-            updated_at:new Date().toISOString(),
-          }));
-          await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
-          console.log(`[Areas] Refreshed ${rows.length} hardcoded areas for ${state.name}`);
-        } catch(e) { console.error(`[Areas] Refresh error for ${state.name}:`, e.message); }
-      })().catch(console.error);
-      // Return hardcoded immediately
-      return res.json({
-        areas: hardcodedNames.map((name,i) => ({ id:-(i+1), name, type:"city", state_id:stateId, country_iso:state.country_iso })),
-        total: hardcodedNames.length, state_name:state.name, source:"hardcoded"
+  if (results.length < 4) {
+    try {
+      const q = encodeURIComponent(`"${countryName}" news today`);
+      const r = await axios.get(`https://news.google.com/rss/search?q=${q}&hl=en&gl=US&ceid=US:en`, { timeout:8000, headers:{"User-Agent":"GlobeVoyage/2.0"} });
+      const parsed = await xml2js.parseStringPromise(r.data, { explicitArray:false });
+      const items = parsed?.rss?.channel?.item || [];
+      const arr = Array.isArray(items) ? items : [items];
+      arr.filter(i => i && i.title).slice(0, 6 - results.length).forEach(i => {
+        const title = typeof i.title === "object" ? (i.title._ || "") : (i.title || "");
+        if (title) results.push({ title, url:i.link||"", source:"Google News", published_at:i.pubDate, risk_level:riskScore(title) });
       });
-    }
-
-    // No hardcoded — fall back to DB
-    const { data, error } = await supabase.from("areas")
-      .select("id,name,ascii_name,area_code,type,population,latitude,longitude,timezone")
-      .eq("state_id",stateId).order("population",{ascending:false});
-    if(error) return res.status(500).json({ error:error.message });
-    if(!data || data.length === 0) {
-      fetchAndSaveAreas(state.id, state.geoname_id, state.country_iso).catch(console.error);
-      return res.json({ areas:[], loading:true, message:"Areas loading — check back in 30 seconds" });
-    }
-    res.json({ areas:data, total:data.length, state_name:state.name });
-  } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-app.get("/api/geo/search", async (req, res) => {
-  const q=req.query.q?.trim(), type=req.query.type||"all", iso=req.query.iso?.toUpperCase()||null;
-  if(!q||q.length<2) return res.status(400).json({ error:"Query must be at least 2 characters" });
-  try {
-    const results={};
-    if(type==="all"||type==="state") { let sq=supabase.from("states").select("id,name,state_code,type,country_iso,population").ilike("name",`%${q}%`).limit(10); if(iso)sq=sq.eq("country_iso",iso); const{data}=await sq; results.states=data||[]; }
-    if(type==="all"||type==="area")  { let aq=supabase.from("areas").select("id,name,type,country_iso,state_id,population").ilike("name",`%${q}%`).limit(10); if(iso)aq=aq.eq("country_iso",iso); const{data}=await aq; results.areas=data||[]; }
-    res.json(results);
-  } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-app.get("/api/geo/stats", async (req, res) => {
-  try {
-    const [statesRes,areasRes] = await Promise.all([
-      supabase.from("states").select("*",{count:"exact",head:true}),
-      supabase.from("areas").select("*",{count:"exact",head:true}),
-    ]);
-    if(statesRes.error) return res.json({ total_states:0,total_areas:0,countries_loaded:0,coverage_pct:0,setup_needed:true });
-    const totalStates=statesRes.count||0, totalAreas=areasRes.count||0;
-    const { data:perCountry } = await supabase.from("states").select("country_iso").order("country_iso");
-    const countryCounts={};
-    (perCountry||[]).forEach(r=>{countryCounts[r.country_iso]=(countryCounts[r.country_iso]||0)+1;});
-    const loaded=Object.keys(countryCounts).length, pending=COUNTRIES.length-loaded;
-    const loadedSet=new Set(Object.keys(countryCounts));
-    const pendingList=COUNTRIES.filter(c=>!loadedSet.has(c.iso)).map(c=>c.name);
-    // Count hardcoded geo data
-    const hardcodedCountries = Object.keys(HARDCODED_GEO).length;
-    const hardcodedStates = Object.values(HARDCODED_GEO).reduce((a,v)=>a+Object.keys(v).length,0);
-    const hardcodedAreas  = Object.values(HARDCODED_GEO).reduce((a,v)=>a+Object.values(v).reduce((b,arr)=>b+arr.length,0),0);
-    res.json({ total_states:totalStates, total_areas:totalAreas, countries_loaded:loaded, countries_pending:pending, coverage_pct:Math.round(loaded/COUNTRIES.length*100), pending_countries:pendingList.slice(0,20), per_country:countryCounts, geo_pipeline_running:geoPipelineRunning, geo_pipeline_status:{ running:geoPipelineRunning, countries_done:geoStatus.countries_done, countries_total:COUNTRIES.length, progress_pct:Math.round(geoStatus.countries_done/COUNTRIES.length*100), current_country:geoStatus.current_country, last_error:geoStatus.last_error, total_states:geoStatus.total_states, total_areas:geoStatus.total_areas, completed_at:geoStatus.completed_at }, hardcoded:{ countries:hardcodedCountries, states:hardcodedStates, areas:hardcodedAreas } });
-  } catch(e) { res.status(500).json({ error:e.message }); }
-});
-
-app.get("/api/geo/pipeline/status", async (req, res) => {
-  let dbCountriesDone = geoStatus.countries_done;
-  try {
-    const { data: existing } = await supabase.from("states").select("country_iso");
-    const loaded = new Set((existing||[]).map(r=>r.country_iso));
-    dbCountriesDone = loaded.size;
-    if (!geoPipelineRunning) geoStatus.countries_done = dbCountriesDone;
-  } catch(e) {}
-  res.json({
-    running:geoPipelineRunning,
-    countries_done: geoPipelineRunning ? geoStatus.countries_done : dbCountriesDone,
-    countries_total:COUNTRIES.length,
-    progress_pct:Math.round((geoPipelineRunning ? geoStatus.countries_done : dbCountriesDone)/COUNTRIES.length*100),
-    total_states:geoStatus.total_states, total_areas:geoStatus.total_areas,
-    current_country:geoStatus.current_country, last_error:geoStatus.last_error,
-    started_at:geoStatus.started_at, completed_at:geoStatus.completed_at,
-    sources_available:{ hardcoded:true, countriesnow:true, mistral_ai:!!ENV.MISTRAL_API_KEY }
-  });
-});
-
-app.get("/api/geo/test", async (req, res) => {
-  const results = {};
-  // Test hardcoded data
-  const ngaStates = getHardcodedStates("Nigeria");
-  results.hardcoded = { ok:ngaStates.length>0, sample:`Nigeria: ${ngaStates.length} states from hardcoded data`, response_ms:0 };
-  // Test CountriesNow
-  try {
-    const t=Date.now();
-    const r=await axios.post("https://countriesnow.space/api/v0.1/countries/states",{country:"Nigeria"},{timeout:10000});
-    results.countriesnow = r.data?.error ? { ok:false, error:r.data.msg } : { ok:true, response_ms:Date.now()-t, sample:`Nigeria: ${r.data?.data?.states?.length} states` };
-  } catch(e) { results.countriesnow = { ok:false, error:e.message }; }
-  // Test Mistral
-  results.mistral_ai = { ok:!!ENV.MISTRAL_API_KEY, error:ENV.MISTRAL_API_KEY?null:'No MISTRAL_API_KEY' };
-  res.json({ ok:true, message:'Geo sources checked', sources:results });
-});
-
-app.post("/api/geo/pipeline/start", async (req, res) => {
-  if(geoPipelineRunning) return res.json({ message:"Already running", progress_pct:Math.round(geoStatus.countries_done/COUNTRIES.length*100) });
-  const forceAll = req.query.force === "true";
-  res.json({ message:"Geo pipeline started (HARDCODED primary source)", force_all:forceAll });
-  runGeoPipeline(forceAll).catch(console.error);
-});
-
-app.post("/api/geo/pipeline/country/:iso", async (req, res) => {
-  const iso = req.params.iso.toUpperCase();
-  const country = COUNTRIES.find(c=>c.iso===iso);
-  if(!country) return res.status(404).json({ error:"Unknown ISO" });
-  res.json({ message:`Geo pipeline started for ${country.name}` });
-  (async () => {
-    const statesAdded = await fetchAndSaveStates(iso);
-    if(statesAdded > 0) {
-      const { data:savedStates } = await supabase.from("states").select("id,geoname_id").eq("country_iso",iso);
-      for(const state of savedStates||[]) { await fetchAndSaveAreas(state.id,state.geoname_id,iso); await new Promise(r=>setTimeout(r,100)); }
-    }
-    console.log(`✅ [GeoPipeline] ${country.name} complete`);
-  })().catch(console.error);
-});
-
-// ── AI States endpoint ────────────────────────────────────────────
-app.get("/api/geo/ai-states/:iso", async (req, res) => {
-  const iso = req.params.iso.toUpperCase();
-  const country = COUNTRIES.find(c => c.iso === iso);
-  if (!country) return res.status(404).json({ error:"Unknown country ISO" });
-
-  // Check DB first
-  try {
-    const { data:existing } = await supabase.from("states").select("id,name,state_code,type,country_iso").eq("country_iso",iso).order("name");
-    if (existing && existing.length > 0) return res.json({ states:existing, source:"database", total:existing.length });
-  } catch(e) {}
-
-  // Try hardcoded
-  const hardcoded = getHardcodedStates(country.name);
-  if(hardcoded.length > 0) {
-    const statesData = hardcoded.map(name => ({ name, state_code:null }));
-    await saveStatesFromResponse(statesData, iso, country.name).catch(()=>{});
-    const { data:saved } = await supabase.from("states").select("id,name,state_code,type,country_iso").eq("country_iso",iso).order("name");
-    return res.json({ states:saved||hardcoded.map((name,i)=>({id:i+1,name,country_iso:iso})), source:"hardcoded", total:(saved||hardcoded).length });
+    } catch(e) {}
   }
 
-  // Fallback to Mistral
-  if (!ENV.MISTRAL_API_KEY) return res.json({ states:[], error:"No Mistral key configured" });
-  try {
-    const prompt = `List ALL official states, provinces, regions, territories, or first-level administrative divisions of ${country.name} (ISO: ${iso}).
-Return ONLY a valid JSON array — no markdown, no explanation:
-[{"name":"Full Official Name","state_code":"CODE_OR_NULL","type":"state"}]
-Be comprehensive — include every single first-level division.`;
-    const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
-      { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:2500 },
-      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:30000 }
-    ));
-    const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      const stateRows = parsed.map(s=>({ name:(s.name||'').trim(), state_code:s.state_code||null })).filter(s=>s.name);
-      await saveStatesFromResponse(stateRows, iso, country.name);
-      const { data:saved } = await supabase.from("states").select("id,name,state_code,type,country_iso").eq("country_iso",iso).order("name");
-      return res.json({ states:saved||stateRows, source:"ai", total:(saved||stateRows).length });
-    }
-  } catch(e) { return res.status(500).json({ error:e.message }); }
-  return res.json({ states:[] });
-});
-
-// ── AI Cities endpoint ────────────────────────────────────────────
-app.get("/api/geo/ai-cities/:stateId", async (req, res) => {
-  const stateId = parseInt(req.params.stateId);
-  if (isNaN(stateId)) return res.status(400).json({ error:"Invalid state ID" });
-
-  const { data:state } = await supabase.from("states").select("name,country_iso").eq("id",stateId).single();
-  if (!state) return res.status(404).json({ error:"State not found" });
-  const country = COUNTRIES.find(c => c.iso === state.country_iso);
-
-  // HARDCODED FIRST — delete stale DB entries and replace
-  const hardcoded = country ? getHardcodedAreas(state.name, country.name) : [];
-  if(hardcoded.length > 0) {
-    await supabase.from("areas").delete().eq("state_id", stateId).catch(()=>{});
-    const rows = hardcoded.filter(Boolean).slice(0,150).map((name,idx) => ({
-      state_id:stateId, country_iso:state.country_iso,
-      geoname_id:Math.abs(hashCode(`${stateId}-hc3-${name}-${idx}`)),
-      name:name.trim(), ascii_name:name.trim(), type:'city',
-      population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString()
-    }));
-    await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" }).catch(()=>{});
-    return res.json({ areas:rows, source:"hardcoded", total:rows.length });
-  }
-
-  // No hardcoded — fall back to DB
-  try {
-    const { data:existing } = await supabase.from("areas").select("id,name,type,state_id,country_iso").eq("state_id",stateId).order("name");
-    if (existing && existing.length > 0) return res.json({ areas:existing, source:"database", total:existing.length });
-  } catch(e) {}
-
-  // Fallback to Mistral
-  if (!ENV.MISTRAL_API_KEY) return res.json({ areas:[], error:"No Mistral key" });
-  try {
-    const prompt = `List ALL cities, towns, districts, local government areas, and municipalities in ${state.name}, ${country?.name || state.country_iso}.
-Return ONLY a valid JSON array of names — no markdown:
-["City1","Town2","District3"]
-Be comprehensive — include at least 15-30 locations.`;
-    const r = await mistralQueue.call(() => axios.post('https://api.mistral.ai/v1/chat/completions',
-      { model:'mistral-large-latest', messages:[{role:'user',content:prompt}], temperature:0, max_tokens:1000 },
-      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, 'Content-Type':'application/json' }, timeout:20000 }
-    ));
-    const text = (r.data?.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim();
-    const cities = JSON.parse(text);
-    if (Array.isArray(cities) && cities.length > 0) {
-      const rows = cities.filter(Boolean).slice(0,80).map((name,idx) => ({
-        state_id:stateId, country_iso:state.country_iso,
-        geoname_id:Math.abs(hashCode(`${stateId}-ai-${name}-${idx}`)),
-        name:name.trim(), ascii_name:name.trim(), type:'city',
-        population:0, latitude:null, longitude:null, timezone:null, updated_at:new Date().toISOString()
-      }));
-      await supabase.from("areas").upsert(rows, { onConflict:"geoname_id" });
-      const { data:saved } = await supabase.from("areas").select("id,name,type,state_id,country_iso").eq("state_id",stateId).order("name");
-      return res.json({ areas:saved||rows, source:"ai", total:(saved||rows).length });
-    }
-  } catch(e) { return res.status(500).json({ error:e.message }); }
-  return res.json({ areas:[] });
-});
-
-// ── States for report (country) ───────────────────────────────────
-app.get("/api/geo/ai-states-report/:iso", async (req, res) => {
-  // Alias for admin dashboard compatibility
-  return res.redirect(307, `/api/geo/ai-states/${req.params.iso}`);
-});
-
-// ── Health check ──────────────────────────────────────────────────
-app.get("/api/health", async (req,res) => {
-  const checks = {};
-  try {
-    const {error,count} = await supabase.from("country_intel").select("*",{count:"exact",head:true});
-    checks.supabase = {ok:!error,label:"Supabase DB",detail:error?error.message:`Connected — ${count} countries stored`};
-  } catch(e) { checks.supabase={ok:false,label:"Supabase DB",detail:e.message}; }
-  checks.mistral = {ok:!!ENV.MISTRAL_API_KEY,label:"Mistral AI",detail:ENV.MISTRAL_API_KEY?"Key configured":"No API key"};
-
-  // Mistral / Verification AI — key presence check only (live ping wastes quota & causes 429s)
-  sourceHealth.verification_ai={
-    ok:!!ENV.MISTRAL_API_KEY,
-    last_check:new Date().toISOString(),
-    response_ms:0,
-    error:ENV.MISTRAL_API_KEY?null:"No API key",
-    success_count:sourceHealth.verification_ai?.success_count||0,
-    fail_count:sourceHealth.verification_ai?.fail_count||0,
-    _detail_override:ENV.MISTRAL_API_KEY?"Key configured — Mistral Large (no live ping to preserve quota)":"No MISTRAL_API_KEY set"
-  };
-
-  gnewsResetIfNeeded();
-  const gnewsRemaining = GNEWS_DAILY_CAP - gnewsCallsToday;
-  sourceHealth.newsapi={...sourceHealth.newsapi,ok:!!ENV.GNEWS_API_KEY,last_check:new Date().toISOString(),_detail_override:ENV.GNEWS_API_KEY?`Key configured — ${gnewsRemaining}/${GNEWS_DAILY_CAP} calls remaining today`:"No API key"};
-
-  const liveTest = async (key, fn) => {
-    const start=Date.now();
-    try { await fn(); const ms=Date.now()-start; sourceHealth[key]={ok:true,last_check:new Date().toISOString(),response_ms:ms,success_count:(sourceHealth[key]?.success_count||0)+1,fail_count:sourceHealth[key]?.fail_count||0}; }
-    catch(e) { const ms=Date.now()-start; sourceHealth[key]={ok:false,last_check:new Date().toISOString(),response_ms:ms,error:e.response?.status?`HTTP ${e.response.status}: ${e.message}`:e.message,success_count:sourceHealth[key]?.success_count||0,fail_count:(sourceHealth[key]?.fail_count||0)+1}; }
-  };
-
-  await Promise.allSettled([
-    // Wikipedia — use Special:Export (lighter endpoint, less likely to 429)
-    (async()=>{const s=Date.now();try{await axios.get("https://en.wikipedia.org/w/api.php",{params:{action:"query",format:"json",titles:"France",prop:"info"},headers:{"User-Agent":WIKI_UA,"Accept-Encoding":"gzip"},timeout:8000});const ms=Date.now()-s;sourceHealth.wikipedia={ok:true,last_check:new Date().toISOString(),response_ms:ms,success_count:(sourceHealth.wikipedia?.success_count||0)+1,fail_count:sourceHealth.wikipedia?.fail_count||0,_detail_override:`Live OK (${ms}ms)`};}catch(e){const ms=Date.now()-s;const is429=e.response?.status===429;sourceHealth.wikipedia={ok:is429,last_check:new Date().toISOString(),response_ms:ms,error:is429?null:e.message,success_count:sourceHealth.wikipedia?.success_count||0,fail_count:is429?sourceHealth.wikipedia?.fail_count||0:(sourceHealth.wikipedia?.fail_count||0)+1,_detail_override:is429?"Rate limited (429) — API works, slow down health checks":e.message};}})(),
-    (async()=>{const s=Date.now();try{await axios.get("https://en.wikivoyage.org/w/api.php",{params:{action:"query",format:"json",titles:"France",prop:"info"},headers:{"User-Agent":WIKI_UA,"Accept-Encoding":"gzip"},timeout:8000});const ms=Date.now()-s;sourceHealth.wikivoyage={ok:true,last_check:new Date().toISOString(),response_ms:ms,success_count:(sourceHealth.wikivoyage?.success_count||0)+1,fail_count:sourceHealth.wikivoyage?.fail_count||0,_detail_override:`Live OK (${ms}ms)`};}catch(e){const ms=Date.now()-s;const is429=e.response?.status===429;sourceHealth.wikivoyage={ok:is429,last_check:new Date().toISOString(),response_ms:ms,error:is429?null:e.message,success_count:sourceHealth.wikivoyage?.success_count||0,fail_count:is429?sourceHealth.wikivoyage?.fail_count||0:(sourceHealth.wikivoyage?.fail_count||0)+1,_detail_override:is429?"Rate limited (429) — API works, reduce check frequency":e.message};}})(),
-    // OpenTripMap — free tier key; mark OK since pipeline uses its own key fallback
-    Promise.resolve(sourceHealth.foursquare={ok:true,last_check:new Date().toISOString(),response_ms:0,_detail_override:"OpenTripMap — free tier (key check only, live calls in pipeline)"}),
-   
-    liveTest("google_news",   ()=>axios.get("https://news.google.com/rss/search?q=travel&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("gdacs",         ()=>axios.get("https://www.gdacs.org/xml/rss.xml",{timeout:8000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("eventbrite",    ()=>axios.get("https://news.google.com/rss/search?q=events+festival&hl=en&gl=US&ceid=US:en",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("social_proxy",  ()=>axios.get("https://www.bing.com/news/search?q=travel+tourism&format=RSS",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    (async()=>{const s=Date.now();const urls=["https://restcountries.com/v3.1/alpha/FR?fields=name","https://restcountries.com/v3.1/name/france?fields=name"];for(const url of urls){try{await axios.get(url,{timeout:8000,headers:{"Accept":"application/json"}});const ms=Date.now()-s;sourceHealth.rest_countries={ok:true,last_check:new Date().toISOString(),response_ms:ms,success_count:(sourceHealth.rest_countries?.success_count||0)+1,fail_count:sourceHealth.rest_countries?.fail_count||0,_detail_override:`Live OK (${ms}ms)`};return;}catch(e){}}const ms=Date.now()-s;sourceHealth.rest_countries={ok:false,last_check:new Date().toISOString(),response_ms:ms,error:"All endpoints failed",_detail_override:"REST Countries unreachable — using cached data in pipeline"};})(),
-    liveTest("currency",      ()=>axios.get("https://open.er-api.com/v6/latest/USD",{timeout:6000})),
-    liveTest("waqi",          ()=>axios.get("https://api.waqi.info/feed/geo:48.85;2.35/?token=demo",{timeout:6000})),
-    liveTest("news_bbc",      ()=>axios.get("https://feeds.bbci.co.uk/news/rss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_aljazeera",()=>axios.get("https://www.aljazeera.com/xml/rss/all.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_foxnews",  ()=>axios.get("https://moxie.foxnews.com/google-publisher/latest.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_nhk",      ()=>axios.get("https://www3.nhk.or.jp/rss/news/cat0.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_dw",       ()=>axios.get("https://rss.dw.com/rdf/rss-en-all",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_abc_au",   ()=>axios.get("https://www.abc.net.au/news/feed/1948/rss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_cna",      ()=>axios.get("https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_trt",      ()=>axios.get("https://www.hurriyetdailynews.com/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_rt",       ()=>axios.get("https://www.rt.com/rss/",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_france24", ()=>axios.get("https://www.france24.com/en/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_xinhua",   ()=>axios.get("https://www.xinhuanet.com/english/rss/worldrss.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_ndtv",     ()=>axios.get("https://feeds.feedburner.com/ndtvnews-top-stories",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_channels_tv",()=>axios.get("https://www.channelstv.com/feed/",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_news24",   ()=>axios.get("https://feeds.news24.com/articles/news24/TopStories/rss",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_cbc",      ()=>axios.get("https://www.cbc.ca/cmlink/rss-topstories",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_abc_br",   ()=>axios.get("https://feeds.folha.uol.com.br/emcimadahora/rss091.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    liveTest("news_rnz",      ()=>axios.get("https://www.rnz.co.nz/rss/top.xml",{timeout:6000,headers:{"User-Agent":"GlobeVoyage/2.0"}})),
-    ENV.OPENWEATHER_API_KEY
-      ? liveTest("openweathermap",()=>axios.get("https://api.openweathermap.org/data/2.5/weather",{params:{q:"London",appid:ENV.OPENWEATHER_API_KEY,units:"metric"},timeout:6000}))
-      : Promise.resolve(sourceHealth.openweathermap={ok:false,error:"No API key",response_ms:0}),
-    ENV.TICKETMASTER_API_KEY
-      ? liveTest("ticketmaster",()=>axios.get("https://app.ticketmaster.com/discovery/v2/events.json",{params:{apikey:ENV.TICKETMASTER_API_KEY,size:1},timeout:6000}))
-      : Promise.resolve(sourceHealth.ticketmaster={ok:false,error:"No API key",response_ms:0}),
-    ENV.PREDICTHQ_API_KEY
-      ? (async () => {
-          const start = Date.now();
-          try {
-            await axios.get("https://api.predicthq.com/v1/events/",{params:{limit:1},headers:{Authorization:`Bearer ${ENV.PREDICTHQ_API_KEY}`},timeout:8000});
-            const ms = Date.now()-start;
-            sourceHealth.predicthq={ok:true,last_check:new Date().toISOString(),response_ms:ms,_detail_override:`Live OK (${ms}ms)`};
-          } catch(e) {
-            const ms=Date.now()-start;
-            const isPlanIssue = e.response?.status===401||e.response?.status===402||e.response?.status===403||e.response?.status===422;
-            sourceHealth.predicthq={ok:isPlanIssue,last_check:new Date().toISOString(),response_ms:ms,error:isPlanIssue?null:e.message,_detail_override:isPlanIssue?`Key configured — plan may need upgrade for full event access (HTTP ${e.response?.status})`:`Failed: ${e.message}`};
-          }
-        })()
-      : Promise.resolve(sourceHealth.predicthq={ok:false,error:"No API key",response_ms:0}),
-    ENV.GEOAPIFY_API_KEY
-      ? liveTest("geoapify",()=>axios.get("https://api.geoapify.com/v1/geocode/search",{params:{text:"Paris",type:"city",apiKey:ENV.GEOAPIFY_API_KEY,limit:1},timeout:6000}))
-      : Promise.resolve(sourceHealth.geoapify={ok:false,error:"No API key",response_ms:0}),
-    ENV.UNSPLASH_ACCESS_KEY
-      ? liveTest("unsplash",()=>axios.get("https://api.unsplash.com/search/photos",{params:{query:"travel",per_page:1},headers:{Authorization:`Client-ID ${ENV.UNSPLASH_ACCESS_KEY}`},timeout:6000}))
-      : Promise.resolve(sourceHealth.unsplash={ok:false,error:"No API key",response_ms:0}),
-    ENV.OPENAQ_API_KEY
-      ? liveTest("openaq",()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},headers:{"X-API-Key":ENV.OPENAQ_API_KEY},timeout:6000}))
-      : liveTest("openaq",()=>axios.get("https://api.openaq.org/v3/locations",{params:{limit:1},timeout:6000})),
-  ]);
-
-  numbeoResetIfNeeded();
-  const numbeoRemaining = NUMBEO_MONTHLY_CAP - numbeoCallsThisMonth;
-  const paidSources = {
-    newsapi:{key:ENV.GNEWS_API_KEY},
-    aviationstack:{key:ENV.AVIATIONSTACK_API_KEY,detail:ENV.AVIATIONSTACK_API_KEY?"Key configured (100 req/month)":"No API key"},
-    numbeo:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?`RapidAPI key — ${numbeoRemaining}/${NUMBEO_MONTHLY_CAP} monthly calls left`:"No RapidAPI key"},
-    airbnb:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs airbnb13 subscription":"No RapidAPI key"},
-    booking:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs booking-com15 subscription":"No RapidAPI key"},
-    tripadvisor:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs tripadvisor16 subscription":"No RapidAPI key"},
-    skyscanner:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs sky-scrapper subscription":"No RapidAPI key"},
-    google_places:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs maps-data subscription":"No RapidAPI key"},
-    travel_advisor:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs travel-advisor subscription":"No RapidAPI key"},
-    hotels_com:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs hotels4 subscription":"No RapidAPI key"},
-    youtube:{key:ENV.RAPIDAPI_KEY,detail:ENV.RAPIDAPI_KEY?"RapidAPI key — needs youtube-search subscription":"No RapidAPI key"},
-  };
-  Object.entries(paidSources).forEach(([k,v]) => {
-    const existing=sourceHealth[k];
-    sourceHealth[k]={ok:!!v.key,last_check:new Date().toISOString(),response_ms:existing?.response_ms||0,error:v.key?null:"No API key",success_count:existing?.success_count||0,fail_count:existing?.fail_count||0,_detail_override:v.detail};
-  });
-
-  const sources=["wikipedia","wikivoyage","foursquare","openweathermap","newsapi","google_news","gdacs","ticketmaster","eventbrite","predicthq","geoapify","social_proxy","unsplash","openaq","aviationstack","numbeo","rest_countries","airbnb","booking","tripadvisor","skyscanner","currency","google_places","travel_advisor","hotels_com","youtube","waqi","verification_ai","news_bbc","news_aljazeera","news_foxnews","news_nhk","news_dw","news_abc_au","news_cna","news_trt","news_rt","news_france24","news_xinhua","news_ndtv","news_channels_tv","news_news24","news_cbc","news_abc_br","news_rnz"];
-  const labelMap={"wikipedia":"Wikipedia","wikivoyage":"Wikivoyage","foursquare":"Places (OpenTripMap)","openweathermap":"OpenWeatherMap","newsapi":"GNews API","google_news":"Google News RSS","gdacs":"GDACS Disasters","ticketmaster":"Ticketmaster","eventbrite":"Eventbrite (RSS)","predicthq":"PredictHQ Events","geoapify":"Geoapify","social_proxy":"Social Trends (RSS)","unsplash":"Unsplash Photos","openaq":"OpenAQ Air Quality","aviationstack":"Aviationstack Flights","numbeo":"Numbeo Cost of Living","rest_countries":"REST Countries","airbnb":"Airbnb (RapidAPI)","booking":"Booking.com (RapidAPI)","tripadvisor":"TripAdvisor (RapidAPI)","skyscanner":"Skyscanner Flights","currency":"Currency Exchange","google_places":"Google Places (RapidAPI)","travel_advisor":"Travel Advisor (RapidAPI)","hotels_com":"Hotels.com (RapidAPI)","youtube":"YouTube Travel Videos","waqi":"World Air Quality Index","verification_ai":"🤖 Verification AI (Mistral Large)","news_bbc":"📺 BBC News (UK)","news_aljazeera":"📺 Al Jazeera (Qatar)","news_foxnews":"📺 Fox News (USA)","news_nhk":"📺 NHK World (Japan)","news_dw":"📺 Deutsche Welle (Germany)","news_abc_au":"📺 ABC News (Australia)","news_cna":"📺 Channel News Asia (Singapore)","news_trt":"📺 Hurriyet Daily News (Turkey)","news_rt":"📺 RT News (Russia)","news_france24":"📺 France 24 (France)","news_xinhua":"📺 Xinhua News (China)","news_ndtv":"📺 NDTV (India)","news_channels_tv":"📺 Channels TV (Nigeria)","news_news24":"📺 News24 (South Africa)","news_cbc":"📺 CBC News (Canada)","news_abc_br":"📺 Folha de S.Paulo (Brazil)","news_rnz":"📺 RNZ News (New Zealand)"};
-  sources.forEach(k=>{
-    const h=sourceHealth[k]||{};
-    const detail=h._detail_override||(h.ok!=null?(h.ok?`Last OK (${h.response_ms}ms)`:h.error):"Not yet tested");
-    checks[k]={ok:h.ok??null,label:labelMap[k]||k,detail,last_check:h.last_check||null,success_count:h.success_count||0,fail_count:h.fail_count||0,response_ms:h.response_ms||null};
-  });
-
-  const envKeys=[
-    {label:"Mistral AI + Verify",key:"MISTRAL_API_KEY"},{label:"OpenWeatherMap",key:"OPENWEATHER_API_KEY"},
-    {label:"Ticketmaster",key:"TICKETMASTER_API_KEY"},{label:"PredictHQ",key:"PREDICTHQ_API_KEY"},
-    {label:"GNews API",key:"GNEWS_API_KEY"},{label:"Geoapify",key:"GEOAPIFY_API_KEY"},
-    {label:"Unsplash",key:"UNSPLASH_ACCESS_KEY"},{label:"OpenAQ",key:"OPENAQ_API_KEY"},
-    {label:"Aviationstack",key:"AVIATIONSTACK_API_KEY"},{label:"RapidAPI",key:"RAPIDAPI_KEY"},
-  ];
-  checks.env_keys={ok:true,label:"API Keys",keys:envKeys.map(k=>({label:k.label,configured:!!process.env[k.key]}))};
-
-  const {data:pipeData} = await supabase.from("country_intel").select("iso,last_updated");
-  const fc=Date.now()-6*60*60*1000;
-  const freshCount=(pipeData||[]).filter(r=>new Date(r.last_updated).getTime()>fc).length;
-  checks.pipeline={ok:freshCount>0,label:"Pipeline",detail:`${(pipeData||[]).length}/${COUNTRIES.length} processed, ${freshCount} fresh (<6h)`,total:COUNTRIES.length,processed:(pipeData||[]).length,fresh:freshCount};
-
-  res.json({status:Object.values(checks).filter(c=>c.ok===false).length===0?"healthy":"degraded",timestamp:new Date().toISOString(),checks});
-});
-
-// ══════════════════════════════════════════════════════════════════
-// TEXTURE PROXY
-// ══════════════════════════════════════════════════════════════════
-const TEXTURES={
-  "earth-day":    "https://unpkg.com/three-globe@2.30.0/example/img/earth-blue-marble.jpg",
-  "earth-night":  "https://unpkg.com/three-globe@2.30.0/example/img/earth-night.jpg",
-  "earth-clouds": "https://unpkg.com/three-globe@2.30.0/example/img/earth-clouds.png",
-  "earth-water":  "https://unpkg.com/three-globe@2.30.0/example/img/earth-water.png",
-};
-const textureCache = {};
-app.options("/texture/:name", (req,res) => { res.setHeader("Access-Control-Allow-Origin","*"); res.setHeader("Access-Control-Allow-Methods","GET,HEAD,OPTIONS"); res.setHeader("Access-Control-Allow-Headers","*"); res.status(204).end(); });
-app.get("/texture/:name",(req,res)=>{
-  const name=req.params.name, sourceUrl=TEXTURES[name];
-  if(!sourceUrl) return res.status(404).end();
-  res.setHeader("Access-Control-Allow-Origin","*"); res.setHeader("Access-Control-Allow-Methods","GET,HEAD,OPTIONS"); res.setHeader("Cache-Control","public,max-age=86400");
-  res.setHeader("Content-Type",sourceUrl.endsWith(".png")?"image/png":"image/jpeg");
-  if(textureCache[name]) return res.send(textureCache[name]);
-  axios.get(sourceUrl,{responseType:"arraybuffer",timeout:15000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
-    .then(r=>{const buf=Buffer.from(r.data);textureCache[name]=buf;console.log(`Texture cached: ${name} (${Math.round(buf.length/1024)}kb)`);res.send(buf);})
-    .catch(e=>{if(name==="earth-clouds")console.log(`ℹ Clouds texture unavailable`);else console.error(`✗ Texture pre-warm failed: ${name}`,e.message);res.status(502).end();});
-});
-
-// ── GeoJSON Proxy ─────────────────────────────────────────────────
-let geojsonCache=null,geojsonFetching=false,geojsonWaiters=[];
-function fetchGeoJSON(cb){
-  if(geojsonCache)return cb(null,geojsonCache);
-  geojsonWaiters.push(cb);if(geojsonFetching)return;geojsonFetching=true;
-  let data="";
-  https.get("https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson",res=>{
-    res.on("data",c=>data+=c);
-    res.on("end",()=>{
-      try{const p=JSON.parse(data);p.features=p.features.map(f=>({type:"Feature",properties:{name:f.properties.NAME||"Unknown",iso:f.properties.ISO_A3||f.properties.NAME||"Unknown",continent:f.properties.CONTINENT||"",pop:f.properties.POP_EST||0,subregion:f.properties.SUBREGION||""},geometry:f.geometry}));geojsonCache=p;geojsonWaiters.splice(0).forEach(w=>w(null,geojsonCache));}
-      catch(e){geojsonWaiters.splice(0).forEach(w=>w(e,null));}
-      geojsonFetching=false;
-    });
-  }).on("error",e=>{geojsonFetching=false;geojsonWaiters.splice(0).forEach(w=>w(e,null));});
+  return results.slice(0, 8);
 }
-app.get("/geodata",(req,res)=>{ res.setHeader("Access-Control-Allow-Origin","*"); res.setHeader("Cache-Control","public,max-age=3600"); fetchGeoJSON((err,data)=>err?res.status(502).json({error:"geo fail"}):res.json(data)); });
-fetchGeoJSON(()=>console.log("GeoJSON cached ✓"));
 
 // ══════════════════════════════════════════════════════════════════
-// GLOBE ENDPOINT — 3D interactive globe (unchanged from original)
+// MISTRAL COUNTRY SYNTHESIS
 // ══════════════════════════════════════════════════════════════════
-app.get("/globe", (req, res) => {
-  res.setHeader("Content-Type","text/html");
-  res.setHeader("Cache-Control","public,max-age=300");
+async function runMistral(countryName, iso, rawData) {
+  if (!mistralAvailable()) return null;
 
-  const DESCRIPTIONS={
-    USA:"The world's largest economy and a melting pot of cultures, spanning vast landscapes from Alaskan tundra to Hawaiian tropics.",
-    GBR:"An island nation with a rich imperial history, home to London — one of the world's great global cities.",
-    FRA:"Famous for art, cuisine, fashion and the Eiffel Tower, France is the world's most visited country.",
-    DEU:"Europe's industrial powerhouse, known for engineering precision, classical music, and the Bavarian Alps.",
-    CHN:"The world's most populous nation, with 5,000 years of continuous civilisation and a booming modern economy.",
-    IND:"A vibrant subcontinent of 1.4 billion people, incredible diversity, ancient temples and tech innovation.",
-    BRA:"South America's giant — home to the Amazon rainforest, Carnival, and some of the world's best beaches.",
-    RUS:"The largest country on Earth by area, spanning 11 time zones from Eastern Europe to the Pacific Ocean.",
-    AUS:"A vast island continent famous for unique wildlife, the Great Barrier Reef, and an outdoor lifestyle.",
-    CAN:"The world's second-largest country, known for stunning wilderness, multicultural cities and friendly people.",
-    JPN:"A unique blend of ancient tradition and cutting-edge technology, from Mount Fuji to the neon streets of Tokyo.",
-    NGA:"Africa's most populous nation and largest economy, a cultural powerhouse of music, film and innovation.",
-    ZAF:"The Rainbow Nation — rich in biodiversity, dramatic landscapes from the Cape to the Kruger National Park.",
-    EGY:"Home to one of humanity's oldest civilisations, the Nile, and iconic ancient monuments like the Great Pyramids.",
-    MEX:"A country of ancient Aztec ruins, vibrant fiestas, rich cuisine and stunning Pacific and Caribbean coasts.",
-    ARG:"South America's second-largest country, famed for tango, Patagonian wilderness and the Andes mountains.",
-    SAU:"The heart of the Arab world, custodian of Islam's holiest sites and a vast oil-rich desert kingdom.",
-    IDN:"The world's largest archipelago — over 17,000 islands, extraordinary biodiversity and cultural richness.",
-    TUR:"Straddling two continents, Turkey is a crossroads of civilisations with breathtaking coasts and history.",
-    KEN:"East Africa's gateway — famed for the Maasai Mara, world-class marathon runners, and Nairobi's energy.",
-    ESP:"Sun, flamenco, La Sagrada Família, and incredible food — Spain is Europe's most passionate destination.",
-    ITA:"The cradle of Western civilisation, art and cuisine — from the Colosseum to the canals of Venice.",
-    PAK:"A land of K2, the Karakoram Highway, ancient Indus Valley ruins, and warmly hospitable people.",
-    UKR:"Europe's largest country by area, with fertile plains, a deep Cossack heritage, and resilient people.",
-    GHA:"West Africa's beacon of democracy and stability, birthplace of Pan-Africanism and rich in gold and culture.",
-    ETH:"Africa's oldest independent nation, birthplace of coffee, ancient churches and the source of the Blue Nile.",
-    MAR:"Where the Sahara meets the Atlantic — ancient medinas, blue Chefchaouen, and a world-class food scene.",
-    PER:"Land of the Incas, Machu Picchu, the Amazon, and one of the most diverse ecosystems on Earth.",
-    COL:"Where the Andes meet the Caribbean — Colombia has reinvented itself as a vibrant, colourful destination.",
-    NZL:"Two dramatic islands of fjords, volcanoes, Maori culture and the landscapes that brought Middle-earth to life.",
-    SGP:"A tiny city-state that punches far above its weight in food, finance, gardens and futuristic architecture.",
-    THA:"The Land of Smiles — golden temples, street food paradise, tropical islands and warm hospitality.",
-    VNM:"A slender S-shaped country of stunning bays, ancient towns, motorbike-filled streets and incredible pho.",
-    KOR:"K-pop, kimchi, cutting-edge technology and 5,000 years of history wrapped in one dynamic peninsula.",
-    PRT:"Europe's westernmost nation — cobblestone Lisbon, Porto's wine cellars, and the world's best surf.",
-    NLD:"A flat land of tulips, windmills, golden-age art and the most bikes per capita on the planet.",
-    GRC:"The birthplace of democracy, philosophy and the Olympics — with 6,000 islands and unbeatable cuisine.",
-  };
-  const FLAGS={
-    USA:"🇺🇸",GBR:"🇬🇧",FRA:"🇫🇷",DEU:"🇩🇪",CHN:"🇨🇳",IND:"🇮🇳",BRA:"🇧🇷",RUS:"🇷🇺",
-    AUS:"🇦🇺",CAN:"🇨🇦",JPN:"🇯🇵",NGA:"🇳🇬",ZAF:"🇿🇦",EGY:"🇪🇬",MEX:"🇲🇽",ARG:"🇦🇷",
-    SAU:"🇸🇦",IDN:"🇮🇩",TUR:"🇹🇷",KEN:"🇰🇪",ESP:"🇪🇸",ITA:"🇮🇹",PAK:"🇵🇰",UKR:"🇺🇦",
-    GHA:"🇬🇭",ETH:"🇪🇹",MAR:"🇲🇦",PER:"🇵🇪",COL:"🇨🇴",NZL:"🇳🇿",SGP:"🇸🇬",THA:"🇹🇭",
-    VNM:"🇻🇳",KOR:"🇰🇷",PRT:"🇵🇹",NLD:"🇳🇱",GRC:"🇬🇷",
-  };
+  const { wiki, wikivoyage, weather, news, events, places, airQuality, flights, costOfLiving, restCountries } = rawData;
 
-  res.send(`<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-html,body{width:100%;height:100%;background:#060a12;overflow:hidden;touch-action:none;font-family:-apple-system,BlinkMacSystemFont,sans-serif;}
-canvas{position:absolute;top:0;left:0;width:100%!important;height:100%!important;touch-action:none;display:block;}
-#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#5bb8ff;font-size:10px;letter-spacing:4px;transition:opacity 0.8s;text-align:center;pointer-events:none;z-index:10;}
-#bar{width:130px;height:1px;background:rgba(91,184,255,0.15);margin:12px auto 0;border-radius:1px;overflow:hidden}
-#fill{height:100%;background:linear-gradient(90deg,#3a8fff,#7dd4ff);width:0%;transition:width 0.3s;}
-#hint{position:absolute;top:12px;left:50%;transform:translateX(-50%);color:rgba(140,185,240,0.4);font-size:9px;letter-spacing:3px;pointer-events:none;white-space:nowrap;transition:opacity 1.4s;z-index:5;}
-#card{position:absolute;left:0;right:0;bottom:0;z-index:20;background:linear-gradient(to bottom,rgba(6,10,20,0) 0%,rgba(6,10,20,0.97) 12%,#060a14 100%);padding:32px 20px 28px;transform:translateY(100%);transition:transform 0.4s cubic-bezier(0.22,1,0.36,1);}
-#card.open{transform:translateY(0);}
-#card-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;}
-#card-title-group{display:flex;align-items:center;gap:10px;}
-#card-flag{font-size:28px;line-height:1;}
-#card-name{font-size:20px;font-weight:700;color:#e8f4ff;letter-spacing:0.2px;}
-#card-sub{font-size:9px;color:#3a6080;letter-spacing:2.5px;text-transform:uppercase;margin-top:2px;}
-#card-close{width:30px;height:30px;border-radius:50%;flex-shrink:0;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);color:#5a7a9a;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
-#card-desc{font-size:12px;color:#6a90b0;line-height:1.7;margin-bottom:14px;}
-#card-stats{display:flex;gap:8px;margin-bottom:16px;}
-.stat{flex:1;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:8px 10px;}
-.sv{font-size:12px;font-weight:600;color:#a8c8e8;}
-.sl{font-size:8px;color:#2a4a62;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;}
-#card-btn{width:100%;padding:14px;border:none;border-radius:14px;background:linear-gradient(135deg,#2a72ff 0%,#1040cc 100%);color:#fff;font-size:14px;font-weight:600;letter-spacing:1px;cursor:pointer;box-shadow:0 4px 24px rgba(42,114,255,0.4),0 0 0 1px rgba(42,114,255,0.2);transition:transform 0.12s,opacity 0.12s;}
-#card-btn:active{transform:scale(0.97);opacity:0.88}
-#backdrop{display:none;position:absolute;inset:0;z-index:15;}
-#backdrop.on{display:block;}
-</style>
-</head>
-<body>
-<div id="loading">LOADING EARTH<div id="bar"><div id="fill"></div></div></div>
-<canvas id="c"></canvas>
-<div id="hint">DRAG · PINCH · TAP COUNTRY</div>
-<div id="backdrop"></div>
-<div id="card">
-  <div id="card-top">
-    <div id="card-title-group"><span id="card-flag"></span><div><div id="card-name"></div><div id="card-sub"></div></div></div>
-    <button id="card-close">✕</button>
-  </div>
-  <div id="card-desc"></div>
-  <div id="card-stats">
-    <div class="stat"><div class="sv" id="s-pop"></div><div class="sl">Population</div></div>
-    <div class="stat"><div class="sv" id="s-cont"></div><div class="sl">Continent</div></div>
-    <div class="stat"><div class="sv" id="s-reg"></div><div class="sl">Region</div></div>
-  </div>
-  <button id="card-btn">✈️&nbsp; View Destinations</button>
-</div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/earcut@2.2.4/src/earcut.js"></script>
-<script>
-var DESCRIPTIONS=${JSON.stringify(DESCRIPTIONS)};
-var FLAGS=${JSON.stringify(FLAGS)};
-var BASE='${SELF}/texture/';
-var GEODATA='${SELF}/geodata';
-</script>
-<script>
-(function(){
-  var W=window.innerWidth,H=window.innerHeight;
-  var canvas=document.getElementById('c');
-  canvas.width=W*(window.devicePixelRatio||1);canvas.height=H*(window.devicePixelRatio||1);
-  canvas.style.width=W+'px';canvas.style.height=H+'px';
-  var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true,powerPreference:'high-performance'});
-  renderer.setSize(W,H);renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
-  renderer.setClearColor(0x060a12,1);renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.3;
-  var scene=new THREE.Scene();
-  var camera=new THREE.PerspectiveCamera(45,W/H,0.1,1000);camera.position.z=2.8;
-  var fillEl=document.getElementById('fill'),loadEl=document.getElementById('loading'),prog=0;
-  function progress(n){prog=Math.max(prog,n);fillEl.style.width=prog+'%';if(prog>=100)setTimeout(function(){loadEl.style.opacity='0';},400);}
-  progress(20);
-  var isDrag=false,isPinch=false,autoSpin=true,spinSpeed=0.0013;
-  var momX=0,momY=0,fric=0.90,lx=0,ly=0,lDist=0;
-  var CAM_DEFAULT=2.8,CAM_COUNTRY=1.9,CAM_MIN=1.3,CAM_MAX=5.5;
-  var targetZ=CAM_DEFAULT,camZ=CAM_DEFAULT,zoomVel=0;
-  var tapX=0,tapY=0,tapT=0,lastTap=0;
-  var holdTimer=null,isHeld=false;
-  var selectedISO=null,cardOpen=false;
-  function shouldSpin(){return !selectedISO&&!isHeld&&camZ>CAM_MIN+0.3;}
-  (function(){var geo=new THREE.BufferGeometry(),v=[];for(var i=0;i<2000;i++){var th=Math.random()*Math.PI*2,ph=Math.acos(2*Math.random()-1),r=50+Math.random()*30;v.push(r*Math.sin(ph)*Math.cos(th),r*Math.sin(ph)*Math.sin(th),r*Math.cos(ph));}geo.setAttribute('position',new THREE.Float32BufferAttribute(v,3));scene.add(new THREE.Points(geo,new THREE.PointsMaterial({color:0xffffff,size:0.065})));})();
-  scene.add(new THREE.AmbientLight(0x1a2540,0.9));
-  var sun=new THREE.DirectionalLight(0xffeedd,4.5);sun.position.set(5,2.5,4);scene.add(sun);
-  var bounce=new THREE.DirectionalLight(0x3a6aff,0.7);bounce.position.set(-4,1,-3);scene.add(bounce);
-  var polar=new THREE.DirectionalLight(0xaaccff,0.35);polar.position.set(0,8,0);scene.add(polar);
-  var earthGroup=new THREE.Group();earthGroup.rotation.z=0.41;scene.add(earthGroup);
-  var uEarth={dayTexture:{value:null},nightTexture:{value:null},specTexture:{value:null},sunDirection:{value:new THREE.Vector3(5,2.5,4).normalize()}};
-  var earthMesh=new THREE.Mesh(new THREE.SphereGeometry(1,72,72),new THREE.ShaderMaterial({uniforms:uEarth,vertexShader:'varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vUv=uv;vNormal=normalize(normalMatrix*normal);vWorldPos=(modelMatrix*vec4(position,1.0)).xyz;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'precision highp float;uniform sampler2D dayTexture,nightTexture,specTexture;uniform vec3 sunDirection;varying vec2 vUv;varying vec3 vNormal;varying vec3 vWorldPos;void main(){vec3 n=normalize(vNormal);vec3 sun=normalize(sunDirection);float cosA=dot(n,sun);float dayA=smoothstep(-0.18,0.45,cosA);vec3 day=texture2D(dayTexture,vUv).rgb;float lum=dot(day,vec3(0.299,0.587,0.114));day=mix(vec3(lum),day,1.35);day=pow(day,vec3(0.88));vec3 night=texture2D(nightTexture,vUv).rgb;night=pow(night,vec3(0.75))*2.2;vec3 spec=texture2D(specTexture,vUv).rgb;vec3 color=mix(night,day,dayA);vec3 vd=normalize(cameraPosition-vWorldPos);vec3 hv=normalize(sun+vd);float sp=pow(max(dot(n,hv),0.0),90.0);float sp2=pow(max(dot(n,hv),0.0),18.0)*0.06;color+=vec3(0.7,0.82,1.0)*(sp*0.9+sp2)*spec.r*dayA;float term=smoothstep(0.0,0.18,cosA)*smoothstep(0.38,0.18,cosA);color+=vec3(0.9,0.45,0.15)*term*0.28;float rim=pow(1.0-max(dot(n,vd),0.0),3.8);color=mix(color,mix(vec3(0.04,0.08,0.28),vec3(0.28,0.62,1.0),smoothstep(-0.3,0.6,cosA)),rim*0.72);gl_FragColor=vec4(color,1.0);}'}));
-  earthGroup.add(earthMesh);
-  scene.add(new THREE.Mesh(new THREE.SphereGeometry(1.09,48,48),new THREE.ShaderMaterial({uniforms:{sd:{value:new THREE.Vector3(5,2.5,4).normalize()}},vertexShader:'varying vec3 vN,vP;void main(){vN=normal;vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',fragmentShader:'uniform vec3 sd;varying vec3 vN,vP;void main(){vec3 vd=normalize(cameraPosition-(modelMatrix*vec4(vP,1.0)).xyz);float rim=pow(1.0-abs(dot(normalize(vN),vd)),2.4);float d=dot(normalize((normalMatrix*vec4(vN,0.0)).xyz),normalize(sd));vec3 col=mix(vec3(0.03,0.06,0.28),vec3(0.22,0.56,1.0),smoothstep(-0.15,0.6,d));gl_FragColor=vec4(col,rim*0.62);}',transparent:true,side:THREE.FrontSide,depthWrite:false,blending:THREE.AdditiveBlending})));
-  var texLoader=new THREE.TextureLoader();texLoader.crossOrigin='anonymous';
-  var texDone=0;
-  function onTex(){texDone++;progress(25+texDone*18);}
-  texLoader.load(BASE+'earth-day',function(t){t.anisotropy=renderer.capabilities.getMaxAnisotropy();uEarth.dayTexture.value=t;onTex();},undefined,function(){onTex();});
-  texLoader.load(BASE+'earth-night',function(t){uEarth.nightTexture.value=t;onTex();},undefined,function(){onTex();});
-  texLoader.load(BASE+'earth-water',function(t){uEarth.specTexture.value=t;onTex();},undefined,function(){onTex();});
-  var cloudMesh;
-  texLoader.load(BASE+'earth-clouds',function(t){cloudMesh=new THREE.Mesh(new THREE.SphereGeometry(1.013,48,48),new THREE.MeshPhongMaterial({map:t,transparent:true,opacity:0.75,depthWrite:false,blending:THREE.AdditiveBlending}));earthGroup.add(cloudMesh);});
-  var FILL_R=1.003,BORDER_R=1.0042;
-  var countryMap={},allFeatures=[],highlightTargets={};
-  function ll2v(lon,lat,r){var phi=(90-lat)*Math.PI/180,theta=(lon+180)*Math.PI/180;return new THREE.Vector3(-r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));}
-  function triPoly(rings){var coords=[];rings[0].forEach(function(p){coords.push(p[0],p[1]);});var holes=[],off=rings[0].length;for(var i=1;i<rings.length;i++){holes.push(off);rings[i].forEach(function(p){coords.push(p[0],p[1]);});off+=rings[i].length;}var idx=earcut(coords,holes.length?holes:null,2);if(!idx||!idx.length)return null;var pos=[];for(var t=0;t<idx.length;t++){var k=idx[t];var v=ll2v(coords[k*2],coords[k*2+1],FILL_R);pos.push(v.x,v.y,v.z);}var geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));return geo;}
-  function buildBorder(rings){var pos=[];rings.forEach(function(ring){for(var i=0;i<ring.length-1;i++){var a=ll2v(ring[i][0],ring[i][1],BORDER_R),b=ll2v(ring[i+1][0],ring[i+1][1],BORDER_R);pos.push(a.x,a.y,a.z,b.x,b.y,b.z);}});if(!pos.length)return null;var geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));return geo;}
-  function pipRing(lon,lat,ring){var inside=false;for(var i=0,j=ring.length-1;i<ring.length;j=i++){var xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];if(((yi>lat)!==(yj>lat))&&(lon<(xj-xi)*(lat-yi)/(yj-yi)+xi))inside=!inside;}return inside;}
-  function pipFeature(lon,lat,f){var g=f.geometry;if(!g)return false;function tp(rings){if(!pipRing(lon,lat,rings[0]))return false;for(var h=1;h<rings.length;h++)if(pipRing(lon,lat,rings[h]))return false;return true;}if(g.type==='Polygon')return tp(g.coordinates);if(g.type==='MultiPolygon'){for(var p=0;p<g.coordinates.length;p++)if(tp(g.coordinates[p]))return true;}return false;}
-  function v3toll(v){var lat=Math.asin(v.y/v.length())*180/Math.PI;var lon=Math.atan2(v.z,-v.x)*180/Math.PI-180;if(lon<-180)lon+=360;return{lat:lat,lon:lon};}
-  function getRings(f){var g=f.geometry;if(!g)return[];var r=[];if(g.type==='Polygon')r=g.coordinates;else if(g.type==='MultiPolygon')g.coordinates.forEach(function(p){r=r.concat(p);});return r;}
-  function buildCountry(feature){var iso=feature.properties.iso;var rings=getRings(feature);if(!rings.length)return;var fillMat=new THREE.MeshBasicMaterial({color:0x4fa3ff,transparent:true,opacity:0.0,side:THREE.DoubleSide,depthWrite:false});var borderMat=new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.25,linewidth:1});var group=new THREE.Group();try{if(feature.geometry.type==='Polygon'){var fg=triPoly(feature.geometry.coordinates);if(fg){var m=new THREE.Mesh(fg,fillMat);m.userData.iso=iso;group.add(m);}}else if(feature.geometry.type==='MultiPolygon'){feature.geometry.coordinates.forEach(function(poly){var fg=triPoly(poly);if(fg){var m=new THREE.Mesh(fg,fillMat);m.userData.iso=iso;group.add(m);}});}}catch(e){}var bg=buildBorder(rings);if(bg)group.add(new THREE.LineSegments(bg,borderMat));earthGroup.add(group);countryMap[iso]={fillMat:fillMat,borderMat:borderMat,name:feature.properties.name,iso:iso,props:feature.properties};}
-  var card=document.getElementById('card'),backdrop=document.getElementById('backdrop');
-  function fmtPop(n){if(!n)return'—';if(n>1e9)return(n/1e9).toFixed(1)+'B';if(n>1e6)return(n/1e6).toFixed(1)+'M';if(n>1e3)return Math.round(n/1e3)+'K';return''+n;}
-  function openCard(iso,props){document.getElementById('card-flag').textContent=FLAGS[iso]||'🌍';document.getElementById('card-name').textContent=props.name;document.getElementById('card-sub').textContent=(props.subregion||props.continent||'').toUpperCase();document.getElementById('card-desc').textContent=DESCRIPTIONS[iso]||'A fascinating destination with a rich cultural heritage and unique landscapes.';document.getElementById('s-pop').textContent=fmtPop(props.pop);document.getElementById('s-cont').textContent=props.continent||'—';document.getElementById('s-reg').textContent=(props.subregion||'—').split(' ').slice(0,2).join(' ');card.classList.add('open');backdrop.classList.add('on');cardOpen=true;autoSpin=false;targetZ=CAM_COUNTRY;}
-  function closeCard(){card.classList.remove('open');backdrop.classList.remove('on');cardOpen=false;targetZ=CAM_DEFAULT;if(shouldSpin())autoSpin=true;}
-  document.getElementById('card-close').addEventListener('click',function(e){e.stopPropagation();dismissSelection();});
-  document.getElementById('card-btn').addEventListener('click',function(e){e.stopPropagation();if(window.ReactNativeWebView){window.ReactNativeWebView.postMessage(JSON.stringify({type:'DESTINATIONS',country:selectedISO,name:document.getElementById('card-name').textContent}));}});
-  backdrop.addEventListener('click',function(){dismissSelection();});
-  function dismissSelection(){if(selectedISO&&countryMap[selectedISO]){highlightTargets[selectedISO]=0.0;countryMap[selectedISO].borderMat.color.setHex(0xffffff);countryMap[selectedISO].borderMat.opacity=0.25;}selectedISO=null;closeCard();}
-  function setSelected(iso){if(selectedISO&&countryMap[selectedISO]){highlightTargets[selectedISO]=0.0;countryMap[selectedISO].borderMat.color.setHex(0xffffff);countryMap[selectedISO].borderMat.opacity=0.25;}if(iso===selectedISO){dismissSelection();return;}selectedISO=iso;if(countryMap[iso]){highlightTargets[iso]=0.48;countryMap[iso].borderMat.color.setHex(0x88ccff);countryMap[iso].borderMat.opacity=1.0;openCard(iso,countryMap[iso].props);}autoSpin=false;}
-  var raycaster=new THREE.Raycaster();
-  function handleTap(sx,sy){var cardEl=document.getElementById('card');var cardRect=cardEl.getBoundingClientRect();if(cardOpen&&sy>cardRect.top)return;var ndc=new THREE.Vector2((sx/W)*2-1,-(sy/H)*2+1);raycaster.setFromCamera(ndc,camera);var sphereHits=raycaster.intersectObject(earthMesh);if(!sphereHits.length){if(selectedISO)dismissSelection();return;}var fills=[];earthGroup.traverse(function(o){if(o.isMesh&&o.userData.iso)fills.push(o);});var hits=raycaster.intersectObjects(fills,false);if(hits.length>0){setSelected(hits[0].object.userData.iso);return;}var localPt=earthGroup.worldToLocal(sphereHits[0].point.clone());var ll=v3toll(localPt);for(var i=0;i<allFeatures.length;i++){if(pipFeature(ll.lon,ll.lat,allFeatures[i])){setSelected(allFeatures[i].properties.iso);return;}}if(selectedISO)dismissSelection();}
-  fetch(GEODATA).then(function(r){return r.json();}).then(function(geojson){progress(82);allFeatures=geojson.features;var i=0;function batch(){var end=Math.min(i+15,allFeatures.length);for(;i<end;i++)buildCountry(allFeatures[i]);progress(82+Math.round((i/allFeatures.length)*17));if(i<allFeatures.length)setTimeout(batch,0);else progress(100);}batch();}).catch(function(){progress(100);});
-  canvas.addEventListener('touchstart',function(e){e.preventDefault();if(e.touches.length===1){var t=e.touches[0];lx=t.clientX;ly=t.clientY;tapX=t.clientX;tapY=t.clientY;tapT=Date.now();isDrag=true;isPinch=false;momX=0;momY=0;isHeld=false;holdTimer=setTimeout(function(){isHeld=true;autoSpin=false;},600);}else if(e.touches.length===2){clearTimeout(holdTimer);isDrag=false;isPinch=true;lDist=tDist(e.touches[0],e.touches[1]);}},{passive:false});
-  function tDist(a,b){var dx=a.clientX-b.clientX,dy=a.clientY-b.clientY;return Math.sqrt(dx*dx+dy*dy);}
-  canvas.addEventListener('touchmove',function(e){e.preventDefault();if(isDrag&&e.touches.length===1){clearTimeout(holdTimer);var t=e.touches[0],dx=t.clientX-lx,dy=t.clientY-ly;var s=0.004*(camZ/CAM_DEFAULT);earthGroup.rotation.y+=dx*s;earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+dy*s));momX=dx*s;momY=dy*s;lx=t.clientX;ly=t.clientY;autoSpin=false;}else if(isPinch&&e.touches.length===2){var d=tDist(e.touches[0],e.touches[1]);var delta=(lDist-d)*0.016;if(targetZ+delta<CAM_MIN)delta*=0.2;if(targetZ+delta>CAM_MAX)delta*=0.2;targetZ=Math.max(CAM_MIN,Math.min(CAM_MAX,targetZ+delta));lDist=d;}},{passive:false});
-  canvas.addEventListener('touchend',function(e){e.preventDefault();clearTimeout(holdTimer);var now=Date.now();if(e.changedTouches.length===1){var cx=e.changedTouches[0].clientX,cy=e.changedTouches[0].clientY;var dx=Math.abs(cx-tapX),dy2=Math.abs(cy-tapY),dt=now-tapT;if(now-lastTap<260&&dx<18&&dy2<18){targetZ=camZ<CAM_DEFAULT-0.3?CAM_DEFAULT:CAM_MIN+0.3;}lastTap=now;if(dx<10&&dy2<10&&dt<280)handleTap(tapX,tapY);if(Math.abs(momX)>0.001||Math.abs(momY)>0.001){setTimeout(function(){if(!isDrag&&!isHeld&&shouldSpin())autoSpin=true;},1800);}else if(shouldSpin()){autoSpin=true;}}isDrag=false;isPinch=false;},{passive:false});
-  var mouseDown=false,mouseX=0,mouseY=0,mouseTapX=0,mouseTapY=0,mouseTapT=0;
-  canvas.addEventListener('mousedown',function(e){mouseDown=true;mouseX=e.clientX;mouseY=e.clientY;mouseTapX=e.clientX;mouseTapY=e.clientY;mouseTapT=Date.now();momX=0;momY=0;autoSpin=false;});
-  canvas.addEventListener('mousemove',function(e){if(!mouseDown)return;var dx=e.clientX-mouseX,dy=e.clientY-mouseY;var s=0.004*(camZ/CAM_DEFAULT);earthGroup.rotation.y+=dx*s;earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+dy*s));momX=dx*s;momY=dy*s;mouseX=e.clientX;mouseY=e.clientY;});
-  canvas.addEventListener('mouseup',function(e){mouseDown=false;var dx=Math.abs(e.clientX-mouseTapX),dy=Math.abs(e.clientY-mouseTapY),dt=Date.now()-mouseTapT;if(dx<8&&dy<8&&dt<300)handleTap(e.clientX,e.clientY);if(shouldSpin())setTimeout(function(){if(!mouseDown)autoSpin=true;},1500);});
-  canvas.addEventListener('wheel',function(e){var delta=e.deltaY*0.001;targetZ=Math.max(CAM_MIN,Math.min(CAM_MAX,targetZ+delta));},{passive:true});
-  var hlTime=0;
-  function animate(){requestAnimationFrame(animate);if(autoSpin)earthGroup.rotation.y+=spinSpeed;if(!isDrag&&!mouseDown&&(Math.abs(momX)>0||Math.abs(momY)>0)){earthGroup.rotation.y+=momX;earthGroup.rotation.x=Math.max(-1.2,Math.min(1.2,earthGroup.rotation.x+momY));momX*=fric;momY*=fric;if(Math.abs(momX)<0.00008&&Math.abs(momY)<0.00008){momX=0;momY=0;}}var diff=targetZ-camZ;zoomVel=(zoomVel+diff*0.035)*0.75;camZ+=zoomVel;camera.position.z=camZ;if(camZ<CAM_MIN+0.25&&!selectedISO)autoSpin=false;else if(!selectedISO&&!isHeld&&!isDrag&&!mouseDown&&shouldSpin())autoSpin=true;if(cloudMesh)cloudMesh.rotation.y+=spinSpeed*1.12;hlTime+=0.05;Object.keys(highlightTargets).forEach(function(iso){var c=countryMap[iso];if(!c)return;var cur=c.fillMat.opacity,tgt=highlightTargets[iso];var next=cur+(tgt-cur)*0.11;c.fillMat.opacity=next;if(iso===selectedISO)c.borderMat.opacity=0.65+0.35*Math.sin(hlTime);if(Math.abs(next-tgt)<0.001){c.fillMat.opacity=tgt;if(tgt===0.0)delete highlightTargets[iso];}});renderer.render(scene,camera);}
-  animate();
-  setTimeout(function(){var h=document.getElementById('hint');if(h)h.style.opacity='0';},5000);
-  window.addEventListener('resize',function(){W=window.innerWidth;H=window.innerHeight;camera.aspect=W/H;camera.updateProjectionMatrix();renderer.setSize(W,H);canvas.style.width=W+'px';canvas.style.height=H+'px';});
-})();
-</script>
-</body>
-</html>`);
-});
+  const prompt = `You are a world-class travel intelligence analyst. Create comprehensive, accurate travel intel for ${countryName}.
+
+Context data available:
+- Wikipedia: ${wiki?.summary?.slice(0, 500) || "N/A"}
+- Wikivoyage: ${wikivoyage?.full?.slice(0, 500) || "N/A"}
+- Weather: ${JSON.stringify(weather?.now || {}).slice(0, 200)}
+- Country facts: Population ${restCountries?.population?.toLocaleString()}, Capital: ${restCountries?.capital}, Languages: ${restCountries?.languages?.join(", ")}
+- News (${news?.length || 0} articles), Events (${events?.length || 0}), Places (${places?.length || 0})
+
+Return ONLY valid JSON (no markdown, no explanation):
+{
+  "briefing": "2-3 sentence compelling overview",
+  "vibe": "10-word poetic vibe",
+  "recommendations": ["activity1","activity2","activity3","activity4","activity5"],
+  "safety_summary": "1 sentence safety overview",
+  "best_months": ["Month1","Month2","Month3"],
+  "hidden_gem": "lesser-known attraction or experience",
+  "trending_now": ["trend1","trend2"],
+  "avoid_if": "1 sentence about who should avoid or cautions",
+  "cost_estimate": "budget estimate per day in USD",
+  "local_tips": ["tip1","tip2","tip3"],
+  "day_itinerary": "brief 1-day itinerary",
+  "sensory_description": "evocative sensory description",
+  "climate_summary": "climate overview",
+  "transport_overview": "how to get around",
+  "food_scene": "food culture overview",
+  "history_brief": "brief history",
+  "culture_brief": "cultural highlights",
+  "health_overview": "health and medical info",
+  "connectivity_overview": "internet and phone situation",
+  "shopping_overview": "shopping highlights",
+  "nightlife_overview": "nightlife scene",
+  "accommodation_overview": "where to stay overview",
+  "safety_detail": "detailed safety information",
+  "traveler_scores": {"solo":8,"families":7,"adventure":9,"luxury":6,"budget":8,"romance":7}
+}`;
+
+  try {
+    const r = await mistralQueue.call(() => axios.post(
+      "https://api.mistral.ai/v1/chat/completions",
+      { model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.4, max_tokens:2000 },
+      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:60000 }
+    ));
+    const text = r.data?.choices?.[0]?.message?.content || "";
+    return repairJson(text);
+  } catch(e) {
+    if (e.isKeyError) return null;
+    console.error(`[runMistral] ${countryName}:`, e.message?.slice(0,80));
+    return null;
+  }
+}
 
 // ══════════════════════════════════════════════════════════════════
-// START SERVER
+// MISTRAL STATE INTEL
 // ══════════════════════════════════════════════════════════════════
+async function runMistralForState(stateName, countryName, continent, rawData) {
+  if (!mistralAvailable()) return null;
+
+  const { weather, news, events, places, airQuality, areas } = rawData;
+  const topAreas = (areas||[]).slice(0,10).map(a=>a.name).join(", ");
+
+  const prompt = `You are a travel intelligence analyst. Generate travel intel for ${stateName}, ${countryName} (${continent}).
+
+Available data:
+- Weather: ${JSON.stringify(weather?.now||{}).slice(0,150)}
+- Top cities/areas: ${topAreas || "N/A"}
+- News headlines: ${(news||[]).slice(0,3).map(n=>n.title).join("; ") || "N/A"}
+- Events: ${(events||[]).slice(0,3).map(e=>e.title||e.name).join("; ") || "N/A"}
+- Places: ${(places||[]).slice(0,3).map(p=>p.name).join(", ") || "N/A"}
+- Air quality: ${airQuality?.aqi_label || "N/A"}
+
+Return ONLY valid JSON:
+{
+  "briefing": "2-3 sentence overview of this state/region for travelers",
+  "vibe": "10-word poetic vibe",
+  "recommendations": ["activity1","activity2","activity3","activity4"],
+  "safety_summary": "1 sentence safety note",
+  "best_months": ["Month1","Month2","Month3"],
+  "hidden_gem": "lesser-known local experience",
+  "trending_now": ["trend1","trend2"],
+  "avoid_if": "who should think twice",
+  "cost_estimate": "approximate daily budget USD",
+  "local_tips": ["tip1","tip2","tip3"],
+  "day_itinerary": "1-day itinerary",
+  "sensory_description": "evocative description",
+  "climate_summary": "climate overview",
+  "transport_overview": "getting around",
+  "food_scene": "local food culture",
+  "history_brief": "historical context",
+  "culture_brief": "cultural highlights",
+  "health_overview": "health notes",
+  "connectivity_overview": "internet/connectivity",
+  "shopping_overview": "shopping info",
+  "nightlife_overview": "nightlife",
+  "accommodation_overview": "where to stay",
+  "safety_detail": "safety details",
+  "traveler_scores": {"solo":7,"families":7,"adventure":8,"luxury":6,"budget":7,"romance":7}
+}`;
+
+  try {
+    const r = await mistralQueue.call(() => axios.post(
+      "https://api.mistral.ai/v1/chat/completions",
+      { model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.4, max_tokens:2000 },
+      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:60000 }
+    ));
+    const text = r.data?.choices?.[0]?.message?.content || "";
+    return repairJson(text);
+  } catch(e) {
+    if (e.isKeyError) return null;
+    console.error(`[runMistralForState] ${stateName}:`, e.message?.slice(0,80));
+    return null;
+  }
+}
 
 // ══════════════════════════════════════════════════════════════════
-// FULL STATE INTEL PIPELINE — Sequential, retrying, persistent
+// MISTRAL AREA INTEL
 // ══════════════════════════════════════════════════════════════════
-const stateGenProgress = {
-  running: false,
-  total: 0,
-  done: 0,
-  failed: 0,
-  current: null,
-  startedAt: null,
-  completedAt: null,
-  failedStates: [],
-  log: [],
-};
+async function runMistralForArea(areaName, stateName, countryName, continent, rawData) {
+  if (!mistralAvailable()) return null;
+
+  const { weather, news, events, places, airQuality } = rawData;
+  const location = `${areaName}${stateName ? ", " + stateName : ""}, ${countryName}`;
+
+  const prompt = `You are a travel intelligence expert. Generate detailed travel intel for ${location}.
+
+Available data:
+- Weather: ${JSON.stringify(weather?.now||{}).slice(0,120)}
+- News: ${(news||[]).slice(0,3).map(n=>n.title).join("; ") || "N/A"}
+- Places: ${(places||[]).slice(0,3).map(p=>p.name).join(", ") || "N/A"}
+- Air quality: ${airQuality?.aqi_label || "N/A"}
+
+Return ONLY valid JSON:
+{
+  "geography": { "overview":"", "terrain":"", "size":"", "notable_features":[] },
+  "weather": { "overview":"", "best_season":"", "avg_temp_c":0, "rainfall":"" },
+  "history_culture": { "overview":"", "key_events":[], "cultural_notes":"", "etiquette":[] },
+  "food_drink": { "overview":"", "must_try":[], "restaurants":"", "price_range":"" },
+  "accommodation": { "overview":"", "best_areas":[], "price_range":"", "top_picks":[] },
+  "transport": { "overview":"", "getting_there":"", "getting_around":"", "apps":[] },
+  "cost_of_living": { "overview":"", "budget_per_day_usd":0, "mid_range_usd":0, "luxury_usd":0 },
+  "health": { "overview":"", "hospitals":"", "pharmacies":"", "water_safe":true },
+  "safety": { "overview":"", "risk_level":"low", "areas_to_avoid":[], "emergency_numbers":"" },
+  "nightlife_entertainment": { "overview":"", "best_areas":[], "closing_time":"", "dress_code":"" },
+  "attractions": { "overview":"", "top_5":[], "hidden_gems":[], "day_trips":[] },
+  "shopping": { "overview":"", "best_markets":[], "souvenirs":[], "malls":[] },
+  "connectivity": { "overview":"", "wifi_quality":"", "sim_cards":"", "avg_speed_mbps":0 },
+  "languages": { "primary":"", "secondary":[], "english_level":"", "useful_phrases":[] },
+  "events": { "overview":"", "annual_events":[], "current_events":[] },
+  "visa": { "overview":"", "on_arrival":[], "visa_free":[], "notes":"" },
+  "ai_intel": {
+    "briefing": "2-3 sentence traveler overview",
+    "vibe": "10-word poetic vibe",
+    "hidden_gem": "lesser-known experience",
+    "best_time": "best time to visit",
+    "avoid_if": "who should think twice",
+    "trending_topic": "what travelers are talking about",
+    "recommendations": ["rec1","rec2","rec3","rec4"],
+    "local_tip": "insider tip",
+    "packing_list": ["item1","item2","item3"],
+    "cost_3day_trip_usd": 0,
+    "day_itinerary": "1-day itinerary",
+    "sensory": "evocative sensory description",
+    "traveler_scores": {"solo":7,"families":7,"adventure":8,"luxury":6,"budget":7,"romance":7},
+    "sub_areas": ["neighborhood1","neighborhood2","neighborhood3"]
+  }
+}`;
+
+  try {
+    const r = await mistralQueue.call(() => axios.post(
+      "https://api.mistral.ai/v1/chat/completions",
+      { model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.4, max_tokens:3000 },
+      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:90000 }
+    ));
+    const text = r.data?.choices?.[0]?.message?.content || "";
+    return repairJson(text);
+  } catch(e) {
+    if (e.isKeyError) return null;
+    console.error(`[runMistralForArea] ${areaName}:`, e.message?.slice(0,80));
+    return null;
+  }
+}
 
 
 // ══════════════════════════════════════════════════════════════════
-// STATE INTEL PIPELINE — runs for a single state, stores result
+// STATE INTEL PIPELINE
 // ══════════════════════════════════════════════════════════════════
 const stateIntelMemCache = {};
-const STATE_INTEL_REFRESH_MS = 8 * 60 * 60 * 1000; // 8 hours
+const STATE_INTEL_REFRESH_MS = 8 * 60 * 60 * 1000;
 
 function stateIntelNeedsRefresh(intel) {
   if (!intel) return true;
@@ -3235,26 +1273,20 @@ function stateIntelNeedsRefresh(intel) {
 
 async function runStatePipeline(stateId) {
   const { data: state, error: stErr } = await supabase
-    .from("states")
-    .select("id,name,country_iso,state_code,latitude,longitude")
-    .eq("id", stateId)
-    .single();
+    .from("states").select("id,name,country_iso,state_code,latitude,longitude")
+    .eq("id", stateId).single();
   if (stErr || !state) { console.error("[StatePipeline] State not found:", stateId); return null; }
 
   const country = COUNTRIES.find(c => c.iso === state.country_iso);
   if (!country) { console.error("[StatePipeline] Country not found:", state.country_iso); return null; }
 
-  const stateName   = state.name;
-  const countryName = country.name;
-  const continent   = country.continent;
-  const iso2        = ISO3_TO_ISO2[state.country_iso] || "US";
-
+  const stateName = state.name, countryName = country.name, continent = country.continent;
+  const iso2 = ISO3_TO_ISO2[state.country_iso] || "US";
   console.log(`[StatePipeline] Starting for ${stateName}, ${countryName}`);
 
-  // Resolve coordinates
   let coords = (state.latitude && state.longitude)
     ? { lat: parseFloat(state.latitude), lon: parseFloat(state.longitude) }
-    : await geocodePlace(stateName, countryName);
+    : await geocodePlace(stateName, countryName).catch(() => null);
   if (!coords) coords = geoCoordCache[state.country_iso] || { lat: 0, lon: 0 };
   else if (!state.latitude) {
     supabase.from("states").update({ latitude: coords.lat, longitude: coords.lon })
@@ -3272,103 +1304,70 @@ async function runStatePipeline(stateId) {
     safe(() => fetchWAQIByCoords(coords.lat, coords.lon, stateName), null),
   ]);
 
-  const { data: areas } = await supabase
-    .from("areas")
-    .select("id,name,type,population")
-    .eq("state_id", stateId)
-    .order("population", { ascending: false })
-    .limit(60);
+  const { data: areas } = await supabase.from("areas").select("id,name,type,population")
+    .eq("state_id", stateId).order("population", { ascending: false }).limit(60);
 
-  const ai = await safe(() => runMistralForState(stateName, countryName, continent, {
-    weather, news: newsRaw, events: eventsRaw, places, airQuality: waqiData, areas: areas || []
-  }), null);
+  // Try AI — returns null immediately if key invalid, no retries
+  let ai = null;
+  if (mistralAvailable()) {
+    ai = await safe(() => runMistralForState(stateName, countryName, continent,
+      { weather, news: newsRaw, events: eventsRaw, places, airQuality: waqiData, areas: areas || [] }
+    ), null);
+  } else {
+    console.log(`[StatePipeline] Skipping Mistral for ${stateName} — key invalid/missing`);
+  }
 
   const nextUpdate = new Date(Date.now() + STATE_INTEL_REFRESH_MS).toISOString();
-
   const intel = {
-    state_id:         stateId,
-    country_iso:      state.country_iso,
-    state_name:       stateName,
-    country_name:     countryName,
-    state_code:       state.state_code,
-    continent,
-    last_updated:     new Date().toISOString(),
-    next_update_at:   nextUpdate,
-    lat:              coords.lat,
-    lon:              coords.lon,
-    weather_now:      weather?.now    || null,
-    weather_forecast: weather?.forecast || [],
-    news_headlines:   newsRaw         || [],
-    photos:           (photos || []).slice(0, 9),
-    events:           eventsRaw       || [],
-    top_places:       places          || [],
-    air_quality:      waqiData        || null,
-    areas:            areas           || [],
-    // AI fields
-    ai_briefing:           ai?.briefing          || null,
-    ai_vibe:               ai?.vibe              || null,
-    ai_recommendations:    ai?.recommendations   || [],
-    ai_safety_summary:     ai?.safety_summary    || null,
-    ai_best_months:        ai?.best_months       || [],
-    ai_hidden_gem:         ai?.hidden_gem        || null,
-    ai_trending_now:       ai?.trending_now      || [],
-    ai_avoid_if:           ai?.avoid_if          || null,
-    ai_cost_estimate:      ai?.cost_estimate     || null,
-    ai_local_tips:         ai?.local_tips        || [],
-    ai_day_itinerary:      ai?.day_itinerary     || null,
+    state_id: stateId, country_iso: state.country_iso, state_name: stateName,
+    country_name: countryName, state_code: state.state_code, continent,
+    last_updated: new Date().toISOString(), next_update_at: nextUpdate,
+    lat: coords.lat, lon: coords.lon,
+    weather_now: weather?.now || null, weather_forecast: weather?.forecast || [],
+    news_headlines: newsRaw || [], photos: (photos || []).slice(0, 9),
+    events: eventsRaw || [], top_places: places || [], air_quality: waqiData || [],
+    areas: areas || [],
+    ai_briefing: ai?.briefing || null, ai_vibe: ai?.vibe || null,
+    ai_recommendations: ai?.recommendations || [], ai_safety_summary: ai?.safety_summary || null,
+    ai_best_months: ai?.best_months || [], ai_hidden_gem: ai?.hidden_gem || null,
+    ai_trending_now: ai?.trending_now || [], ai_avoid_if: ai?.avoid_if || null,
+    ai_cost_estimate: ai?.cost_estimate || null, ai_local_tips: ai?.local_tips || [],
+    ai_day_itinerary: ai?.day_itinerary || null,
     ai_sensory_description: ai?.sensory_description || null,
-    ai_climate_info:       ai?.climate_summary   ? { summary: ai.climate_summary }  : null,
-    ai_transport_info:     ai?.transport_overview ? { overview: ai.transport_overview } : null,
-    ai_food_scene:         ai?.food_scene        ? { overview: ai.food_scene }       : null,
-    ai_history:            ai?.history_brief     ? { overview: ai.history_brief }    : null,
-    ai_culture:            ai?.culture_brief     ? { overview: ai.culture_brief }    : null,
-    ai_health_info:        ai?.health_overview   ? { overview: ai.health_overview }  : null,
-    ai_connectivity:       ai?.connectivity_overview ? { overview: ai.connectivity_overview } : null,
-    ai_shopping:           ai?.shopping_overview  ? { overview: ai.shopping_overview } : null,
-    ai_nightlife:          ai?.nightlife_overview ? { overview: ai.nightlife_overview } : null,
-    ai_accommodation:      ai?.accommodation_overview ? { overview: ai.accommodation_overview } : null,
-    ai_safety_detail:      ai?.safety_detail     || null,
-    ai_traveler_scores:    ai?.traveler_scores   || null,
-    ai_etiquette:          null,
-    ai_emergency_script:   null,
+    ai_climate_info: ai?.climate_summary ? { summary: ai.climate_summary } : null,
+    ai_transport_info: ai?.transport_overview ? { overview: ai.transport_overview } : null,
+    ai_food_scene: ai?.food_scene ? { overview: ai.food_scene } : null,
+    ai_history: ai?.history_brief ? { overview: ai.history_brief } : null,
+    ai_culture: ai?.culture_brief ? { overview: ai.culture_brief } : null,
+    ai_health_info: ai?.health_overview ? { overview: ai.health_overview } : null,
+    ai_connectivity: ai?.connectivity_overview ? { overview: ai.connectivity_overview } : null,
+    ai_shopping: ai?.shopping_overview ? { overview: ai.shopping_overview } : null,
+    ai_nightlife: ai?.nightlife_overview ? { overview: ai.nightlife_overview } : null,
+    ai_accommodation: ai?.accommodation_overview ? { overview: ai.accommodation_overview } : null,
+    ai_safety_detail: ai?.safety_detail || null,
+    ai_traveler_scores: ai?.traveler_scores || null,
+    ai_etiquette: null, ai_emergency_script: null,
+    mistral_available: mistralAvailable(),
   };
 
   try {
-    const { error: upsertErr } = await supabase
-      .from("state_intel")
+    const { error: upsertErr } = await supabase.from("state_intel")
       .upsert(intel, { onConflict: "state_id" });
     if (upsertErr) console.error("[StatePipeline] DB upsert error:", upsertErr.message);
-    else console.log(`[StatePipeline] ✓ ${stateName} saved to state_intel (next refresh: ${nextUpdate})`);
-  } catch(e) {
-    console.error("[StatePipeline] state_intel error:", e.message);
-  }
+    else console.log(`[StatePipeline] ✓ ${stateName} saved ${ai ? "with AI" : "(no AI — key issue)"}`);
+  } catch(e) { console.error("[StatePipeline] state_intel error:", e.message); }
 
   stateIntelMemCache[stateId] = intel;
   return intel;
 }
 
-// ── Background stale refresh ─────────────────────────────────────
-let stateIntelRefreshRunning = false;
-async function refreshStaleStateIntel() {
-  if (stateIntelRefreshRunning) return;
-  stateIntelRefreshRunning = true;
-  try {
-    if (!stateIntelTableExists) return;
-    const now = new Date().toISOString();
-    const { data: stale } = await supabase.from("state_intel")
-      .select("state_id, state_name")
-      .lt("next_update_at", now)
-      .limit(5);
-    if (stale && stale.length > 0) {
-      console.log(`[StateRefresh] Refreshing ${stale.length} stale state intel records...`);
-      for (const s of stale) {
-        await runStatePipeline(s.state_id).catch(e => console.error(`[StateRefresh] ${s.state_name}:`, e.message));
-        await new Promise(r => setTimeout(r, 6000));
-      }
-    }
-  } catch(e) { console.error("[StateRefresh] Error:", e.message); }
-  finally { stateIntelRefreshRunning = false; }
-}
+// ══════════════════════════════════════════════════════════════════
+// GENERATE ALL STATE INTEL
+// ══════════════════════════════════════════════════════════════════
+const stateGenProgress = {
+  running: false, total: 0, done: 0, failed: 0, current: null,
+  startedAt: null, completedAt: null, failedStates: [], log: [],
+};
 
 function sgLog(msg) {
   const line = `[${new Date().toISOString().slice(11,19)}] ${msg}`;
@@ -3377,178 +1376,257 @@ function sgLog(msg) {
 }
 
 async function generateAllStateIntel({ force = false } = {}) {
-  if (stateGenProgress.running) {
-    sgLog('Already running — ignoring duplicate call');
-    return { skipped: true };
-  }
-  if (!stateIntelTableExists) {
-    sgLog('state_intel table missing — run geo_migration_v3.sql first');
-    return { error: 'table_missing' };
-  }
+  if (stateGenProgress.running) { sgLog('Already running'); return { skipped: true }; }
+  if (!stateIntelTableExists) { sgLog('state_intel table missing'); return { error: 'table_missing' }; }
 
-  stateGenProgress.running    = true;
-  stateGenProgress.done       = 0;
-  stateGenProgress.failed     = 0;
-  stateGenProgress.failedStates = [];
-  stateGenProgress.startedAt  = new Date().toISOString();
-  stateGenProgress.completedAt = null;
-  stateGenProgress.log        = [];
+  stateGenProgress.running = true; stateGenProgress.done = 0; stateGenProgress.failed = 0;
+  stateGenProgress.failedStates = []; stateGenProgress.startedAt = new Date().toISOString();
+  stateGenProgress.completedAt = null; stateGenProgress.log = [];
+
+  if (!mistralAvailable()) {
+    sgLog(`⚠️  MISTRAL KEY INVALID — states saved WITHOUT AI (weather/news/places still collected)`);
+    sgLog(`⚠️  Fix: Render → Environment → MISTRAL_API_KEY`);
+  }
 
   try {
-    // Load ALL states — paginate because Supabase defaults to 1000 rows
-    let allStates = [];
-    let page = 0;
-    const PAGE_SIZE = 1000;
+    let allStates = []; let page = 0;
     while (true) {
-      const { data: batch, error } = await supabase
-        .from('states')
-        .select('id, name, country_iso')
-        .order('country_iso')
-        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+      const { data: batch, error } = await supabase.from('states').select('id,name,country_iso')
+        .order('country_iso').range(page * 1000, (page + 1) * 1000 - 1);
       if (error || !batch || batch.length === 0) break;
       allStates = allStates.concat(batch);
-      if (batch.length < PAGE_SIZE) break;
+      if (batch.length < 1000) break;
       page++;
     }
-    sgLog(`Loaded ${allStates.length} total states from DB`);
+    sgLog(`Loaded ${allStates.length} states`);
+    if (!allStates.length) { stateGenProgress.running = false; return { error: 'no_states' }; }
 
-    if (!allStates || allStates.length === 0) {
-      sgLog('No states in DB — run geo pipeline first');
-      stateGenProgress.running = false;
-      return { error: 'no_states' };
-    }
-
-    // Get which states already have AI intel (unless force=true)
     let toProcess = allStates;
     if (!force) {
-      // Paginate existing intel check too
-      let hasIntelAll = [];
+      const doneIds = new Set();
       let iPage = 0;
       while (true) {
-        const { data: iBatch } = await supabase
-          .from('state_intel')
-          .select('state_id')
-          .not('ai_briefing', 'is', null)
-          .range(iPage * 1000, (iPage + 1) * 1000 - 1);
-        if (!iBatch || iBatch.length === 0) break;
-        hasIntelAll = hasIntelAll.concat(iBatch);
-        if (iBatch.length < 1000) break;
+        let q = supabase.from('state_intel').select('state_id');
+        if (mistralAvailable()) q = q.not('ai_briefing', 'is', null);
+        q = q.range(iPage * 1000, (iPage + 1) * 1000 - 1);
+        const { data: existing } = await q;
+        if (!existing || existing.length === 0) break;
+        existing.forEach(r => doneIds.add(r.state_id));
+        if (existing.length < 1000) break;
         iPage++;
       }
-      const hasIntel = hasIntelAll;
-      const doneIds = new Set((hasIntel || []).map(r => r.state_id));
       toProcess = allStates.filter(s => !doneIds.has(s.id));
     }
 
     stateGenProgress.total = toProcess.length;
-    sgLog(`Starting: ${toProcess.length}/${allStates.length} states need intel`);
+    sgLog(`Starting: ${toProcess.length}/${allStates.length} states need processing`);
 
-    // Process ONE AT A TIME — sequential, no parallel, to respect Mistral limits
     for (let i = 0; i < toProcess.length; i++) {
       if (!stateGenProgress.running) { sgLog('Stopped by user'); break; }
-
       const state = toProcess[i];
       stateGenProgress.current = `${state.name} (${i+1}/${toProcess.length})`;
       sgLog(`Processing ${state.name} [${state.country_iso}]`);
 
       let success = false;
+      const maxAttempts = mistralAvailable() ? 3 : 1;
 
-      // Try up to 3 times per state
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           const result = await runStatePipeline(state.id);
-          if (result && result.ai_briefing) {
-            sgLog(`✅ ${state.name} — intel saved`);
-            success = true;
-            break;
-          } else if (attempt < 3) {
-            // If Mistral queue has backoff pending, wait for it
-            const qBackoff = mistralQueue._backoff_ms;
-            const waitMs = qBackoff > 0 ? qBackoff + 6000 : 6000;
-            sgLog(`⚠ ${state.name} attempt ${attempt}: no AI data — waiting ${Math.round(waitMs/1000)}s`);
-            await new Promise(r => setTimeout(r, waitMs));
+          if (result) {
+            sgLog(`✅ ${state.name} — saved ${result.ai_briefing ? 'with AI' : 'without AI (key issue)'}`);
+            success = true; break;
+          }
+          if (!mistralAvailable()) break;
+          if (attempt < maxAttempts) {
+            const wait = (mistralQueue._backoff_ms > 0 ? mistralQueue._backoff_ms + 6000 : 6000);
+            sgLog(`⚠ ${state.name} attempt ${attempt}: waiting ${Math.round(wait/1000)}s`);
+            await new Promise(r => setTimeout(r, wait));
           }
         } catch(e) {
-          const msg = e.message?.slice(0,80) || 'unknown error';
-          if (attempt < 3) {
-            const qBackoff = mistralQueue._backoff_ms;
-            const waitMs = qBackoff > 0 ? qBackoff + 6000 : 6000;
-            sgLog(`⚠ ${state.name} attempt ${attempt} error: ${msg} — waiting ${Math.round(waitMs/1000)}s`);
-            await new Promise(r => setTimeout(r, waitMs));
-          } else {
-            sgLog(`❌ ${state.name} failed after 3 attempts: ${msg}`);
+          if (e.isKeyError) {
+            sgLog(`⚠️  Key error — switching to non-AI mode`);
+            try { const r = await runStatePipeline(state.id); if (r) { success = true; } } catch(e2) {}
+            break;
           }
+          if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, mistralQueue._backoff_ms > 0 ? mistralQueue._backoff_ms + 6000 : 6000));
+          } else { sgLog(`❌ ${state.name} failed: ${e.message?.slice(0,60)}`); }
         }
       }
 
-      if (!success) {
-        stateGenProgress.failed++;
-        stateGenProgress.failedStates.push(state.name);
-      }
+      if (!success) { stateGenProgress.failed++; stateGenProgress.failedStates.push(state.name); }
       stateGenProgress.done++;
-
-      // 5 second gap between states — enough for Mistral rate limits
-      if (i < toProcess.length - 1) {
-        await new Promise(r => setTimeout(r, 5000));
-      }
+      if (i < toProcess.length - 1) await new Promise(r => setTimeout(r, mistralAvailable() ? 5000 : 500));
     }
 
-    // Retry all failed states one more time
-    if (stateGenProgress.failedStates.length > 0 && stateGenProgress.running) {
+    // Retry failed states (only if Mistral available)
+    if (stateGenProgress.failedStates.length > 0 && stateGenProgress.running && mistralAvailable()) {
       sgLog(`🔄 Retrying ${stateGenProgress.failedStates.length} failed states…`);
       const failedNames = new Set(stateGenProgress.failedStates);
       const retryList = allStates.filter(s => failedNames.has(s.name));
       stateGenProgress.failedStates = [];
-
       for (const state of retryList) {
         if (!stateGenProgress.running) break;
         stateGenProgress.current = `RETRY: ${state.name}`;
-        await new Promise(r => setTimeout(r, 30000)); // longer gap on retry
+        await new Promise(r => setTimeout(r, 30000));
         try {
           const result = await runStatePipeline(state.id);
-          if (result?.ai_briefing) {
-            sgLog(`✅ RETRY OK: ${state.name}`);
-          } else {
-            stateGenProgress.failedStates.push(state.name);
-            sgLog(`❌ RETRY FAILED: ${state.name}`);
-          }
-        } catch(e) {
-          stateGenProgress.failedStates.push(state.name);
-          sgLog(`❌ RETRY ERROR: ${state.name}: ${e.message?.slice(0,60)}`);
-        }
+          if (result?.ai_briefing) sgLog(`✅ RETRY OK: ${state.name}`);
+          else { stateGenProgress.failedStates.push(state.name); sgLog(`❌ RETRY FAILED: ${state.name}`); }
+        } catch(e) { stateGenProgress.failedStates.push(state.name); }
       }
     }
 
-    const summary = `Complete — ${stateGenProgress.done} processed, ${stateGenProgress.failedStates.length} still failed`;
-    sgLog(summary);
+    sgLog(`Complete — ${stateGenProgress.done} processed, ${stateGenProgress.failedStates.length} failed`);
     stateGenProgress.completedAt = new Date().toISOString();
-  } catch(e) {
-    sgLog(`Fatal error: ${e.message}`);
-  }
+  } catch(e) { sgLog(`Fatal error: ${e.message}`); }
 
-  stateGenProgress.running = false;
-  stateGenProgress.current = null;
+  stateGenProgress.running = false; stateGenProgress.current = null;
   return { done: stateGenProgress.done, failed: stateGenProgress.failedStates.length };
 }
 
-// Thin wrapper kept for cron + boot calls
-async function preGenerateAllStateIntel() {
-  return generateAllStateIntel({ force: false });
+async function preGenerateAllStateIntel() { return generateAllStateIntel({ force: false }); }
+
+// ══════════════════════════════════════════════════════════════════
+// AREA INTEL PIPELINE
+// ══════════════════════════════════════════════════════════════════
+const AREA_INTEL_REFRESH_MS = 8 * 60 * 60 * 1000;
+const areaIntelMemCache = {};
+
+function areaIntelNeedsRefresh(intel) {
+  if (!intel) return true;
+  if (!intel.next_update_at) return true;
+  return new Date(intel.next_update_at).getTime() < Date.now();
+}
+
+async function verifyAreaIntel(areaName, stateName, countryName, aiIntel) {
+  if (!mistralAvailable()) return { verified: true, confidence: 0.5, sources_found: 0, reason: "Verification skipped — key unavailable", regenerate: false };
+  const briefing = aiIntel?.ai_intel?.briefing || "";
+  const prompt = `You are a travel fact-checker. Assess if this intel about ${areaName}, ${stateName||""}, ${countryName} seems accurate:
+"${briefing.slice(0,200)}"
+Return JSON only: {"verified":true,"confidence":0.8,"sources_found":0,"flags":[],"reason":"brief reason","freshness":"current","regenerate":false}`;
+  try {
+    const r = await mistralQueue.call(() => axios.post("https://api.mistral.ai/v1/chat/completions",
+      { model:"mistral-large-latest", messages:[{role:"user",content:prompt}], temperature:0.1, max_tokens:200 },
+      { headers:{ Authorization:`Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type":"application/json" }, timeout:20000 }
+    ));
+    const parsed = repairJson(r.data?.choices?.[0]?.message?.content || "");
+    if (parsed) return { ...parsed, sources_found: parsed.sources_found || 0 };
+  } catch(e) {
+    if (e.isKeyError) return { verified: true, confidence: 0.5, sources_found: 0, reason: "Key error", regenerate: false };
+  }
+  return { verified: true, confidence: 0.5, sources_found: 0, reason: "Verification unavailable", regenerate: false };
+}
+
+async function runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso) {
+  const country = COUNTRIES.find(c => c.iso === countryIso || c.name === countryName);
+  const continent = country?.continent || "";
+  const iso2 = ISO3_TO_ISO2[countryIso || ""] || "US";
+  let coords = null;
+  try { coords = await geocodePlace(`${areaName}${stateName ? ", "+stateName : ""}`, countryName); } catch(e) {}
+  if (!coords && countryIso) coords = geoCoordCache[countryIso] || null;
+
+  const safe = async (fn, fallback) => { try { return await fn(); } catch(e) { return fallback; } };
+  const [weather, newsRaw, photos, waqiData, places, eventsRaw] = await Promise.all([
+    coords ? safe(() => fetchWeatherByCoords(coords.lat, coords.lon), { now:null, forecast:[] }) : Promise.resolve({ now:null, forecast:[] }),
+    safe(() => fetchGoogleNewsByQuery(`"${areaName}" "${countryName}"`, iso2), []),
+    safe(() => fetchUnsplash(`${areaName} ${countryName}`), []),
+    coords ? safe(() => fetchWAQIByCoords(coords.lat, coords.lon, areaName), null) : Promise.resolve(null),
+    coords ? safe(() => fetchPlacesByCoords(coords.lat, coords.lon), []) : Promise.resolve([]),
+    safe(() => fetchGoogleNewsByQuery(`"${areaName}" events festival 2025 2026`, iso2), []),
+  ]);
+
+  const rawData = { weather, news: newsRaw, places, airQuality: waqiData, events: eventsRaw };
+  let finalIntel = null;
+  let verificationResult = { verified: true, confidence: 0.5, sources_found: 0, reason: "Mistral unavailable", regenerate: false };
+  const MAX_ATTEMPTS = mistralAvailable() ? 3 : 0;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const aiIntel = await runMistralForArea(areaName, stateName, countryName, continent, rawData);
+    if (!aiIntel) { if (!mistralAvailable()) break; if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 10000)); continue; }
+    verificationResult = await verifyAreaIntel(areaName, stateName, countryName, aiIntel);
+    if (verificationResult.regenerate && attempt < MAX_ATTEMPTS) { await new Promise(r => setTimeout(r, 8000)); continue; }
+    finalIntel = aiIntel; break;
+  }
+
+  const nextUpdate = new Date(Date.now() + AREA_INTEL_REFRESH_MS).toISOString();
+  const cacheKey = `${areaName}||${stateName||""}||${countryName}`;
+  const fi = finalIntel || {}; const ai = fi.ai_intel || {};
+
+  const record = {
+    area_name: areaName, state_name: stateName||null, country_name: countryName,
+    country_iso: countryIso||null, continent, last_updated: new Date().toISOString(),
+    next_update_at: nextUpdate, lat: coords?.lat||null, lon: coords?.lon||null,
+    verification_score: verificationResult?.confidence||0,
+    verification_sources: verificationResult?.sources_found||0,
+    verification_flags: verificationResult?.flags||[],
+    verification_result: verificationResult||null,
+    ai_geography: fi.geography||null, ai_weather: fi.weather||null,
+    ai_history_culture: fi.history_culture||null, ai_food_drink: fi.food_drink||null,
+    ai_accommodation: fi.accommodation||null, ai_transport: fi.transport||null,
+    ai_cost_of_living: fi.cost_of_living||null, ai_health: fi.health||null,
+    ai_safety: fi.safety||null, ai_nightlife: fi.nightlife_entertainment||null,
+    ai_attractions: fi.attractions||null, ai_shopping: fi.shopping||null,
+    ai_connectivity: fi.connectivity||null, ai_languages: fi.languages||null,
+    ai_events: fi.events||null, ai_visa: fi.visa||null,
+    ai_briefing: ai.briefing||null, ai_vibe: ai.vibe||null,
+    ai_hidden_gem: ai.hidden_gem||null, ai_best_time: ai.best_time||null,
+    ai_avoid_if: ai.avoid_if||null, ai_trending: ai.trending_topic||null,
+    ai_recommendations: ai.recommendations||[], ai_local_tips: ai.local_tip?[ai.local_tip]:[],
+    ai_packing_list: ai.packing_list||[],
+    ai_cost_estimate: ai.cost_3day_trip_usd?{three_day_usd:ai.cost_3day_trip_usd}:null,
+    ai_day_itinerary: ai.day_itinerary||null, ai_sensory_description: ai.sensory||null,
+    ai_traveler_scores: ai.traveler_scores||null, ai_sub_areas: ai.sub_areas||[],
+    ai_etiquette: fi.history_culture?.etiquette||[], ai_culture: fi.history_culture||null,
+    ai_history: fi.history_culture||null, ai_finance: fi.cost_of_living||null,
+    ai_climate: fi.weather||null,
+    photos: (photos||[]).slice(0,9), news: newsRaw||[], events_data: eventsRaw||[],
+    weather_now: weather?.now||null, weather_forecast: weather?.forecast||[],
+    top_places: places||[], mistral_available: mistralAvailable(),
+  };
+
+  try {
+    const { error } = await supabase.from("area_intel")
+      .upsert(record, { onConflict: "area_name,state_name,country_name" });
+    if (error) console.error(`[AreaPipeline] DB error for ${areaName}:`, error.message);
+    else console.log(`[AreaPipeline] ✓ ${areaName} stored ${finalIntel ? 'with AI' : '(no AI)'}`);
+  } catch(e) { console.error(`[AreaPipeline] ${areaName}:`, e.message); }
+
+  areaIntelMemCache[cacheKey] = record;
+  return record;
+}
+
+async function generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso) {
+  return runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso);
+}
+
+async function getOrGenerateAreaIntel(areaName, stateName, countryName, countryIso) {
+  const cacheKey = `${areaName}||${stateName||''}||${countryName}`;
+  if (areaIntelMemCache[cacheKey] && !areaIntelNeedsRefresh(areaIntelMemCache[cacheKey]))
+    return { data: areaIntelMemCache[cacheKey], fresh: true, source: 'memory' };
+  try {
+    const q = supabase.from("area_intel").select("*").eq("area_name", areaName).eq("country_name", countryName);
+    if (stateName) q.eq("state_name", stateName);
+    const { data } = await q.maybeSingle();
+    if (data) {
+      areaIntelMemCache[cacheKey] = data;
+      const hasAiData = !!(data.ai_briefing || data.ai_vibe || data.ai_recommendations?.length);
+      if (!areaIntelNeedsRefresh(data) && hasAiData) return { data, fresh: true, source: 'db' };
+      generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso).catch(console.error);
+      return { data, fresh: false, source: hasAiData ? 'db_stale' : 'db_no_ai' };
+    }
+  } catch(e) {}
+  const data = await generateAndStoreAreaIntel(areaName, stateName, countryName, countryIso);
+  return { data, fresh: true, source: 'generated' };
 }
 
 // ══════════════════════════════════════════════════════════════════
-// AREA INTEL GENERATOR — Sequential, all areas, with verification
+// GENERATE ALL AREA INTEL
 // ══════════════════════════════════════════════════════════════════
 const areaGenProgress = {
-  running: false,
-  total: 0,
-  done: 0,
-  failed: 0,
-  current: null,
-  startedAt: null,
-  completedAt: null,
-  failedAreas: [],
-  log: [],
+  running: false, total: 0, done: 0, failed: 0, current: null,
+  startedAt: null, completedAt: null, failedAreas: [], log: [],
 };
 
 function agLog(msg) {
@@ -3559,210 +1637,1134 @@ function agLog(msg) {
 
 async function generateAllAreaIntel({ force = false } = {}) {
   if (areaGenProgress.running) { agLog('Already running'); return { skipped: true }; }
-  if (!areaIntelTableExists)   { agLog('area_intel table missing — run geo_migration_v3.sql'); return { error: 'table_missing' }; }
+  if (!areaIntelTableExists) { agLog('area_intel table missing'); return { error: 'table_missing' }; }
 
-  areaGenProgress.running     = true;
-  areaGenProgress.done        = 0;
-  areaGenProgress.failed      = 0;
-  areaGenProgress.failedAreas = [];
-  areaGenProgress.startedAt   = new Date().toISOString();
-  areaGenProgress.completedAt = null;
-  areaGenProgress.log         = [];
+  areaGenProgress.running = true; areaGenProgress.done = 0; areaGenProgress.failed = 0;
+  areaGenProgress.failedAreas = []; areaGenProgress.startedAt = new Date().toISOString();
+  areaGenProgress.completedAt = null; areaGenProgress.log = [];
+
+  if (!mistralAvailable()) {
+    agLog(`⚠️  MISTRAL KEY INVALID — areas saved WITHOUT AI`);
+    agLog(`⚠️  Fix: Render → Environment → MISTRAL_API_KEY`);
+  }
 
   try {
-    // Load ALL area_intel records that need processing
-    // Areas to process = all cities/areas in DB that either:
-    //   (a) have no area_intel record yet, OR
-    //   (b) have an area_intel record with null ai_briefing (force=false skips fully-generated ones)
-    agLog('Loading areas from DB...');
-
-    // Get all areas from areas table
-    let allAreas = [];
-    let page = 0;
+    let allAreas = []; let page = 0;
     while (true) {
-      const { data: batch, error } = await supabase
-        .from('areas')
-        .select('id, name, state_id, country_iso')
+      const { data: batch, error } = await supabase.from('areas').select('id,name,state_id,country_iso')
         .range(page * 1000, (page + 1) * 1000 - 1);
       if (error || !batch || batch.length === 0) break;
       allAreas = allAreas.concat(batch);
       if (batch.length < 1000) break;
       page++;
     }
-    agLog(`Loaded ${allAreas.length} total areas from DB`);
+    agLog(`Loaded ${allAreas.length} areas`);
+    if (!allAreas.length) { areaGenProgress.running = false; return { error: 'no_areas' }; }
 
-    if (allAreas.length === 0) {
-      agLog('No areas in DB — run Geo pipeline first');
-      areaGenProgress.running = false;
-      return { error: 'no_areas' };
-    }
-
-    // Get state names for all area state_ids
     const stateIdSet = [...new Set(allAreas.map(a => a.state_id).filter(Boolean))];
     const stateMap = {};
     for (let i = 0; i < stateIdSet.length; i += 500) {
-      const { data: states } = await supabase
-        .from('states')
-        .select('id, name, country_iso')
+      const { data: states } = await supabase.from('states').select('id,name,country_iso')
         .in('id', stateIdSet.slice(i, i + 500));
       (states || []).forEach(s => stateMap[s.id] = s);
     }
-    agLog(`Loaded names for ${Object.keys(stateMap).length} states`);
 
-    // Get which areas already have AI intel (unless force=true)
     let toProcess = allAreas;
     if (!force) {
-      let doneKeys = new Set();
-      let iPage = 0;
+      const doneKeys = new Set(); let iPage = 0;
       while (true) {
-        const { data: existing } = await supabase
-          .from('area_intel')
-          .select('area_name, state_name, country_name')
-          .not('ai_briefing', 'is', null)
-          .range(iPage * 1000, (iPage + 1) * 1000 - 1);
+        let q = supabase.from('area_intel').select('area_name,state_name,country_name');
+        if (mistralAvailable()) q = q.not('ai_briefing', 'is', null);
+        q = q.range(iPage * 1000, (iPage + 1) * 1000 - 1);
+        const { data: existing } = await q;
         if (!existing || existing.length === 0) break;
-        existing.forEach(e => doneKeys.add(`${e.area_name}||${e.state_name || ''}||${e.country_name}`));
+        existing.forEach(e => doneKeys.add(`${e.area_name}||${e.state_name||''}||${e.country_name}`));
         if (existing.length < 1000) break;
         iPage++;
       }
-
       toProcess = allAreas.filter(a => {
-        const state    = stateMap[a.state_id];
-        const country  = COUNTRIES.find(c => c.iso === (a.country_iso || state?.country_iso));
-        const key = `${a.name}||${state?.name || ''}||${country?.name || ''}`;
-        return !doneKeys.has(key);
+        const state = stateMap[a.state_id];
+        const country = COUNTRIES.find(c => c.iso === (a.country_iso || state?.country_iso));
+        return !doneKeys.has(`${a.name}||${state?.name||''}||${country?.name||''}`);
       });
-      agLog(`${doneKeys.size} areas already have intel — ${toProcess.length} need generation`);
     }
 
     areaGenProgress.total = toProcess.length;
     agLog(`Starting: ${toProcess.length} areas to process`);
 
-    // Process ONE AT A TIME sequentially
     for (let i = 0; i < toProcess.length; i++) {
       if (!areaGenProgress.running) { agLog('Stopped by user'); break; }
-
-      const area    = toProcess[i];
-      const state   = stateMap[area.state_id];
+      const area = toProcess[i];
+      const state = stateMap[area.state_id];
       const country = COUNTRIES.find(c => c.iso === (area.country_iso || state?.country_iso));
       if (!country) { areaGenProgress.done++; continue; }
 
-      const areaName    = area.name;
-      const stateName   = state?.name   || null;
-      const countryName = country.name;
-      const countryIso  = country.iso;
-
-      areaGenProgress.current = `${areaName}, ${stateName || countryName} (${i+1}/${toProcess.length})`;
-      agLog(`Processing ${areaName} [${countryIso}]`);
+      areaGenProgress.current = `${area.name}, ${state?.name||country.name} (${i+1}/${toProcess.length})`;
+      agLog(`Processing ${area.name} [${country.iso}]`);
 
       let success = false;
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      const maxAttempts = mistralAvailable() ? 3 : 1;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          const result = await runFullAreaIntelPipeline(areaName, stateName, countryName, countryIso);
-          if (result && result.ai_briefing) {
-            agLog(`✅ ${areaName} — intel stored (verified=${result.verification_score >= 0.6})`);
-            success = true;
+          const result = await runFullAreaIntelPipeline(area.name, state?.name||null, country.name, country.iso);
+          if (result) {
+            agLog(`✅ ${area.name} — stored ${result.ai_briefing ? 'with AI' : 'without AI'}`);
+            success = true; break;
+          }
+          if (!mistralAvailable()) break;
+          if (attempt < maxAttempts) await new Promise(r => setTimeout(r, mistralQueue._backoff_ms > 0 ? mistralQueue._backoff_ms + 6000 : 8000));
+        } catch(e) {
+          if (e.isKeyError) {
+            agLog(`⚠️  Key error — switching to non-AI mode`);
+            try { const r = await runFullAreaIntelPipeline(area.name, state?.name||null, country.name, country.iso); if (r) success = true; } catch(e2) {}
             break;
           }
-          if (attempt < 3) {
-            const wait = mistralQueue._backoff_ms > 0 ? mistralQueue._backoff_ms + 6000 : 8000;
-            agLog(`⚠ ${areaName} attempt ${attempt}: no AI data — waiting ${Math.round(wait/1000)}s`);
-            await new Promise(r => setTimeout(r, wait));
-          }
-        } catch(e) {
-          const msg = e.message?.slice(0,80) || 'error';
-          if (attempt < 3) {
-            agLog(`⚠ ${areaName} attempt ${attempt} error: ${msg}`);
-            await new Promise(r => setTimeout(r, 10000));
-          } else {
-            agLog(`❌ ${areaName} failed: ${msg}`);
-          }
+          if (attempt >= maxAttempts) agLog(`❌ ${area.name}: ${e.message?.slice(0,60)}`);
+          else await new Promise(r => setTimeout(r, 10000));
         }
       }
 
-      if (!success) {
-        areaGenProgress.failed++;
-        areaGenProgress.failedAreas.push(areaName);
-      }
+      if (!success) { areaGenProgress.failed++; areaGenProgress.failedAreas.push(area.name); }
       areaGenProgress.done++;
-
-      // 6s between areas (Mistral rate limit via queue)
-      if (i < toProcess.length - 1) {
-        await new Promise(r => setTimeout(r, 6000));
-      }
+      if (i < toProcess.length - 1) await new Promise(r => setTimeout(r, mistralAvailable() ? 6000 : 300));
     }
 
-    // Retry failed areas once
-    if (areaGenProgress.failedAreas.length > 0 && areaGenProgress.running) {
-      agLog(`🔄 Retrying ${areaGenProgress.failedAreas.length} failed areas…`);
-      const retryNames = new Set(areaGenProgress.failedAreas);
-      areaGenProgress.failedAreas = [];
-
-      for (const area of allAreas.filter(a => retryNames.has(a.name))) {
-        if (!areaGenProgress.running) break;
-        const state   = stateMap[area.state_id];
-        const country = COUNTRIES.find(c => c.iso === (area.country_iso || state?.country_iso));
-        if (!country) continue;
-        areaGenProgress.current = `RETRY: ${area.name}`;
-        await new Promise(r => setTimeout(r, 30000));
-        try {
-          const result = await runFullAreaIntelPipeline(area.name, state?.name || null, country.name, country.iso);
-          if (result?.ai_briefing) { agLog(`✅ RETRY OK: ${area.name}`); }
-          else { areaGenProgress.failedAreas.push(area.name); agLog(`❌ RETRY FAILED: ${area.name}`); }
-        } catch(e) {
-          areaGenProgress.failedAreas.push(area.name);
-          agLog(`❌ RETRY ERROR: ${area.name}: ${e.message?.slice(0,60)}`);
-        }
-      }
-    }
-
-    agLog(`Complete — ${areaGenProgress.done} done, ${areaGenProgress.failedAreas.length} still failed`);
+    agLog(`Complete — ${areaGenProgress.done} done, ${areaGenProgress.failedAreas.length} failed`);
     areaGenProgress.completedAt = new Date().toISOString();
-  } catch(e) {
-    agLog(`Fatal error: ${e.message}`);
-  }
+  } catch(e) { agLog(`Fatal error: ${e.message}`); }
 
-  areaGenProgress.running = false;
-  areaGenProgress.current = null;
+  areaGenProgress.running = false; areaGenProgress.current = null;
   return { done: areaGenProgress.done, failed: areaGenProgress.failedAreas.length };
 }
 
-async function preGenerateMissingAreaIntel() {
-  return generateAllAreaIntel({ force: false });
+async function preGenerateMissingAreaIntel() { return generateAllAreaIntel({ force: false }); }
+
+
+// ══════════════════════════════════════════════════════════════════
+// GEO PIPELINE — Save states/areas from API responses
+// ══════════════════════════════════════════════════════════════════
+let stateIntelTableExists = false;
+let areaIntelTableExists  = false;
+
+async function checkTablesExist() {
+  try {
+    const { error: se } = await supabase.from("state_intel").select("state_id").limit(1);
+    stateIntelTableExists = !se;
+  } catch(e) { stateIntelTableExists = false; }
+  try {
+    const { error: ae } = await supabase.from("area_intel").select("id").limit(1);
+    areaIntelTableExists = !ae;
+  } catch(e) { areaIntelTableExists = false; }
+  console.log(`[Tables] state_intel: ${stateIntelTableExists}, area_intel: ${areaIntelTableExists}`);
 }
 
-const PORT = process.env.PORT||3000;
-app.listen(PORT, async()=>{
-  console.log(`GlobeVoyage API on port ${PORT} — ${COUNTRIES.length} countries`);
-  console.log(`HARDCODED_GEO: ${Object.keys(HARDCODED_GEO).length} countries loaded`);
-  await ensureScripts();
-  await checkTables();
+const geoPipelineProgress = {
+  running: false, phase: null, total: 0, done: 0, current: null,
+  startedAt: null, completedAt: null, log: [],
+};
 
-  console.log("Pre-warming texture cache...");
-  for(const [name, url] of Object.entries(TEXTURES)) {
-    axios.get(url,{responseType:"arraybuffer",timeout:20000,headers:{"User-Agent":"GlobeVoyage/2.0"}})
-      .then(r=>{textureCache[name]=Buffer.from(r.data);console.log(`✓ Texture cached: ${name} (${Math.round(textureCache[name].length/1024)}kb)`);})
-      .catch(e=>{ if(name==="earth-clouds")console.log(`ℹ Clouds texture unavailable`); else console.error(`✗ Texture failed: ${name}`,e.message); });
+function gpLog(msg) {
+  const line = `[${new Date().toISOString().slice(11,19)}] ${msg}`;
+  console.log('[GeoPipeline]', msg);
+  geoPipelineProgress.log = [line, ...geoPipelineProgress.log].slice(0, 200);
+}
+
+async function saveStatesFromResponse(countryIso, countryName, stateNames) {
+  if (!stateNames || stateNames.length === 0) return 0;
+  const valid = stateNames.filter(n => n && n.length > 1 && n.length < 100);
+  if (!valid.length) return 0;
+
+  const rows = valid.map(name => ({
+    name, country_iso: countryIso,
+    state_code: name.slice(0,3).toUpperCase().replace(/\s/g,''),
+  }));
+
+  let saved = 0;
+  for (let i = 0; i < rows.length; i += 50) {
+    const batch = rows.slice(i, i + 50);
+    try {
+      const { error } = await supabase.from("states")
+        .upsert(batch, { onConflict: "name,country_iso", ignoreDuplicates: true });
+      if (!error) saved += batch.length;
+      else console.error(`[GeoSave] states batch error:`, error.message);
+    } catch(e) { console.error(`[GeoSave] states batch exception:`, e.message); }
+  }
+  return saved;
+}
+
+async function saveAreasFromResponse(stateId, countryIso, areaNames) {
+  if (!areaNames || areaNames.length === 0) return 0;
+  const valid = areaNames.filter(n => n && isValidCityName(n, null, null));
+  if (!valid.length) return 0;
+
+  const rows = valid.map(name => ({
+    name, state_id: stateId, country_iso: countryIso, type: "city",
+  }));
+
+  let saved = 0;
+  for (let i = 0; i < rows.length; i += 100) {
+    const batch = rows.slice(i, i + 100);
+    try {
+      const { error } = await supabase.from("areas")
+        .upsert(batch, { onConflict: "name,state_id", ignoreDuplicates: true });
+      if (!error) saved += batch.length;
+      else console.error(`[GeoSave] areas batch error:`, error.message);
+    } catch(e) { console.error(`[GeoSave] areas batch exception:`, e.message); }
+  }
+  return saved;
+}
+
+async function fetchAndSaveStates(country) {
+  const { iso, name: countryName } = country;
+  gpLog(`[States] Processing ${countryName}`);
+
+  // 1. Try hardcoded geo first
+  const hardcodedStates = getHardcodedStates(countryName);
+  if (hardcodedStates.length > 0) {
+    const saved = await saveStatesFromResponse(iso, countryName, hardcodedStates);
+    gpLog(`[States] ${countryName}: ${saved} from hardcoded`);
+    return saved;
   }
 
-  setTimeout(runStartupPipeline, 15000);
-  setTimeout(resumeGeoPipelineIfIncomplete, 30000);
-  // Pre-generate state intel for states that don't have it yet (runs 90s after boot)
-  setTimeout(() => generateAllStateIntel({ force: false }).catch(console.error), 90000);
-  // Area pregen runs only after state gen finishes (check every 10 min)
-  setTimeout(function checkAndRunAreaPregen() {
-    if (!stateGenProgress.running) {
-      preGenerateMissingAreaIntel().catch(console.error);
-    } else {
-      setTimeout(checkAndRunAreaPregen, 10 * 60 * 1000);
+  // 2. Try REST Countries API
+  try {
+    const r = await axios.get(`https://restcountries.com/v3.1/alpha/${ISO3_TO_ISO2[iso]||iso}`, { timeout: 8000 });
+    const c = r.data?.[0];
+    if (c?.subdivisions?.length > 0) {
+      const names = c.subdivisions.map(s => s.name).filter(Boolean);
+      const saved = await saveStatesFromResponse(iso, countryName, names);
+      gpLog(`[States] ${countryName}: ${saved} from REST Countries`);
+      return saved;
     }
-  }, 10 * 60 * 1000);
+  } catch(e) {}
 
-  // Start background area intel refresh after 5 minutes
-  setTimeout(() => {
-    if(areaIntelTableExists) {
-      console.log("[AreaIntel] Starting background refresh scheduler...");
-      refreshStaleAreaIntel().catch(console.error);
+  // 3. Fallback: use capital as single "state"
+  const capital = COUNTRIES.find(c => c.iso === iso)?.capital || countryName;
+  const saved = await saveStatesFromResponse(iso, countryName, [countryName + " Region"]);
+  gpLog(`[States] ${countryName}: saved fallback region`);
+  return saved;
+}
+
+async function fetchAndSaveAreas(state, countryName) {
+  const stateAreas = getHardcodedAreas(state.name, countryName);
+  if (stateAreas.length > 0) {
+    const saved = await saveAreasFromResponse(state.id, state.country_iso, stateAreas);
+    return saved;
+  }
+  // Fallback: save state name as area
+  await saveAreasFromResponse(state.id, state.country_iso, [state.name]);
+  return 1;
+}
+
+async function runGeoPipeline({ countriesOnly = false } = {}) {
+  if (geoPipelineProgress.running) { gpLog('Already running'); return { skipped: true }; }
+  geoPipelineProgress.running = true;
+  geoPipelineProgress.startedAt = new Date().toISOString();
+  geoPipelineProgress.completedAt = null;
+  geoPipelineProgress.log = [];
+
+  try {
+    // Phase 1: Save all countries
+    gpLog(`Phase 1: Saving ${COUNTRIES.length} countries`);
+    geoPipelineProgress.phase = "countries";
+    geoPipelineProgress.total = COUNTRIES.length;
+    geoPipelineProgress.done  = 0;
+
+    for (let i = 0; i < COUNTRIES.length; i += 50) {
+      const batch = COUNTRIES.slice(i, i + 50).map(c => ({
+        iso: c.iso, name: c.name, continent: c.continent,
+        iso2: ISO3_TO_ISO2[c.iso] || null,
+        lat: geoCoordCache[c.iso]?.lat || null,
+        lon: geoCoordCache[c.iso]?.lon || null,
+      }));
+      const { error } = await supabase.from("countries")
+        .upsert(batch, { onConflict: "iso", ignoreDuplicates: false });
+      if (error) gpLog(`Countries batch error: ${error.message}`);
+      geoPipelineProgress.done += batch.length;
     }
-  }, 5 * 60 * 1000);
+    gpLog(`✓ Countries saved`);
+
+    if (countriesOnly) {
+      geoPipelineProgress.running = false;
+      geoPipelineProgress.completedAt = new Date().toISOString();
+      return { done: true };
+    }
+
+    // Phase 2: States
+    gpLog(`Phase 2: Saving states for ${COUNTRIES.length} countries`);
+    geoPipelineProgress.phase = "states";
+    geoPipelineProgress.total = COUNTRIES.length;
+    geoPipelineProgress.done  = 0;
+
+    for (const country of COUNTRIES) {
+      if (!geoPipelineProgress.running) break;
+      geoPipelineProgress.current = country.name;
+      await fetchAndSaveStates(country);
+      geoPipelineProgress.done++;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    gpLog(`✓ States phase complete`);
+
+    // Phase 3: Areas
+    gpLog(`Phase 3: Saving areas`);
+    geoPipelineProgress.phase = "areas";
+
+    let allStates = []; let page = 0;
+    while (true) {
+      const { data: batch } = await supabase.from('states').select('id,name,country_iso')
+        .range(page * 1000, (page + 1) * 1000 - 1);
+      if (!batch || batch.length === 0) break;
+      allStates = allStates.concat(batch);
+      if (batch.length < 1000) break;
+      page++;
+    }
+    gpLog(`Loaded ${allStates.length} states for area phase`);
+    geoPipelineProgress.total = allStates.length;
+    geoPipelineProgress.done  = 0;
+
+    for (const state of allStates) {
+      if (!geoPipelineProgress.running) break;
+      const country = COUNTRIES.find(c => c.iso === state.country_iso);
+      if (!country) { geoPipelineProgress.done++; continue; }
+      geoPipelineProgress.current = `${state.name}, ${country.name}`;
+      await fetchAndSaveAreas(state, country.name);
+      geoPipelineProgress.done++;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    gpLog(`✓ Areas phase complete`);
+
+    geoPipelineProgress.completedAt = new Date().toISOString();
+    gpLog(`🎉 Geo pipeline complete`);
+  } catch(e) {
+    gpLog(`Fatal error: ${e.message}`);
+  }
+
+  geoPipelineProgress.running = false;
+  geoPipelineProgress.current = null;
+  return { done: true };
+}
+
+async function resumeGeoPipelineIfIncomplete() {
+  try {
+    const { count: countryCount } = await supabase.from("countries").select("*", { count:"exact", head:true });
+    const { count: stateCount }   = await supabase.from("states").select("*", { count:"exact", head:true });
+    const { count: areaCount }    = await supabase.from("areas").select("*", { count:"exact", head:true });
+
+    console.log(`[GeoResume] countries=${countryCount}, states=${stateCount}, areas=${areaCount}`);
+
+    if (!countryCount || countryCount < 100) {
+      console.log("[GeoResume] Countries incomplete — running geo pipeline");
+      runGeoPipeline().catch(console.error);
+    } else if (!stateCount || stateCount < 500) {
+      console.log("[GeoResume] States incomplete — running geo pipeline");
+      runGeoPipeline().catch(console.error);
+    } else if (!areaCount || areaCount < 5000) {
+      console.log("[GeoResume] Areas incomplete — running geo pipeline");
+      runGeoPipeline().catch(console.error);
+    } else {
+      console.log("[GeoResume] Geo data looks complete ✓");
+    }
+  } catch(e) {
+    console.error("[GeoResume] Check failed:", e.message);
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════════
+// COUNTRY INTEL PIPELINE
+// ══════════════════════════════════════════════════════════════════
+const countryIntelCache = {};
+const COUNTRY_INTEL_REFRESH_MS = 12 * 60 * 60 * 1000;
+
+function countryIntelNeedsRefresh(intel) {
+  if (!intel) return true;
+  if (!intel.next_update_at) return true;
+  return new Date(intel.next_update_at).getTime() < Date.now();
+}
+
+async function runCountryPipeline(iso) {
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return null;
+  const { name: countryName, continent } = country;
+  console.log(`[CountryPipeline] Starting for ${countryName}`);
+
+  const safe = async (fn, fallback) => { try { return await fn(); } catch(e) { return fallback; } };
+
+  const [wiki, wikivoyage, weather, news, googleNews, events, places, airQuality, flights,
+         costOfLiving, restCountries, booking, tripadvisor, flightPrices, currencyRates,
+         googlePlaces, travelAdvisor, hotelDeals, youtubeVideos, nationalNews, socialTrends, gdacs, photos] =
+    await Promise.all([
+      safe(() => fetchWikipedia(countryName), null),
+      safe(() => fetchWikivoyage(countryName), null),
+      safe(() => fetchWeather(countryName), { now:null, forecast:[] }),
+      safe(() => fetchNews(countryName, iso), []),
+      safe(() => fetchGoogleNews(countryName), []),
+      safe(() => fetchTicketmaster(countryName, ISO3_TO_ISO2[iso]||""), []),
+      safe(() => fetchFoursquare(countryName, iso), []),
+      safe(() => fetchWAQI(countryName, iso), null),
+      safe(() => fetchFlights(countryName, iso), null),
+      safe(() => fetchCostOfLiving(countryName), null),
+      safe(() => fetchRestCountries(ISO3_TO_ISO2[iso]||iso), null),
+      safe(() => fetchBooking(countryName, iso), null),
+      safe(() => fetchTripadvisor(countryName, iso), null),
+      safe(() => fetchFlightPrices(countryName, iso), null),
+      safe(() => fetchCurrencyRates(iso), null),
+      safe(() => fetchGooglePlaces(countryName, iso), null),
+      safe(() => fetchTravelAdvisor(countryName, iso), null),
+      safe(() => fetchHotelDeals(countryName, iso), null),
+      safe(() => fetchYoutubeVideos(countryName, iso), null),
+      safe(() => fetchNationalNews(countryName, iso), []),
+      safe(() => fetchSocialTrends(countryName), []),
+      safe(() => fetchGDACS(countryName), []),
+      safe(() => fetchUnsplash(`${countryName} travel landscape`), []),
+    ]);
+
+  const allNews = [...(news||[]), ...(googleNews||[]), ...(nationalNews||[])].slice(0, 15);
+  const allEvents = [...(events||[])].slice(0, 10);
+  const rawData = { wiki, wikivoyage, weather, news: allNews, events: allEvents, places, airQuality, flights, costOfLiving, restCountries };
+
+  let ai = null;
+  if (mistralAvailable()) {
+    ai = await safe(() => runMistral(countryName, iso, rawData), null);
+  } else {
+    console.log(`[CountryPipeline] Skipping Mistral for ${countryName} — key invalid`);
+  }
+
+  const coords = geoCoordCache[iso] || { lat: 0, lon: 0 };
+  const nextUpdate = new Date(Date.now() + COUNTRY_INTEL_REFRESH_MS).toISOString();
+
+  const intel = {
+    iso, country_name: countryName, continent,
+    last_updated: new Date().toISOString(), next_update_at: nextUpdate,
+    lat: coords.lat, lon: coords.lon,
+    // Raw data
+    weather_now: weather?.now||null, weather_forecast: weather?.forecast||[],
+    news_headlines: allNews, photos: (photos||[]).slice(0,9),
+    events: allEvents, top_places: places||[],
+    air_quality: airQuality||null, flights: flights||null,
+    cost_of_living: costOfLiving||null, rest_countries: restCountries||null,
+    booking_data: booking||null, tripadvisor_data: tripadvisor||null,
+    flight_prices: flightPrices||null, currency_rates: currencyRates||null,
+    google_places: googlePlaces||null, travel_advisor: travelAdvisor||null,
+    hotel_deals: hotelDeals||null, youtube_videos: youtubeVideos||null,
+    social_trends: socialTrends||null, disasters: gdacs||null,
+    wikipedia: wiki||null, wikivoyage: wikivoyage||null,
+    // AI fields
+    ai_briefing: ai?.briefing||null, ai_vibe: ai?.vibe||null,
+    ai_recommendations: ai?.recommendations||[],
+    ai_safety_summary: ai?.safety_summary||null,
+    ai_best_months: ai?.best_months||[],
+    ai_hidden_gem: ai?.hidden_gem||null,
+    ai_trending_now: ai?.trending_now||[],
+    ai_avoid_if: ai?.avoid_if||null,
+    ai_cost_estimate: ai?.cost_estimate||null,
+    ai_local_tips: ai?.local_tips||[],
+    ai_day_itinerary: ai?.day_itinerary||null,
+    ai_sensory_description: ai?.sensory_description||null,
+    ai_climate_info: ai?.climate_summary?{summary:ai.climate_summary}:null,
+    ai_transport_info: ai?.transport_overview?{overview:ai.transport_overview}:null,
+    ai_food_scene: ai?.food_scene?{overview:ai.food_scene}:null,
+    ai_history: ai?.history_brief?{overview:ai.history_brief}:null,
+    ai_culture: ai?.culture_brief?{overview:ai.culture_brief}:null,
+    ai_health_info: ai?.health_overview?{overview:ai.health_overview}:null,
+    ai_connectivity: ai?.connectivity_overview?{overview:ai.connectivity_overview}:null,
+    ai_shopping: ai?.shopping_overview?{overview:ai.shopping_overview}:null,
+    ai_nightlife: ai?.nightlife_overview?{overview:ai.nightlife_overview}:null,
+    ai_accommodation: ai?.accommodation_overview?{overview:ai.accommodation_overview}:null,
+    ai_safety_detail: ai?.safety_detail||null,
+    ai_traveler_scores: ai?.traveler_scores||null,
+    mistral_available: mistralAvailable(),
+  };
+
+  try {
+    const { error } = await supabase.from("country_intel")
+      .upsert(intel, { onConflict: "iso" });
+    if (error) console.error(`[CountryPipeline] DB error:`, error.message);
+    else console.log(`[CountryPipeline] ✓ ${countryName} saved ${ai ? 'with AI' : '(no AI)'}`);
+  } catch(e) { console.error(`[CountryPipeline] ${countryName}:`, e.message); }
+
+  countryIntelCache[iso] = intel;
+  return intel;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// MAIN PIPELINE — Run all countries sequentially
+// ══════════════════════════════════════════════════════════════════
+const pipelineLog = [];
+function pLog(msg) {
+  const line = `[${new Date().toISOString().slice(11,19)}] ${msg}`;
+  console.log('[Pipeline]', msg);
+  pipelineLog.unshift(line);
+  if (pipelineLog.length > 200) pipelineLog.pop();
+}
+
+async function runPipeline({ isos = null, force = false } = {}) {
+  if (pipelineStatus.running) { pLog('Already running'); return; }
+  pipelineStatus.running = true;
+  pipelineStatus.lastRunAt = new Date().toISOString();
+  pipelineStatus.lastRunName = isos ? `custom(${isos.length})` : 'all';
+
+  if (!mistralAvailable()) {
+    pLog(`⚠️  Mistral key invalid — countries saved WITHOUT AI intel`);
+    pLog(`⚠️  Fix: Render → Environment → MISTRAL_API_KEY`);
+  }
+
+  const targets = isos
+    ? COUNTRIES.filter(c => isos.includes(c.iso))
+    : COUNTRIES;
+
+  pLog(`Starting pipeline: ${targets.length} countries`);
+  let done = 0, failed = 0;
+
+  // Hot countries first
+  const hot = targets.filter(c => HOT_ISOS.has(c.iso));
+  const rest = targets.filter(c => !HOT_ISOS.has(c.iso));
+  const ordered = [...hot, ...rest];
+
+  for (const country of ordered) {
+    if (!pipelineStatus.running) { pLog('Stopped'); break; }
+    try {
+      if (!force) {
+        const cached = countryIntelCache[country.iso];
+        if (cached && !countryIntelNeedsRefresh(cached)) { pLog(`⏭ ${country.name} (cached)`); done++; continue; }
+        // Check DB
+        const { data: existing } = await supabase.from("country_intel")
+          .select("iso,next_update_at,ai_briefing").eq("iso", country.iso).maybeSingle();
+        if (existing && !countryIntelNeedsRefresh(existing) && existing.ai_briefing) {
+          pLog(`⏭ ${country.name} (DB fresh)`); countryIntelCache[country.iso] = existing; done++; continue;
+        }
+      }
+      pLog(`Processing ${country.name}`);
+      await runCountryPipeline(country.iso);
+      done++;
+      pipelineStatus.countriesLastRun = done;
+    } catch(e) {
+      pLog(`❌ ${country.name}: ${e.message?.slice(0,60)}`);
+      failed++;
+    }
+    await new Promise(r => setTimeout(r, mistralAvailable() ? 8000 : 1000));
+  }
+
+  pLog(`Pipeline complete — ${done} done, ${failed} failed`);
+  pipelineStatus.running = false;
+}
+
+async function runFullPipeline() {
+  return runPipeline({ force: false });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RESET HELPERS
+// ══════════════════════════════════════════════════════════════════
+const TABLE_PK = { "state_intel":"state_id", "area_intel":"id", "country_intel":"iso", "countries":"iso", "states":"id", "areas":"id" };
+
+async function deleteAllRows(tableName) {
+  const pk = TABLE_PK[tableName] || "id";
+  console.log(`[Reset] Deleting all from ${tableName} (pk=${pk})`);
+  const { error: e1, count: c1 } = await supabase.from(tableName).delete().not(pk, "is", null);
+  if (!e1) { console.log(`[Reset] ✓ ${tableName}: ${c1||0} rows`); return { deleted: c1||0 }; }
+  const { error: e2, count: c2 } = await supabase.from(tableName).delete().gt(pk, 0);
+  if (!e2) { console.log(`[Reset] ✓ ${tableName}: ${c2||0} rows`); return { deleted: c2||0 }; }
+  // Batch fallback
+  let total = 0, bPage = 0;
+  while (true) {
+    const { data: rows } = await supabase.from(tableName).select(pk).range(bPage*500,(bPage+1)*500-1);
+    if (!rows || rows.length === 0) break;
+    const ids = rows.map(r => r[pk]);
+    const { count: dc } = await supabase.from(tableName).delete().in(pk, ids);
+    total += dc || ids.length;
+    if (rows.length < 500) break;
+    bPage++;
+  }
+  return { deleted: total };
+}
+
+function resetGenProgress() {
+  stateGenProgress.running = false; stateGenProgress.done = 0; stateGenProgress.failed = 0;
+  stateGenProgress.failedStates = []; stateGenProgress.log = [];
+  stateGenProgress.current = null; stateGenProgress.completedAt = null;
+  areaGenProgress.running = false; areaGenProgress.done = 0; areaGenProgress.failed = 0;
+  areaGenProgress.failedAreas = []; areaGenProgress.log = [];
+  areaGenProgress.current = null; areaGenProgress.completedAt = null;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CRON JOBS
+// ══════════════════════════════════════════════════════════════════
+cron.schedule("0 6,14,22 * * *", () => {
+  console.log("[Cron] Scheduled pipeline run");
+  runFullPipeline().catch(console.error);
 });
+
+cron.schedule("0 3 * * *", () => {
+  console.log("[Cron] Nightly state intel refresh");
+  if (!stateGenProgress.running) preGenerateAllStateIntel().catch(console.error);
+});
+
+cron.schedule("0 4 * * 0", () => {
+  console.log("[Cron] Weekly area intel refresh");
+  if (!areaGenProgress.running) preGenerateMissingAreaIntel().catch(console.error);
+});
+
+// ══════════════════════════════════════════════════════════════════
+// STARTUP PIPELINE
+// ══════════════════════════════════════════════════════════════════
+async function runStartupPipeline() {
+  console.log("[Startup] Initializing GlobeVoyage backend…");
+  await checkTablesExist();
+  await ensureScripts();
+
+  // Warn about Mistral key
+  if (!ENV.MISTRAL_API_KEY) {
+    console.error("╔══════════════════════════════════════════════════════════╗");
+    console.error("║  WARNING: MISTRAL_API_KEY is not set                     ║");
+    console.error("║  AI intel will not be generated until key is configured  ║");
+    console.error("║  Set it in Render: Environment → MISTRAL_API_KEY         ║");
+    console.error("╚══════════════════════════════════════════════════════════╝");
+    MISTRAL_KEY_VALID = false;
+  }
+
+  // Resume geo pipeline if incomplete
+  setTimeout(() => resumeGeoPipelineIfIncomplete().catch(console.error), 5000);
+
+  // Run hot countries pipeline after short delay
+  setTimeout(() => {
+    const hotIsos = [...HOT_ISOS];
+    console.log(`[Startup] Running hot-country pipeline (${hotIsos.length} countries)`);
+    runPipeline({ isos: hotIsos, force: false }).catch(console.error);
+  }, 15000);
+
+  console.log("[Startup] ✓ GlobeVoyage backend ready");
+}
+
+
+// ══════════════════════════════════════════════════════════════════
+// EXPRESS ROUTES
+// ══════════════════════════════════════════════════════════════════
+
+// ── Health / Status ──────────────────────────────────────────────
+app.get("/", (req, res) => res.json({ status:"ok", service:"GlobeVoyage API", uptime: process.uptime() }));
+app.get("/health", (req, res) => res.json({ status:"ok", uptime:process.uptime(), boot:serverBoot, pings:pingCount, lastPingAt }));
+app.get("/api/status", (req, res) => res.json({
+  status:"ok", boot:serverBoot, uptime:process.uptime(), pings:pingCount, lastPingAt,
+  pipeline: pipelineStatus, source_health: sourceHealth,
+  mistral: { available:mistralAvailable(), key_configured:!!ENV.MISTRAL_API_KEY, key_valid:MISTRAL_KEY_VALID, error_count:MISTRAL_401_COUNT, first_error_at:MISTRAL_401_AT },
+  tables: { state_intel:stateIntelTableExists, area_intel:areaIntelTableExists },
+  state_gen: { running:stateGenProgress.running, total:stateGenProgress.total, done:stateGenProgress.done, failed:stateGenProgress.failed, current:stateGenProgress.current },
+  area_gen:  { running:areaGenProgress.running,  total:areaGenProgress.total,  done:areaGenProgress.done,  failed:areaGenProgress.failed,  current:areaGenProgress.current },
+}));
+
+// ── Mistral Status (new endpoint) ────────────────────────────────
+app.get("/api/mistral/status", (req, res) => {
+  res.json({
+    key_configured: !!ENV.MISTRAL_API_KEY,
+    key_valid: MISTRAL_KEY_VALID,
+    available: mistralAvailable(),
+    first_401_at: MISTRAL_401_AT,
+    total_401s: MISTRAL_401_COUNT,
+    message: mistralAvailable()
+      ? "Mistral API is operational"
+      : MISTRAL_401_AT
+        ? `Mistral key INVALID — 401 at ${MISTRAL_401_AT}. Fix: Set MISTRAL_API_KEY in Render environment.`
+        : "MISTRAL_API_KEY not set — configure in Render environment variables",
+    fix_instructions: mistralAvailable() ? null : {
+      step1: "Go to https://console.mistral.ai/api-keys",
+      step2: "Create or copy your API key",
+      step3: "Render dashboard → your service → Environment",
+      step4: "Set MISTRAL_API_KEY = your_key_here",
+      step5: "Save Changes — Render redeploys automatically",
+    }
+  });
+});
+app.get("/api/pipeline/mistral-health", (req, res) => res.json({
+  available:mistralAvailable(), key_configured:!!ENV.MISTRAL_API_KEY,
+  key_valid:MISTRAL_KEY_VALID, error_count:MISTRAL_401_COUNT, first_error_at:MISTRAL_401_AT,
+}));
+
+// ── Pipeline controls ────────────────────────────────────────────
+app.post("/api/pipeline/run", async (req, res) => {
+  const { isos, force } = req.body || {};
+  res.json({ started: true });
+  runPipeline({ isos, force: !!force }).catch(console.error);
+});
+app.post("/api/pipeline/stop", (req, res) => {
+  pipelineStatus.running = false;
+  stateGenProgress.running = false;
+  areaGenProgress.running  = false;
+  res.json({ stopped: true });
+});
+app.get("/api/pipeline/log", (req, res) => res.json({ log: pipelineLog }));
+app.get("/api/pipeline/status", (req, res) => res.json(pipelineStatus));
+
+// ── Geo pipeline ─────────────────────────────────────────────────
+app.post("/api/geo/run", async (req, res) => {
+  res.json({ started: true });
+  runGeoPipeline(req.body || {}).catch(console.error);
+});
+app.get("/api/geo/status", (req, res) => res.json(geoPipelineProgress));
+app.get("/api/geo/log",    (req, res) => res.json({ log: geoPipelineProgress.log }));
+
+// ── State intel controls ─────────────────────────────────────────
+app.post("/api/state-intel/generate", async (req, res) => {
+  res.json({ started: true, mistral_available: mistralAvailable() });
+  generateAllStateIntel({ force: !!req.body?.force }).catch(console.error);
+});
+app.post("/api/state-intel/stop", (req, res) => {
+  stateGenProgress.running = false;
+  res.json({ stopped: true });
+});
+app.get("/api/state-intel/progress", (req, res) => res.json({
+  running: stateGenProgress.running, total: stateGenProgress.total,
+  done: stateGenProgress.done, failed: stateGenProgress.failed,
+  current: stateGenProgress.current, startedAt: stateGenProgress.startedAt,
+  completedAt: stateGenProgress.completedAt, failedStates: stateGenProgress.failedStates,
+  log: stateGenProgress.log.slice(0, 30),
+  mistral_available: mistralAvailable(),
+}));
+app.get("/api/state-intel/log", (req, res) => res.json({ log: stateGenProgress.log }));
+
+// ── Area intel controls ──────────────────────────────────────────
+app.post("/api/area-intel/generate", async (req, res) => {
+  res.json({ started: true, mistral_available: mistralAvailable() });
+  generateAllAreaIntel({ force: !!req.body?.force }).catch(console.error);
+});
+app.post("/api/area-intel/stop", (req, res) => {
+  areaGenProgress.running = false;
+  res.json({ stopped: true });
+});
+app.get("/api/area-intel/progress", (req, res) => res.json({
+  running: areaGenProgress.running, total: areaGenProgress.total,
+  done: areaGenProgress.done, failed: areaGenProgress.failed,
+  current: areaGenProgress.current, startedAt: areaGenProgress.startedAt,
+  completedAt: areaGenProgress.completedAt, failedAreas: areaGenProgress.failedAreas,
+  log: areaGenProgress.log.slice(0, 30),
+  mistral_available: mistralAvailable(),
+}));
+app.get("/api/area-intel/log", (req, res) => res.json({ log: areaGenProgress.log }));
+
+// ── Country data ─────────────────────────────────────────────────
+app.get("/api/countries", async (req, res) => {
+  try {
+    const { data, error } = await supabase.from("countries").select("*").order("name");
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ countries: data || COUNTRIES });
+  } catch(e) { res.json({ countries: COUNTRIES }); }
+});
+
+app.get("/api/countries/:iso/intel", async (req, res) => {
+  const { iso } = req.params;
+  try {
+    const cached = countryIntelCache[iso];
+    if (cached && !countryIntelNeedsRefresh(cached)) return res.json(cached);
+    const { data, error } = await supabase.from("country_intel").select("*").eq("iso", iso).maybeSingle();
+    if (data) {
+      countryIntelCache[iso] = data;
+      if (!countryIntelNeedsRefresh(data)) return res.json(data);
+      runCountryPipeline(iso).catch(console.error);
+      return res.json(data);
+    }
+    const fresh = await runCountryPipeline(iso);
+    if (fresh) return res.json(fresh);
+    res.status(404).json({ error: "Country intel not found", iso });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/countries/:iso/refresh", async (req, res) => {
+  const { iso } = req.params;
+  res.json({ started: true, iso });
+  runCountryPipeline(iso).catch(console.error);
+});
+
+// ── States ───────────────────────────────────────────────────────
+app.get("/api/countries/:iso/states", async (req, res) => {
+  const { iso } = req.params;
+  try {
+    const { data, error } = await supabase.from("states").select("*").eq("country_iso", iso).order("name");
+    if (error) return res.status(500).json({ error: error.message });
+    if (data && data.length > 0) return res.json({ states: data });
+    // Fallback to hardcoded
+    const country = COUNTRIES.find(c => c.iso === iso);
+    if (country) {
+      const hardcoded = getHardcodedStates(country.name);
+      return res.json({ states: hardcoded.map((name, i) => ({ id: `hc_${i}`, name, country_iso: iso })), source: "hardcoded" });
+    }
+    res.json({ states: [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/states/:stateId", async (req, res) => {
+  const { stateId } = req.params;
+  try {
+    const { data, error } = await supabase.from("states").select("*").eq("id", stateId).maybeSingle();
+    if (error || !data) return res.status(404).json({ error: "State not found" });
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/states/:stateId/intel", async (req, res) => {
+  const { stateId } = req.params;
+  try {
+    const cached = stateIntelMemCache[stateId];
+    if (cached && !stateIntelNeedsRefresh(cached)) return res.json(cached);
+    const { data } = await supabase.from("state_intel").select("*").eq("state_id", stateId).maybeSingle();
+    if (data) {
+      stateIntelMemCache[stateId] = data;
+      if (!stateIntelNeedsRefresh(data) && (data.ai_briefing || !mistralAvailable())) return res.json(data);
+      runStatePipeline(stateId).catch(console.error);
+      return res.json(data);
+    }
+    const fresh = await runStatePipeline(stateId);
+    if (fresh) return res.json(fresh);
+    res.status(404).json({ error: "State intel not found" });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/states/:stateId/refresh", async (req, res) => {
+  const { stateId } = req.params;
+  res.json({ started: true });
+  runStatePipeline(stateId).catch(console.error);
+});
+
+// ── Areas ────────────────────────────────────────────────────────
+app.get("/api/states/:stateId/areas", async (req, res) => {
+  const { stateId } = req.params;
+  try {
+    const { data, error } = await supabase.from("areas").select("*").eq("state_id", stateId).order("name");
+    if (error) return res.status(500).json({ error: error.message });
+    if (data && data.length > 0) return res.json({ areas: data });
+    // Fallback to hardcoded
+    const { data: state } = await supabase.from("states").select("name,country_iso").eq("id", stateId).maybeSingle();
+    if (state) {
+      const country = COUNTRIES.find(c => c.iso === state.country_iso);
+      const hardcoded = getHardcodedAreas(state.name, country?.name || "");
+      return res.json({ areas: hardcoded.map((name, i) => ({ id:`hc_${i}`, name, state_id:stateId, type:"city" })), source:"hardcoded" });
+    }
+    res.json({ areas: [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/areas/:areaId/intel", async (req, res) => {
+  const { areaId } = req.params;
+  try {
+    // First try numeric id
+    const isNumeric = /^\d+$/.test(areaId);
+    if (isNumeric) {
+      const { data: area } = await supabase.from("areas").select("name,state_id,country_iso").eq("id", areaId).maybeSingle();
+      if (area) {
+        const { data: state } = await supabase.from("states").select("name,country_iso").eq("id", area.state_id).maybeSingle();
+        const country = COUNTRIES.find(c => c.iso === (area.country_iso || state?.country_iso));
+        if (country) {
+          const result = await getOrGenerateAreaIntel(area.name, state?.name||null, country.name, country.iso);
+          return res.json(result.data);
+        }
+      }
+    }
+    res.status(404).json({ error: "Area not found" });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/area-intel/search", async (req, res) => {
+  const { area, state, country, country_iso } = req.query;
+  if (!area || !country) return res.status(400).json({ error: "area and country required" });
+  try {
+    const result = await getOrGenerateAreaIntel(area, state||null, country, country_iso||null);
+    res.json(result.data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Destinations (combined search) ───────────────────────────────
+app.get("/api/destinations", async (req, res) => {
+  const { q, continent, limit = 20 } = req.query;
+  try {
+    let query = supabase.from("country_intel").select("iso,country_name,continent,ai_briefing,ai_vibe,photos,weather_now,ai_traveler_scores");
+    if (continent) query = query.eq("continent", continent);
+    if (q) query = query.ilike("country_name", `%${q}%`);
+    query = query.limit(parseInt(limit));
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ destinations: data || [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Auth ─────────────────────────────────────────────────────────
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return res.status(401).json({ error: error.message });
+    res.json({ user: data.user, session: data.session });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/auth/register", async (req, res) => {
+  const { email, password, name } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+  try {
+    const { data, error } = await supabase.auth.signUp({ email, password, options:{ data:{ name } } });
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ user: data.user, session: data.session });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── DB Admin / Reset ─────────────────────────────────────────────
+app.post("/api/admin/reset-table", async (req, res) => {
+  const { table } = req.body || {};
+  const allowed = ["state_intel","area_intel","country_intel","countries","states","areas"];
+  if (!allowed.includes(table)) return res.status(400).json({ error: "Invalid table" });
+  try {
+    const result = await deleteAllRows(table);
+    resetGenProgress();
+    res.json({ success: true, table, ...result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/admin/reset-progress", (req, res) => {
+  resetGenProgress();
+  res.json({ reset: true });
+});
+
+app.get("/api/admin/counts", async (req, res) => {
+  try {
+    const tables = ["countries","states","areas","country_intel","state_intel","area_intel"];
+    const counts = {};
+    await Promise.all(tables.map(async t => {
+      try {
+        const { count } = await supabase.from(t).select("*", { count:"exact", head:true });
+        counts[t] = count;
+      } catch(e) { counts[t] = null; }
+    }));
+    res.json({ counts, mistral_available: mistralAvailable() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Booking / Travel services ─────────────────────────────────────
+app.get("/api/booking/:iso", async (req, res) => {
+  const { iso } = req.params;
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Country not found" });
+  try {
+    const data = await fetchBooking(country.name, iso);
+    res.json(data || { error: "No booking data" });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/flights/:iso", async (req, res) => {
+  const { iso } = req.params;
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Country not found" });
+  try {
+    const data = await fetchFlightPrices(country.name, iso);
+    res.json(data || { airports: [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/currency/:iso", async (req, res) => {
+  try {
+    const data = await fetchCurrencyRates(req.params.iso);
+    res.json(data || { rates: {} });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/weather/:iso", async (req, res) => {
+  const { iso } = req.params;
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Country not found" });
+  try {
+    const data = await fetchWeather(country.name);
+    res.json(data || { now: null, forecast: [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/weather-coords", async (req, res) => {
+  const { lat, lon } = req.query;
+  if (!lat || !lon) return res.status(400).json({ error: "lat and lon required" });
+  try {
+    const data = await fetchWeatherByCoords(parseFloat(lat), parseFloat(lon));
+    res.json(data || { now: null, forecast: [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/air-quality/:iso", async (req, res) => {
+  const { iso } = req.params;
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Country not found" });
+  try {
+    const data = await fetchWAQI(country.name, iso);
+    res.json(data || { aqi: null });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/news/:iso", async (req, res) => {
+  const { iso } = req.params;
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Country not found" });
+  try {
+    const [gnews, google, national] = await Promise.all([
+      fetchNews(country.name, iso).catch(() => []),
+      fetchGoogleNews(country.name).catch(() => []),
+      fetchNationalNews(country.name, iso).catch(() => []),
+    ]);
+    const combined = [...gnews, ...google, ...national].slice(0, 15);
+    res.json({ news: combined });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/photos/:iso", async (req, res) => {
+  const { iso } = req.params;
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Country not found" });
+  try {
+    const data = await fetchUnsplash(`${country.name} travel`);
+    res.json({ photos: data || [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/events/:iso", async (req, res) => {
+  const { iso } = req.params;
+  const country = COUNTRIES.find(c => c.iso === iso);
+  if (!country) return res.status(404).json({ error: "Country not found" });
+  try {
+    const [tm, phq] = await Promise.all([
+      fetchTicketmaster(country.name, ISO3_TO_ISO2[iso]||"").catch(()=>[]),
+      fetchPredictHQ(country.name).catch(()=>[]),
+    ]);
+    res.json({ events: [...(tm||[]), ...(phq||[])].slice(0,15) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+
+// ── Globe HTML endpoint ───────────────────────────────────────────
+app.get("/globe", (req, res) => {
+  if (!THREE_JS) {
+    return res.status(503).send("<h2>Globe loading — three.js not yet ready. Refresh in 10s.</h2>");
+  }
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GlobeVoyage — Interactive Globe</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0a1a; color:#fff; font-family:'Segoe UI',sans-serif; overflow:hidden; }
+  #globe-container { width:100vw; height:100vh; }
+  #info-panel { position:fixed; top:20px; right:20px; width:300px; background:rgba(0,0,0,0.8); border:1px solid #333; border-radius:12px; padding:16px; display:none; backdrop-filter:blur(10px); }
+  #info-panel h2 { color:#60a5fa; margin-bottom:8px; }
+  #info-panel p  { color:#ccc; font-size:13px; line-height:1.5; }
+  #loading { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }
+  #loading h1 { color:#60a5fa; font-size:2rem; margin-bottom:8px; }
+  #loading p  { color:#888; }
+  .close-btn { position:absolute; top:8px; right:12px; cursor:pointer; color:#888; font-size:18px; }
+  .close-btn:hover { color:#fff; }
+</style>
+</head>
+<body>
+<div id="loading"><h1>🌍 GlobeVoyage</h1><p>Loading interactive globe…</p></div>
+<div id="globe-container"></div>
+<div id="info-panel">
+  <span class="close-btn" onclick="document.getElementById('info-panel').style.display='none'">✕</span>
+  <h2 id="country-name">Country</h2>
+  <p id="country-info">Loading…</p>
+</div>
+<script>${THREE_JS}</script>
+<script>
+const scene    = new THREE.Scene();
+const camera   = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+document.getElementById('globe-container').appendChild(renderer.domElement);
+
+camera.position.z = 3;
+
+const ambientLight = new THREE.AmbientLight(0x404040, 2);
+scene.add(ambientLight);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
+directionalLight.position.set(5, 3, 5);
+scene.add(directionalLight);
+
+// Globe
+const globeGeometry = new THREE.SphereGeometry(1, 64, 64);
+const textureLoader = new THREE.TextureLoader();
+const globeMaterial = new THREE.MeshPhongMaterial({
+  color: 0x1a3a5c,
+  emissive: 0x0a1a2c,
+  specular: 0x60a5fa,
+  shininess: 20,
+  wireframe: false,
+});
+const globe = new THREE.Mesh(globeGeometry, globeMaterial);
+scene.add(globe);
+
+// Atmosphere
+const atmGeometry = new THREE.SphereGeometry(1.02, 64, 64);
+const atmMaterial = new THREE.MeshPhongMaterial({
+  color: 0x60a5fa, transparent:true, opacity:0.08, side:THREE.BackSide,
+});
+scene.add(new THREE.Mesh(atmGeometry, atmMaterial));
+
+// Grid lines
+const gridHelper = new THREE.GridHelper(2, 20, 0x1e3a5f, 0x1e3a5f);
+gridHelper.rotation.x = Math.PI/2;
+globe.add(gridHelper);
+
+// Animate
+let isDragging = false, prevMouse = {x:0,y:0};
+document.addEventListener('mousedown', e => { isDragging=true; prevMouse={x:e.clientX,y:e.clientY}; });
+document.addEventListener('mouseup', () => isDragging=false);
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  const dx = e.clientX - prevMouse.x, dy = e.clientY - prevMouse.y;
+  globe.rotation.y += dx * 0.005;
+  globe.rotation.x += dy * 0.005;
+  prevMouse = {x:e.clientX, y:e.clientY};
+});
+document.addEventListener('wheel', e => {
+  camera.position.z = Math.max(1.5, Math.min(6, camera.position.z + e.deltaY * 0.005));
+});
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+document.getElementById('loading').style.display = 'none';
+
+function animate() {
+  requestAnimationFrame(animate);
+  if (!isDragging) globe.rotation.y += 0.001;
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>`;
+  res.setHeader("Content-Type","text/html");
+  res.send(html);
+});
+
+// ── Source health ─────────────────────────────────────────────────
+app.get("/api/source-health", (req, res) => res.json(sourceHealth));
+
+// ── Admin pages (static HTML files if present) ───────────────────
+app.use(express.static(path.join(__dirname, "public")));
+
+// 404 fallback
+app.use((req, res) => res.status(404).json({ error: "Not found", path: req.path }));
+
+// ══════════════════════════════════════════════════════════════════
+// SERVER START
+// ══════════════════════════════════════════════════════════════════
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  console.log(`
+╔══════════════════════════════════════════════════════════╗
+║  🌍 GlobeVoyage API — listening on port ${PORT}           
+║  Mistral key: ${ENV.MISTRAL_API_KEY ? "✓ configured" : "✗ MISSING — set MISTRAL_API_KEY"}
+╚══════════════════════════════════════════════════════════╝`);
+  await runStartupPipeline();
+});
+
+module.exports = app;
