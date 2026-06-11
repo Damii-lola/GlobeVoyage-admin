@@ -2637,107 +2637,247 @@ app.get("/api/events/:iso", async (req, res) => {
 
 // ── Globe HTML endpoint ───────────────────────────────────────────
 app.get("/globe", (req, res) => {
-  if (!THREE_JS) {
-    return res.status(503).send("<h2>Globe loading — three.js not yet ready. Refresh in 10s.</h2>");
-  }
   const html = `<!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GlobeVoyage — Interactive Globe</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:#0a0a1a; color:#fff; font-family:'Segoe UI',sans-serif; overflow:hidden; }
-  #globe-container { width:100vw; height:100vh; }
-  #info-panel { position:fixed; top:20px; right:20px; width:300px; background:rgba(0,0,0,0.8); border:1px solid #333; border-radius:12px; padding:16px; display:none; backdrop-filter:blur(10px); }
-  #info-panel h2 { color:#60a5fa; margin-bottom:8px; }
-  #info-panel p  { color:#ccc; font-size:13px; line-height:1.5; }
-  #loading { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; }
-  #loading h1 { color:#60a5fa; font-size:2rem; margin-bottom:8px; }
-  #loading p  { color:#888; }
-  .close-btn { position:absolute; top:8px; right:12px; cursor:pointer; color:#888; font-size:18px; }
-  .close-btn:hover { color:#fff; }
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;background:#080c14;overflow:hidden;touch-action:none;}
+canvas{display:block;}
+#lbl{position:fixed;bottom:20px;left:0;right:0;text-align:center;font-family:-apple-system,sans-serif;font-size:16px;font-weight:700;letter-spacing:3px;color:#c9a96e;text-shadow:0 0 20px rgba(201,169,110,0.8);opacity:0;transition:opacity 0.2s;pointer-events:none;}
+#hint{position:fixed;top:14px;left:0;right:0;text-align:center;font-family:-apple-system,sans-serif;font-size:11px;color:rgba(255,255,255,0.3);letter-spacing:1.5px;pointer-events:none;}
 </style>
 </head>
 <body>
-<div id="loading"><h1>🌍 GlobeVoyage</h1><p>Loading interactive globe…</p></div>
-<div id="globe-container"></div>
-<div id="info-panel">
-  <span class="close-btn" onclick="document.getElementById('info-panel').style.display='none'">✕</span>
-  <h2 id="country-name">Country</h2>
-  <p id="country-info">Loading…</p>
-</div>
-<script>${THREE_JS}</script>
+<div id="hint">SPIN · TAP A COUNTRY</div>
+<div id="lbl"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-const scene    = new THREE.Scene();
-const camera   = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
-document.getElementById('globe-container').appendChild(renderer.domElement);
+const W=window.innerWidth,H=window.innerHeight;
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(W,H);
+renderer.setClearColor(0x080c14,1);
+document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(42,W/H,0.1,1000);
+camera.position.z=2.6;
 
-camera.position.z = 3;
+// Lights
+scene.add(new THREE.AmbientLight(0x223355,3.5));
+const sun=new THREE.DirectionalLight(0xffeedd,2.8);
+sun.position.set(5,3,5);scene.add(sun);
+const rim=new THREE.DirectionalLight(0x1a4a8a,0.9);
+rim.position.set(-6,-2,-4);scene.add(rim);
 
-const ambientLight = new THREE.AmbientLight(0x404040, 2);
-scene.add(ambientLight);
-const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
-directionalLight.position.set(5, 3, 5);
-scene.add(directionalLight);
+// Stars
+(function(){
+  const g=new THREE.BufferGeometry(),p=[];
+  for(let i=0;i<2800;i++){
+    const r=55+Math.random()*35,t=Math.random()*Math.PI*2,a=Math.acos(2*Math.random()-1);
+    p.push(r*Math.sin(a)*Math.cos(t),r*Math.sin(a)*Math.sin(t),r*Math.cos(a));
+  }
+  g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0xffffff,size:0.12,transparent:true,opacity:0.6})));
+})();
 
-// Globe
-const globeGeometry = new THREE.SphereGeometry(1, 64, 64);
-const textureLoader = new THREE.TextureLoader();
-const globeMaterial = new THREE.MeshPhongMaterial({
-  color: 0x1a3a5c,
-  emissive: 0x0a1a2c,
-  specular: 0x60a5fa,
-  shininess: 20,
-  wireframe: false,
-});
-const globe = new THREE.Mesh(globeGeometry, globeMaterial);
+// Earth canvas texture
+function makeEarth(){
+  const S=1024,c=document.createElement('canvas');
+  c.width=c.height=S;const ctx=c.getContext('2d');
+  const og=ctx.createRadialGradient(S*.35,S*.35,S*.05,S*.5,S*.5,S*.72);
+  og.addColorStop(0,'#1a4a7a');og.addColorStop(0.5,'#0d2d50');og.addColorStop(1,'#071828');
+  ctx.fillStyle=og;ctx.fillRect(0,0,S,S);
+  function ll(lon,lat){return[(lon+180)/360*S,(90-lat)/180*S];}
+  function poly(pts,fill,stroke){
+    ctx.beginPath();pts.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
+    ctx.closePath();ctx.fillStyle=fill;ctx.fill();
+    if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1.2;ctx.stroke();}
+  }
+  const L='#1a4a2a',LB='#2a6a3a',LD='#0d3018',B='rgba(80,180,100,0.3)';
+  // North America
+  poly([ll(-168,72),ll(-140,70),ll(-120,72),ll(-100,74),ll(-85,72),ll(-65,62),ll(-55,50),ll(-52,47),ll(-55,44),ll(-66,44),ll(-70,42),ll(-75,35),ll(-80,25),ll(-85,22),ll(-90,20),ll(-85,16),ll(-78,16),ll(-68,24),ll(-72,30),ll(-80,32),ll(-95,29),ll(-110,24),ll(-118,28),ll(-120,35),ll(-124,49),ll(-130,54),ll(-138,59),ll(-155,60),ll(-166,60),ll(-168,66)],L,B);
+  // Greenland
+  poly([ll(-44,83),ll(-20,83),ll(-18,76),ll(-22,70),ll(-38,65),ll(-50,66),ll(-56,70),ll(-52,76),ll(-44,80)],LD,B);
+  // South America
+  poly([ll(-80,12),ll(-62,12),ll(-52,4),ll(-50,0),ll(-48,-4),ll(-35,-8),ll(-35,-14),ll(-38,-22),ll(-40,-28),ll(-50,-32),ll(-58,-38),ll(-66,-52),ll(-70,-52),ll(-76,-50),ll(-78,-42),ll(-76,-34),ll(-74,-28),ll(-70,-20),ll(-76,-14),ll(-80,-4),ll(-80,4),ll(-78,8),ll(-80,12)],L,B);
+  // Europe
+  poly([ll(-10,36),ll(8,38),ll(16,38),ll(28,36),ll(36,36),ll(36,42),ll(30,46),ll(28,50),ll(24,54),ll(12,56),ll(8,58),ll(4,60),ll(-4,58),ll(-8,52),ll(-6,48),ll(-2,44),ll(-10,40),ll(-10,36)],LB,B);
+  // Scandinavia
+  poly([ll(4,58),ll(8,57),ll(14,56),ll(18,57),ll(20,60),ll(28,70),ll(24,71),ll(18,70),ll(14,65),ll(8,62),ll(4,58)],LB,B);
+  // Africa
+  poly([ll(-18,16),ll(-14,10),ll(-8,4),ll(0,4),ll(10,8),ll(12,2),ll(10,-4),ll(14,-22),ll(18,-34),ll(28,-34),ll(36,-22),ll(42,-12),ll(44,-2),ll(42,4),ll(44,12),ll(42,18),ll(38,22),ll(30,30),ll(32,32),ll(24,32),ll(20,28),ll(14,24),ll(8,20),ll(0,16),ll(-8,14),ll(-18,16)],L,B);
+  // Asia (main)
+  poly([ll(28,36),ll(42,38),ll(56,24),ll(58,22),ll(66,22),ll(72,22),ll(80,12),ll(76,8),ll(80,20),ll(78,28),ll(72,34),ll(62,38),ll(56,42),ll(50,44),ll(44,50),ll(40,54),ll(36,56),ll(32,62),ll(48,70),ll(68,72),ll(100,72),ll(140,72),ll(160,68),ll(164,54),ll(152,48),ll(142,42),ll(138,38),ll(136,34),ll(128,30),ll(122,24),ll(118,22),ll(108,20),ll(100,-4),ll(104,-4),ll(120,-2),ll(128,4),ll(130,-4),ll(118,-8),ll(96,4),ll(80,14),ll(76,10),ll(66,22),ll(56,24),ll(48,30),ll(44,34),ll(36,36)],L,B);
+  // Australia
+  poly([ll(114,-22),ll(118,-20),ll(124,-18),ll(130,-12),ll(136,-12),ll(142,-10),ll(148,-18),ll(152,-24),ll(152,-30),ll(150,-36),ll(146,-38),ll(140,-36),ll(130,-32),ll(122,-32),ll(116,-34),ll(114,-32),ll(112,-26),ll(114,-22)],LB,B);
+  // Japan
+  poly([ll(130,34),ll(134,36),ll(136,38),ll(140,42),ll(142,44),ll(142,42),ll(140,38),ll(138,34),ll(136,32),ll(132,32),ll(130,32),ll(130,34)],LB,B);
+  // New Zealand
+  poly([ll(172,-36),ll(174,-38),ll(176,-40),ll(176,-44),ll(172,-46),ll(168,-44),ll(168,-40),ll(170,-36),ll(172,-36)],LB,B);
+  // UK
+  poly([ll(-6,50),ll(-2,52),ll(2,52),ll(2,54),ll(0,56),ll(-4,58),ll(-6,56),ll(-8,52),ll(-6,50)],LB,B);
+  // Iceland
+  poly([ll(-24,64),ll(-14,65),ll(-12,63),ll(-18,63),ll(-24,64)],LD,B);
+  // Indonesia
+  poly([ll(96,6),ll(104,1),ll(108,-2),ll(116,-8),ll(120,-8),ll(124,-6),ll(128,-2),ll(128,2),ll(120,4),ll(108,0),ll(96,6)],LB,B);
+  // Grid
+  ctx.strokeStyle='rgba(100,160,255,0.07)';ctx.lineWidth=0.7;
+  for(let la=-80;la<=80;la+=20){const y=(90-la)/180*S;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(S,y);ctx.stroke();}
+  for(let lo=-180;lo<=180;lo+=30){const x=(lo+180)/360*S;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,S);ctx.stroke();}
+  return c;
+}
+
+const globe=new THREE.Mesh(
+  new THREE.SphereGeometry(1,64,64),
+  new THREE.MeshPhongMaterial({map:new THREE.CanvasTexture(makeEarth()),specular:new THREE.Color(0x1a3a6a),shininess:18})
+);
 scene.add(globe);
 
-// Atmosphere
-const atmGeometry = new THREE.SphereGeometry(1.02, 64, 64);
-const atmMaterial = new THREE.MeshPhongMaterial({
-  color: 0x60a5fa, transparent:true, opacity:0.08, side:THREE.BackSide,
-});
-scene.add(new THREE.Mesh(atmGeometry, atmMaterial));
+// Atmosphere shader
+const atm=new THREE.Mesh(new THREE.SphereGeometry(1.06,64,64),new THREE.ShaderMaterial({
+  uniforms:{c:{value:new THREE.Color(0x1a6aff)},p:{value:4.5}},
+  vertexShader:'varying vec3 vN;void main(){vN=normalize(normalMatrix*normal);gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+  fragmentShader:'uniform vec3 c;uniform float p;varying vec3 vN;void main(){float i=pow(0.55-dot(vN,vec3(0.0,0.0,1.0)),p);gl_FragColor=vec4(c,i*0.65);}',
+  side:THREE.BackSide,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,
+}));
+scene.add(atm);
 
-// Grid lines
-const gridHelper = new THREE.GridHelper(2, 20, 0x1e3a5f, 0x1e3a5f);
-gridHelper.rotation.x = Math.PI/2;
-globe.add(gridHelper);
+// Country dots
+const COUNTRIES=[
+  {n:"Afghanistan",iso:"AFG",lat:33.9,lon:67.7},{n:"Albania",iso:"ALB",lat:41.2,lon:20.2},
+  {n:"Algeria",iso:"DZA",lat:28.0,lon:1.7},{n:"Angola",iso:"AGO",lat:-11.2,lon:17.9},
+  {n:"Argentina",iso:"ARG",lat:-38.4,lon:-63.6},{n:"Armenia",iso:"ARM",lat:40.1,lon:45.0},
+  {n:"Australia",iso:"AUS",lat:-25.3,lon:133.8},{n:"Austria",iso:"AUT",lat:47.5,lon:14.6},
+  {n:"Azerbaijan",iso:"AZE",lat:40.1,lon:47.6},{n:"Bangladesh",iso:"BGD",lat:23.7,lon:90.4},
+  {n:"Belarus",iso:"BLR",lat:53.7,lon:28.0},{n:"Belgium",iso:"BEL",lat:50.5,lon:4.5},
+  {n:"Bolivia",iso:"BOL",lat:-16.3,lon:-63.6},{n:"Brazil",iso:"BRA",lat:-14.2,lon:-51.9},
+  {n:"Bulgaria",iso:"BGR",lat:42.7,lon:25.5},{n:"Cambodia",iso:"KHM",lat:12.6,lon:104.9},
+  {n:"Cameroon",iso:"CMR",lat:3.8,lon:11.5},{n:"Canada",iso:"CAN",lat:56.1,lon:-106.3},
+  {n:"Chile",iso:"CHL",lat:-35.7,lon:-71.5},{n:"China",iso:"CHN",lat:35.9,lon:104.2},
+  {n:"Colombia",iso:"COL",lat:4.6,lon:-74.3},{n:"Costa Rica",iso:"CRI",lat:9.7,lon:-83.8},
+  {n:"Croatia",iso:"HRV",lat:45.1,lon:15.2},{n:"Cuba",iso:"CUB",lat:21.5,lon:-77.8},
+  {n:"Czech Republic",iso:"CZE",lat:49.8,lon:15.5},{n:"DR Congo",iso:"COD",lat:-4.0,lon:21.8},
+  {n:"Denmark",iso:"DNK",lat:56.3,lon:9.5},{n:"Dominican Republic",iso:"DOM",lat:18.7,lon:-70.2},
+  {n:"Ecuador",iso:"ECU",lat:-1.8,lon:-78.2},{n:"Egypt",iso:"EGY",lat:26.8,lon:30.8},
+  {n:"Ethiopia",iso:"ETH",lat:9.1,lon:40.5},{n:"Finland",iso:"FIN",lat:64.0,lon:25.7},
+  {n:"France",iso:"FRA",lat:46.2,lon:2.2},{n:"Germany",iso:"DEU",lat:51.2,lon:10.5},
+  {n:"Ghana",iso:"GHA",lat:7.9,lon:-1.0},{n:"Greece",iso:"GRC",lat:39.1,lon:21.8},
+  {n:"Guatemala",iso:"GTM",lat:15.8,lon:-90.2},{n:"Hungary",iso:"HUN",lat:47.2,lon:19.5},
+  {n:"Iceland",iso:"ISL",lat:65.0,lon:-18.1},{n:"India",iso:"IND",lat:20.6,lon:79.1},
+  {n:"Indonesia",iso:"IDN",lat:-0.8,lon:113.9},{n:"Iran",iso:"IRN",lat:32.4,lon:53.7},
+  {n:"Iraq",iso:"IRQ",lat:33.2,lon:43.7},{n:"Ireland",iso:"IRL",lat:53.1,lon:-8.2},
+  {n:"Israel",iso:"ISR",lat:31.0,lon:34.9},{n:"Italy",iso:"ITA",lat:41.9,lon:12.6},
+  {n:"Ivory Coast",iso:"CIV",lat:7.5,lon:-5.6},{n:"Jamaica",iso:"JAM",lat:18.1,lon:-77.3},
+  {n:"Japan",iso:"JPN",lat:36.2,lon:138.3},{n:"Jordan",iso:"JOR",lat:30.6,lon:36.2},
+  {n:"Kazakhstan",iso:"KAZ",lat:48.0,lon:66.9},{n:"Kenya",iso:"KEN",lat:0.0,lon:37.9},
+  {n:"South Korea",iso:"KOR",lat:35.9,lon:127.8},{n:"Kuwait",iso:"KWT",lat:29.3,lon:47.5},
+  {n:"Laos",iso:"LAO",lat:19.9,lon:102.5},{n:"Lebanon",iso:"LBN",lat:33.9,lon:35.9},
+  {n:"Libya",iso:"LBY",lat:26.3,lon:17.2},{n:"Madagascar",iso:"MDG",lat:-18.8,lon:46.9},
+  {n:"Malaysia",iso:"MYS",lat:4.2,lon:108.0},{n:"Mexico",iso:"MEX",lat:23.6,lon:-102.6},
+  {n:"Mongolia",iso:"MNG",lat:46.9,lon:103.8},{n:"Morocco",iso:"MAR",lat:31.8,lon:-7.1},
+  {n:"Mozambique",iso:"MOZ",lat:-18.7,lon:35.5},{n:"Myanmar",iso:"MMR",lat:21.9,lon:95.9},
+  {n:"Nepal",iso:"NPL",lat:28.4,lon:84.1},{n:"Netherlands",iso:"NLD",lat:52.1,lon:5.3},
+  {n:"New Zealand",iso:"NZL",lat:-40.9,lon:174.9},{n:"Nigeria",iso:"NGA",lat:9.1,lon:8.7},
+  {n:"Norway",iso:"NOR",lat:60.5,lon:8.5},{n:"Oman",iso:"OMN",lat:21.5,lon:55.9},
+  {n:"Pakistan",iso:"PAK",lat:30.4,lon:69.3},{n:"Peru",iso:"PER",lat:-9.2,lon:-75.0},
+  {n:"Philippines",iso:"PHL",lat:12.9,lon:121.8},{n:"Poland",iso:"POL",lat:51.9,lon:19.1},
+  {n:"Portugal",iso:"PRT",lat:39.4,lon:-8.2},{n:"Qatar",iso:"QAT",lat:25.4,lon:51.2},
+  {n:"Romania",iso:"ROU",lat:45.9,lon:24.9},{n:"Russia",iso:"RUS",lat:61.5,lon:105.3},
+  {n:"Rwanda",iso:"RWA",lat:-1.9,lon:29.9},{n:"Saudi Arabia",iso:"SAU",lat:24.0,lon:45.1},
+  {n:"Senegal",iso:"SEN",lat:14.5,lon:-14.5},{n:"Serbia",iso:"SRB",lat:44.0,lon:21.0},
+  {n:"Singapore",iso:"SGP",lat:1.3,lon:103.8},{n:"Somalia",iso:"SOM",lat:5.2,lon:46.2},
+  {n:"South Africa",iso:"ZAF",lat:-30.6,lon:22.9},{n:"Spain",iso:"ESP",lat:40.5,lon:-3.7},
+  {n:"Sri Lanka",iso:"LKA",lat:7.9,lon:80.8},{n:"Sudan",iso:"SDN",lat:12.9,lon:30.2},
+  {n:"Sweden",iso:"SWE",lat:62.2,lon:17.6},{n:"Switzerland",iso:"CHE",lat:46.8,lon:8.2},
+  {n:"Syria",iso:"SYR",lat:35.0,lon:38.0},{n:"Taiwan",iso:"TWN",lat:23.7,lon:121.0},
+  {n:"Tanzania",iso:"TZA",lat:-6.4,lon:34.9},{n:"Thailand",iso:"THA",lat:15.9,lon:100.9},
+  {n:"Tunisia",iso:"TUN",lat:34.0,lon:9.0},{n:"Turkey",iso:"TUR",lat:38.9,lon:35.2},
+  {n:"Uganda",iso:"UGA",lat:1.4,lon:32.3},{n:"Ukraine",iso:"UKR",lat:48.4,lon:31.2},
+  {n:"United Arab Emirates",iso:"ARE",lat:23.4,lon:53.8},
+  {n:"United Kingdom",iso:"GBR",lat:55.4,lon:-3.4},
+  {n:"United States",iso:"USA",lat:37.1,lon:-95.7},{n:"Uruguay",iso:"URY",lat:-32.5,lon:-55.8},
+  {n:"Uzbekistan",iso:"UZB",lat:41.4,lon:64.6},{n:"Venezuela",iso:"VEN",lat:6.4,lon:-66.6},
+  {n:"Vietnam",iso:"VNM",lat:14.1,lon:108.3},{n:"Yemen",iso:"YEM",lat:15.6,lon:48.5},
+  {n:"Zambia",iso:"ZMB",lat:-13.1,lon:27.9},{n:"Zimbabwe",iso:"ZWE",lat:-19.0,lon:29.2},
+];
+function ll2v(lat,lon,r){
+  const phi=(90-lat)*Math.PI/180,th=(lon+180)*Math.PI/180;
+  return new THREE.Vector3(-Math.sin(phi)*Math.cos(th),Math.cos(phi),Math.sin(phi)*Math.sin(th)).multiplyScalar(r);
+}
+const dotG=new THREE.SphereGeometry(0.013,7,7);
+const dots=[];
+COUNTRIES.forEach(c=>{
+  const m=new THREE.MeshBasicMaterial({color:0xc9a96e,transparent:true,opacity:0.9});
+  const d=new THREE.Mesh(dotG,m);
+  d.position.copy(ll2v(c.lat,c.lon,1.015));
+  d.userData=c; globe.add(d); dots.push(d);
+});
+
+// Pan + momentum
+let drag=false,px=0,py=0,pt=0,vx=0,vy=0;
+const MV=0.055;
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function onS(x,y){drag=true;px=x;py=y;pt=Date.now();vx=0;vy=0;}
+function onM(x,y){
+  if(!drag)return;
+  const now=Date.now(),dt=Math.max(1,now-pt),dx=x-px,dy=y-py;
+  vx=clamp(dx/dt*16,-MV,MV); vy=clamp(dy/dt*16,-MV,MV);
+  globe.rotation.y+=dx*0.006;
+  globe.rotation.x=clamp(globe.rotation.x+dy*0.004,-1.3,1.3);
+  px=x;py=y;pt=now;
+}
+function onE(tap,cx,cy){drag=false;if(tap)pick(cx,cy);}
+
+let ms={x:0,y:0};
+renderer.domElement.addEventListener('mousedown',e=>{ms={x:e.clientX,y:e.clientY};onS(e.clientX,e.clientY);});
+renderer.domElement.addEventListener('mousemove',e=>onM(e.clientX,e.clientY));
+renderer.domElement.addEventListener('mouseup',e=>{onE(Math.hypot(e.clientX-ms.x,e.clientY-ms.y)<8,e.clientX,e.clientY);});
+
+let ts={x:0,y:0,t:0};
+renderer.domElement.addEventListener('touchstart',e=>{e.preventDefault();ts={x:e.touches[0].clientX,y:e.touches[0].clientY,t:Date.now()};onS(ts.x,ts.y);},{passive:false});
+renderer.domElement.addEventListener('touchmove',e=>{e.preventDefault();onM(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+renderer.domElement.addEventListener('touchend',e=>{
+  e.preventDefault();
+  const cx=e.changedTouches[0].clientX,cy=e.changedTouches[0].clientY;
+  onE(Math.hypot(cx-ts.x,cy-ts.y)<10&&Date.now()-ts.t<300,cx,cy);
+},{passive:false});
+
+// Raycaster pick
+const ray=new THREE.Raycaster(),mouse=new THREE.Vector2();
+function pick(cx,cy){
+  const rect=renderer.domElement.getBoundingClientRect();
+  mouse.set(((cx-rect.left)/rect.width)*2-1,-((cy-rect.top)/rect.height)*2+1);
+  ray.setFromCamera(mouse,camera);
+  const dh=ray.intersectObjects(dots);
+  if(dh.length){sel(dh[0].object.userData);return;}
+  const gh=ray.intersectObject(globe);
+  if(gh.length){
+    const pt=gh[0].point.clone();globe.worldToLocal(pt);const pn=pt.normalize();
+    let best=null,bd=9;
+    dots.forEach(d=>{const dn=d.position.clone().normalize();const dist=pn.distanceTo(dn);if(dist<bd){bd=dist;best=d;}});
+    if(best&&bd<0.35)sel(best.userData);
+  }
+}
+function sel(c){
+  const lbl=document.getElementById('lbl');
+  lbl.textContent=c.n.toUpperCase();lbl.style.opacity='1';
+  setTimeout(()=>lbl.style.opacity='0',2200);
+  const dot=dots.find(d=>d.userData.iso===c.iso);
+  if(dot){let t=0;const iv=setInterval(()=>{t+=0.18;dot.material.color.setHex(t%1<0.5?0xffffff:0xc9a96e);dot.scale.setScalar(1+Math.sin(t)*0.5);if(t>Math.PI*2){clearInterval(iv);dot.material.color.setHex(0xc9a96e);dot.scale.setScalar(1);}},25);}
+  if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({type:'DESTINATIONS',country:c.iso,name:c.n}));
+}
 
 // Animate
-let isDragging = false, prevMouse = {x:0,y:0};
-document.addEventListener('mousedown', e => { isDragging=true; prevMouse={x:e.clientX,y:e.clientY}; });
-document.addEventListener('mouseup', () => isDragging=false);
-document.addEventListener('mousemove', e => {
-  if (!isDragging) return;
-  const dx = e.clientX - prevMouse.x, dy = e.clientY - prevMouse.y;
-  globe.rotation.y += dx * 0.005;
-  globe.rotation.x += dy * 0.005;
-  prevMouse = {x:e.clientX, y:e.clientY};
-});
-document.addEventListener('wheel', e => {
-  camera.position.z = Math.max(1.5, Math.min(6, camera.position.z + e.deltaY * 0.005));
-});
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth/window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-document.getElementById('loading').style.display = 'none';
-
-function animate() {
+function animate(){
   requestAnimationFrame(animate);
-  if (!isDragging) globe.rotation.y += 0.001;
-  renderer.render(scene, camera);
+  if(!drag){vx*=0.92;vy*=0.92;globe.rotation.y+=vx*0.012+0.0012;globe.rotation.x=clamp(globe.rotation.x+vy*0.008,-1.3,1.3);}
+  renderer.render(scene,camera);
 }
 animate();
+window.addEventListener('resize',()=>{camera.aspect=window.innerWidth/window.innerHeight;camera.updateProjectionMatrix();renderer.setSize(window.innerWidth,window.innerHeight);});
 </script>
 </body>
 </html>`;
