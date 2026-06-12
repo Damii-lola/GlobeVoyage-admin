@@ -358,8 +358,8 @@ renderer.setSize(W,H);
 renderer.setClearColor(0x030810,1);
 const scene=new THREE.Scene();
 const camera=new THREE.PerspectiveCamera(40,W/H,0.1,1000);
-camera.position.z=2.5;
-const MIN_Z=1.3,MAX_Z=4.5;
+camera.position.z=7.5;
+const MIN_Z=1.2,MAX_Z=8.0;
 
 scene.add(new THREE.AmbientLight(0x334466,2.8));
 const sun=new THREE.DirectionalLight(0xfff0dd,2.2);
@@ -723,13 +723,12 @@ app.get("/api/intel/:iso", async (req, res) => {
   } catch(e) { /* table may not exist yet */ }
 
   // Generate AI intel
-  const prompt = `You are a world-class travel intelligence analyst for ${country.name} (${country.continent}).
-Return ONLY valid JSON, no markdown:
+  const prompt = `You are a world-class travel intelligence analyst. Answer for ${country.name}.
+Return ONLY valid JSON, no markdown, no explanation:
 {
-  "ai_briefing": "2-3 sentence compelling travel overview",
-  "ai_vibe": "10-word poetic vibe description",
+  "ai_briefing": "Exactly 1 sentence describing ${country.name} as a travel destination.",
+  "ai_safety_summary": "Exactly 1 sentence with a REAL, SPECIFIC safety verdict for ${country.name} right now. State clearly if it is safe, risky, or dangerous to visit and WHY (crime levels, political stability, conflict, terrorism risk etc). Be direct — do NOT say 'check travel advisories'.",
   "ai_recommendations": [{"title":"attraction","why":"reason"}],
-  "ai_safety_summary": "1 sentence safety overview",
   "ai_best_months": ["Month1","Month2","Month3"],
   "ai_hidden_gem": "lesser-known attraction",
   "ai_avoid_if": "who should reconsider visiting",
@@ -747,10 +746,10 @@ Return ONLY valid JSON, no markdown:
     weather_now:       weather,
     photos,
     news_headlines:    news,
-    ai_briefing:       ai?.ai_briefing       || `${country.name} is a fascinating destination in ${country.continent} with rich culture and diverse experiences.`,
+    ai_briefing:       ai?.ai_briefing       || `${country.name} is a country in ${country.continent}.`,
     ai_vibe:           ai?.ai_vibe           || `${country.name} awaits your discovery`,
     ai_recommendations: ai?.ai_recommendations || [],
-    ai_safety_summary: ai?.ai_safety_summary || "Check current travel advisories before visiting.",
+    ai_safety_summary: ai?.ai_safety_summary || null,
     ai_best_months:    ai?.ai_best_months    || [],
     ai_hidden_gem:     ai?.ai_hidden_gem     || null,
     ai_avoid_if:       ai?.ai_avoid_if       || null,
@@ -800,12 +799,11 @@ app.get("/api/intel/state/:id", async (req, res) => {
     fetchNews(`${stateName} ${countryName}`),
   ]);
 
-  const prompt = `You are a travel expert on ${stateName}, ${countryName}.
-Return ONLY valid JSON, no markdown:
+  const prompt = `You are a travel expert. Answer for ${stateName}, ${countryName}.
+Return ONLY valid JSON, no markdown, no explanation:
 {
-  "ai_briefing": "2-3 sentence travel overview of this state/region",
-  "ai_vibe": "10-word poetic vibe",
-  "ai_safety_summary": "1 sentence safety note",
+  "ai_briefing": "Exactly 1 sentence describing ${stateName} as a travel destination.",
+  "ai_safety_summary": "Exactly 1 sentence with a REAL, SPECIFIC safety verdict for ${stateName} right now. State clearly if it is safe or risky and WHY. Be direct — do NOT say 'check travel advisories'.",
   "ai_best_months": ["Month1","Month2"],
   "ai_hidden_gem": "lesser-known local experience",
   "ai_cost_estimate": {"budget":"$X/day"},
@@ -824,7 +822,7 @@ Return ONLY valid JSON, no markdown:
     weather_now:       weather,
     photos,
     news_headlines:    news,
-    ai_briefing:       ai?.ai_briefing       || `${stateName} is a remarkable region in ${countryName} with unique character and experiences.`,
+    ai_briefing:       ai?.ai_briefing       || `${stateName} is a region in ${countryName}.`,
     ai_vibe:           ai?.ai_vibe           || null,
     ai_safety_summary: ai?.ai_safety_summary || null,
     ai_best_months:    ai?.ai_best_months    || [],
