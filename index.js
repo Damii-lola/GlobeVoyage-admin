@@ -676,125 +676,142 @@ async function fetchNews(query) {
   } catch(e) { return []; }
 }
 
-// ── SAFETY DATABASE (real advisory data, no AI needed) ───────────
-const SAFETY_DB = {
-  // GREEN — safe
-  "ISL":"Iceland is one of the safest countries in the world with extremely low crime and no terrorism risk.",
-  "NZL":"New Zealand is very safe with low crime rates, stable government, and no significant terrorism risk.",
-  "CHE":"Switzerland is very safe with minimal crime, strong institutions, and a stable political environment.",
-  "NOR":"Norway is extremely safe with very low crime rates and high political stability.",
-  "DNK":"Denmark is very safe with low crime, strong rule of law, and no significant security threats.",
-  "FIN":"Finland is one of the safest countries globally with negligible crime and high stability.",
-  "SWE":"Sweden is generally safe with low violent crime, though petty theft exists in major cities.",
-  "AUT":"Austria is very safe with low crime rates and a stable, peaceful environment for travelers.",
-  "JPN":"Japan is one of the safest countries in Asia with extremely low crime and excellent infrastructure.",
-  "SGP":"Singapore is very safe with strict law enforcement, low crime, and no significant terrorism risk.",
-  "AUS":"Australia is very safe with low crime; watch for wildlife hazards and sun exposure in remote areas.",
-  "CAN":"Canada is very safe overall with low violent crime, though petty theft occurs in major cities.",
-  "IRL":"Ireland is very safe with low crime rates and a stable, welcoming environment.",
-  "PRT":"Portugal is one of the safest countries in Europe with very low crime and political stability.",
-  "EST":"Estonia is safe with low crime rates and high political stability as an EU member.",
-  "SVN":"Slovenia is very safe with extremely low crime and no significant security concerns.",
-  "LVA":"Latvia is generally safe with low violent crime; petty theft possible in Riga's tourist areas.",
-  "LTU":"Lithuania is generally safe with low violent crime and stable political environment.",
-  "TWN":"Taiwan is very safe with low crime rates and a stable, democratic government.",
-  "KOR":"South Korea is very safe with low crime and excellent infrastructure for travelers.",
-  // AMBER — exercise caution
-  "USA":"The US is generally safe but has higher gun violence than most developed nations; exercise caution in high-crime urban areas and stay alert.",
-  "GBR":"The UK is generally safe; terrorism threat is substantial though attacks are rare — stay alert in crowded public areas.",
-  "FRA":"France has an elevated terrorism threat; remain vigilant in tourist areas, transport hubs, and near major events.",
-  "DEU":"Germany is generally safe; terrorism risk is moderate — stay alert in crowded public spaces.",
-  "ITA":"Italy is generally safe for tourists; watch for pickpocketing in Rome, Naples, and Florence tourist hotspots.",
-  "ESP":"Spain has an elevated terrorism threat; be alert in major cities and crowded areas; petty theft is common.",
-  "GRC":"Greece is generally safe; economic tensions have eased but petty crime exists in tourist areas.",
-  "TUR":"Turkey has elevated terrorism and political risk; avoid border areas with Syria and Iraq; tourist areas generally safe but stay alert.",
-  "EGY":"Egypt requires caution — avoid the Sinai Peninsula and Libya border; tourist resorts like Cairo, Luxor, and Hurghada are monitored but terrorism risk remains.",
-  "MAR":"Morocco is relatively safe for tourists but exercise caution; petty crime and scams target visitors, especially in medinas.",
-  "THA":"Thailand is generally safe for tourists; political unrest occurs occasionally — avoid political protests and deep south provinces.",
-  "VNM":"Vietnam is generally safe with low violent crime; watch for scams and traffic hazards in major cities.",
-  "IDN":"Indonesia is generally safe; terrorism risk exists, particularly in Sulawesi and Papua — Bali and Java are generally fine.",
-  "IND":"India requires caution — petty crime and scams are common; women travelers should take extra precautions, especially at night.",
-  "CHN":"China is safe from street crime but the government surveils foreigners extensively; political speech and protests are prohibited.",
-  "BRA":"Brazil requires caution — violent crime and robbery are serious concerns in major cities, especially Rio de Janeiro and Salvador.",
-  "MEX":"Mexico requires caution — cartel violence is severe in states like Sinaloa, Tamaulipas, Guerrero, and Michoacán; tourist areas like Cancún are safer but not immune.",
-  "ZAF":"South Africa has very high levels of violent crime, carjacking, and robbery — exercise extreme caution, especially in Johannesburg.",
-  "COL":"Colombia has improved significantly but still requires caution — avoid rural FARC-controlled areas; Medellín and Bogotá are generally safe for tourists who stay alert.",
-  "PER":"Peru is generally safe in tourist areas like Lima and Cusco; avoid remote jungle regions and be alert for theft.",
-  "ARG":"Argentina is generally safe with low violent crime though economic instability has increased petty theft — stay alert in Buenos Aires.",
-  "CHL":"Chile is generally safe with low violent crime; protests occur occasionally in Santiago — avoid political demonstrations.",
-  "PHL":"Philippines requires caution — avoid Mindanao and the Sulu Archipelago due to terrorism and kidnapping risk; Manila and tourist islands are generally safe.",
-  "MYS":"Malaysia is generally safe; petty theft occurs in cities and political tensions exist — exercise normal caution.",
-  "PAK":"Pakistan is high risk — terrorism, kidnapping, and civil unrest are serious concerns; only travel with expert local guidance.",
-  "IRN":"Iran is high risk for Western nationals due to arbitrary detention, dual-national risks, and sanctions complications.",
-  "IRQ":"Iraq is extremely dangerous — active conflict, terrorism, militia violence, and kidnapping risk; avoid all travel.",
-  "SYR":"Syria is extremely dangerous with ongoing civil war, terrorism, and humanitarian crisis — do not travel.",
-  "AFG":"Afghanistan is extremely dangerous under Taliban rule with active terrorism, arbitrary detention, and no functioning consular support.",
-  "NGA":"Nigeria requires serious caution — kidnapping for ransom, terrorism (Boko Haram in the northeast), and violent crime are significant risks; Lagos and Abuja are safer but not safe.",
-  "KEN":"Kenya requires caution — terrorism risk from Al-Shabaab exists especially near the Somali border; Nairobi tourist areas are generally safe.",
-  "GHA":"Ghana is relatively safe and one of West Africa's most stable countries; petty crime occurs in Accra — take normal precautions.",
-  "TZA":"Tanzania is generally safe for tourists visiting the Serengeti and Zanzibar; petty theft occurs in cities.",
-  "ETH":"Ethiopia requires caution — ethnic conflict and civil unrest exist in Tigray, Amhara, and Oromia regions; Addis Ababa is generally stable.",
-  "SDN":"Sudan is high risk due to ongoing civil war, particularly in Darfur and Khartoum — avoid all travel.",
-  "LBY":"Libya is extremely dangerous with ongoing conflict, militias, and terrorism — do not travel.",
-  "SOM":"Somalia is extremely dangerous with active terrorism, civil war, and piracy — do not travel.",
-  "UKR":"Ukraine is extremely dangerous due to full-scale Russian invasion — active combat zones, missile strikes, and no-fly zone apply.",
-  "RUS":"Russia is high risk — the government has severely curtailed civil freedoms, arbitrary detention of foreigners occurs, and the ongoing war in Ukraine creates significant instability.",
-  "PRK":"North Korea is off-limits to most tourists; the rare organized tours carry extreme risk of arbitrary detention and no diplomatic support.",
-  "YEM":"Yemen is extremely dangerous with active civil war, terrorism, and humanitarian crisis — do not travel.",
-  "VEN":"Venezuela is high risk — violent crime, political instability, arbitrary detention of foreigners, and economic collapse create serious dangers.",
-  "HTI":"Haiti is extremely dangerous with gang violence controlling large areas including Port-au-Prince — avoid all travel.",
-};
-
-// Fetch Wikipedia description for a country or state
+// ── REAL SAFETY via Wikipedia Safety section + Google News ─────────
 async function fetchWikipediaDesc(name, isState, countryName) {
   try {
     const searchTerm = isState ? `${name} ${countryName}` : name;
     const searchRes = await axios.get("https://en.wikipedia.org/w/api.php", {
-      params: { action:"query", format:"json", list:"search", srsearch:searchTerm, srlimit:1 },
-      timeout: 6000,
-      headers: { "User-Agent":"GlobeVoyage/2.0" }
+      params:{ action:"query", format:"json", list:"search", srsearch:searchTerm, srlimit:1 },
+      timeout:6000, headers:{"User-Agent":"GlobeVoyage/2.0"}
     });
     const title = searchRes.data?.query?.search?.[0]?.title;
     if (!title) return null;
-    const contentRes = await axios.get("https://en.wikipedia.org/w/api.php", {
-      params: { action:"query", format:"json", prop:"extracts", exintro:true, explaintext:true, exsentences: isState ? 3 : 2, titles:title },
-      timeout: 6000,
-      headers: { "User-Agent":"GlobeVoyage/2.0" }
+    const cRes = await axios.get("https://en.wikipedia.org/w/api.php", {
+      params:{ action:"query", format:"json", prop:"extracts", exintro:true, explaintext:true,
+               exsentences: isState ? 3 : 2, titles:title },
+      timeout:6000, headers:{"User-Agent":"GlobeVoyage/2.0"}
     });
-    const pages = contentRes.data?.query?.pages || {};
-    const page  = Object.values(pages)[0];
-    const extract = page?.extract || "";
-    // Return first sentence only for country, up to 3 sentences for state
+    const pages = cRes.data?.query?.pages || {};
+    const extract = Object.values(pages)[0]?.extract || "";
     if (!extract) return null;
     const sentences = extract.match(/[^.!?]+[.!?]+/g) || [];
-    const count = isState ? 3 : 1;
-    return sentences.slice(0, count).join(" ").trim() || null;
+    return sentences.slice(0, isState ? 3 : 1).join(" ").trim() || null;
   } catch(e) { return null; }
 }
 
-// Get safety for a state by looking up country safety + state-specific notes
-function getStateSafety(stateName, countryName, countryIso) {
-  const base = SAFETY_DB[countryIso];
-  if (!base) return `${stateName} follows the general safety conditions of ${countryName} — research local conditions before visiting.`;
-
-  // High-risk country overrides for specific states
-  const safeSt = stateName.toLowerCase();
-  const safeRiskMap = {
-    "MEX": { safe:["yucatán","quintana roo","baja california sur"], danger:["sinaloa","tamaulipas","guerrero","michoacán","colima","zacatecas"] },
-    "COL": { safe:["medellín","bogotá","cartagena"], danger:["chocó","arauca","putumayo","nariño"] },
-    "NGA": { safe:["lagos","abuja","federal capital territory"], danger:["borno","adamawa","yobe"] },
-    "IND": { safe:["goa","rajasthan","kerala","himachal pradesh"], danger:["manipur","nagaland"] },
-    "PHL": { safe:["metro manila","cebu","palawan","bohol"], danger:["maguindanao","lanao del sur","sulu","tawi-tawi"] },
-    "IDN": { safe:["bali","yogyakarta","jakarta"], danger:["papua","sulawesi"] },
-  };
-  const map = safeRiskMap[countryIso];
-  if (map) {
-    if (map.safe.some(s => safeSt.includes(s))) return `${stateName} is one of the safer regions in ${countryName} and is generally fine for tourists.`;
-    if (map.danger.some(s => safeSt.includes(s))) return `${stateName} is considered a high-risk area in ${countryName} — exercise extreme caution or avoid travel here.`;
-  }
-  return base;
+async function fetchSafetyFromWikipedia(name, countryName) {
+  // Fetch the Wikipedia page and look for safety-related sections
+  try {
+    const searchTerm = countryName ? `${name} ${countryName}` : name;
+    const sRes = await axios.get("https://en.wikipedia.org/w/api.php", {
+      params:{ action:"query", format:"json", list:"search", srsearch:`${searchTerm} safety travel`, srlimit:1 },
+      timeout:6000, headers:{"User-Agent":"GlobeVoyage/2.0"}
+    });
+    const title = sRes.data?.query?.search?.[0]?.title;
+    if (!title) return null;
+    const cRes = await axios.get("https://en.wikipedia.org/w/api.php", {
+      params:{ action:"query", format:"json", prop:"extracts", explaintext:true, titles:title, exsectionformat:"plain" },
+      timeout:6000, headers:{"User-Agent":"GlobeVoyage/2.0"}
+    });
+    const pages = cRes.data?.query?.pages || {};
+    const extract = Object.values(pages)[0]?.extract || "";
+    // Look for safety/crime/security section
+    const lines = extract.split("\n");
+    let safetyLine = null;
+    for (let li = 0; li < lines.length; li++) {
+      if (/safety|crime|security|risk/i.test(lines[li]) && lines[li+1] && lines[li+1].length > 50) {
+        safetyLine = lines[li+1].trim().slice(0,200);
+        break;
+      }
+    }
+    if (safetyLine) return safetyLine;
+    return null;
+  } catch(e) { return null; }
 }
 
+async function fetchSafetyFromNews(placeName) {
+  // Use Google News to get real current safety headlines and synthesise a verdict
+  try {
+    const q = encodeURIComponent(`"${placeName}" safety travel warning crime 2025 2026`);
+    const r = await axios.get(
+      `https://news.google.com/rss/search?q=${q}&hl=en&gl=US&ceid=US:en`,
+      { timeout:7000, headers:{"User-Agent":"GlobeVoyage/2.0"} }
+    );
+    const parsed = await xml2js.parseStringPromise(r.data, {explicitArray:false});
+    const items = parsed?.rss?.channel?.item || [];
+    const arr = Array.isArray(items) ? items : [items];
+    const headlines = arr.slice(0,5).map(i => {
+      const t = typeof i.title === "object" ? (i.title._ || "") : (i.title || "");
+      return t.replace(/ - [^-]+$/, "").trim(); // strip source suffix
+    }).filter(Boolean);
+    if (!headlines.length) return null;
+
+    // Score danger level from headlines
+    const combined = headlines.join(" ").toLowerCase();
+    const dangerWords = ["do not travel","extreme danger","war","conflict","attack","bombing","kidnap","terrorist","coup","civil war","invasion"];
+    const cautionWords = ["caution","warning","crime","robbery","scam","unrest","protest","risk","violent","mugging"];
+    const safeWords = ["safe","peaceful","stable","low crime","secure","recommended"];
+
+    const dangerScore  = dangerWords.filter(w => combined.includes(w)).length;
+    const cautionScore = cautionWords.filter(w => combined.includes(w)).length;
+    const safeScore    = safeWords.filter(w => combined.includes(w)).length;
+
+    let verdict;
+    if (dangerScore >= 2) {
+      verdict = `${placeName} is currently HIGH RISK — recent news indicates ${dangerWords.filter(w=>combined.includes(w)).slice(0,2).join(" and ")} concerns.`;
+    } else if (cautionScore >= 2) {
+      verdict = `${placeName} requires caution — current reports mention ${cautionWords.filter(w=>combined.includes(w)).slice(0,2).join(" and ")} concerns for travelers.`;
+    } else if (safeScore >= 1) {
+      verdict = `${placeName} is generally considered safe for travelers based on current conditions.`;
+    } else if (headlines.length > 0) {
+      verdict = `${placeName} safety: ${headlines[0].slice(0,120)}.`;
+    } else {
+      return null;
+    }
+    return verdict;
+  } catch(e) { return null; }
+}
+
+async function fetchSafetyFromRestCountries(iso) {
+  // Pull region + subregion to give geographic safety context
+  try {
+    const r = await axios.get(`https://restcountries.com/v3.1/alpha/${iso}`, { timeout:6000 });
+    const c = r.data?.[0];
+    if (!c) return null;
+    const region = c.region || "";
+    const sub    = c.subregion || "";
+    const name   = c.name?.common || "";
+    // Rough regional safety baseline from UN Peace Index zones
+    const dangerZones = ["Western Africa","Middle Africa","Eastern Africa","Central America","Western Asia","Southern Asia","Eastern Europe"];
+    const cautionZones = ["South America","South-Eastern Asia","Northern Africa","Caribbean"];
+    const safeZones   = ["Northern Europe","Western Europe","Northern America","Australia and New Zealand","Eastern Asia"];
+    if (safeZones.includes(sub)) return `${name} is in ${sub}, one of the world's safer regions with generally low crime and stable governance.`;
+    if (dangerZones.includes(sub)) return `${name} is in ${sub} — exercise heightened caution; research specific current conditions and register with your embassy before traveling.`;
+    if (cautionZones.includes(sub)) return `${name} is in ${sub} — exercise caution, stay alert in tourist areas, and research current local conditions.`;
+    return `${name} is in ${region} — normal travel precautions apply; check your government's current advisory.`;
+  } catch(e) { return null; }
+}
+
+async function getSafetyIntel(placeName, iso, isState, countryName) {
+  // Try sources in order: News → Wikipedia → REST Countries
+  try {
+    const newsVerdict = await fetchSafetyFromNews(placeName);
+    if (newsVerdict) return newsVerdict;
+  } catch(e) {}
+  if (!isState && iso) {
+    try {
+      const rcVerdict = await fetchSafetyFromRestCountries(iso);
+      if (rcVerdict) return rcVerdict;
+    } catch(e) {}
+  }
+  try {
+    const wikiSafety = await fetchSafetyFromWikipedia(placeName, isState ? countryName : null);
+    if (wikiSafety) return wikiSafety;
+  } catch(e) {}
+  return null;
+}
+
+// ── GET /api/intel/:iso — Country intel ──────────────────────────
 // ── GET /api/intel/:iso — Country intel ──────────────────────────
 app.get("/api/intel/:iso", async (req, res) => {
   const { iso } = req.params;
@@ -812,9 +829,9 @@ app.get("/api/intel/:iso", async (req, res) => {
     fetchNews(country.name),
   ]);
 
-  // Get description from Wikipedia + safety from hardcoded DB
-  const [wikiDesc] = await Promise.all([
+  const [wikiDesc, safetyVerdict] = await Promise.all([
     fetchWikipediaDesc(country.name, false, null),
+    getSafetyIntel(country.name, iso, false, null),
   ]);
 
   const result = {
@@ -825,7 +842,7 @@ app.get("/api/intel/:iso", async (req, res) => {
     photos,
     news_headlines:    news,
     ai_briefing:       wikiDesc || `${country.name} is a country in ${country.continent}.`,
-    ai_safety_summary: SAFETY_DB[iso] || `${country.name} — no specific safety advisory available; research current conditions before traveling.`,
+    ai_safety_summary: safetyVerdict || `No safety data available for ${country.name} right now.`,
     ai_recommendations: [],
     ai_best_months:    [],
     ai_hidden_gem:     null,
@@ -872,8 +889,9 @@ app.get("/api/intel/state/:id", async (req, res) => {
     fetchNews(`${stateName} ${countryName}`),
   ]);
 
-  const [wikiDesc] = await Promise.all([
+  const [wikiDesc, safetyVerdict] = await Promise.all([
     fetchWikipediaDesc(stateName, true, countryName),
+    getSafetyIntel(stateName, countryIso, true, countryName),
   ]);
 
   const result = {
@@ -886,7 +904,7 @@ app.get("/api/intel/state/:id", async (req, res) => {
     photos,
     news_headlines:    news,
     ai_briefing:       wikiDesc || `${stateName} is a state or region within ${countryName}.`,
-    ai_safety_summary: getStateSafety(stateName, countryName, countryIso),
+    ai_safety_summary: safetyVerdict || `No safety data available for ${stateName} right now.`,
     ai_best_months:    [],
     ai_hidden_gem:     null,
     ai_cost_estimate:  null,
