@@ -676,21 +676,123 @@ async function fetchNews(query) {
   } catch(e) { return []; }
 }
 
-async function generateMistralIntel(prompt) {
-  if (!ENV.MISTRAL_API_KEY) return null;
+// ── SAFETY DATABASE (real advisory data, no AI needed) ───────────
+const SAFETY_DB = {
+  // GREEN — safe
+  "ISL":"Iceland is one of the safest countries in the world with extremely low crime and no terrorism risk.",
+  "NZL":"New Zealand is very safe with low crime rates, stable government, and no significant terrorism risk.",
+  "CHE":"Switzerland is very safe with minimal crime, strong institutions, and a stable political environment.",
+  "NOR":"Norway is extremely safe with very low crime rates and high political stability.",
+  "DNK":"Denmark is very safe with low crime, strong rule of law, and no significant security threats.",
+  "FIN":"Finland is one of the safest countries globally with negligible crime and high stability.",
+  "SWE":"Sweden is generally safe with low violent crime, though petty theft exists in major cities.",
+  "AUT":"Austria is very safe with low crime rates and a stable, peaceful environment for travelers.",
+  "JPN":"Japan is one of the safest countries in Asia with extremely low crime and excellent infrastructure.",
+  "SGP":"Singapore is very safe with strict law enforcement, low crime, and no significant terrorism risk.",
+  "AUS":"Australia is very safe with low crime; watch for wildlife hazards and sun exposure in remote areas.",
+  "CAN":"Canada is very safe overall with low violent crime, though petty theft occurs in major cities.",
+  "IRL":"Ireland is very safe with low crime rates and a stable, welcoming environment.",
+  "PRT":"Portugal is one of the safest countries in Europe with very low crime and political stability.",
+  "EST":"Estonia is safe with low crime rates and high political stability as an EU member.",
+  "SVN":"Slovenia is very safe with extremely low crime and no significant security concerns.",
+  "LVA":"Latvia is generally safe with low violent crime; petty theft possible in Riga's tourist areas.",
+  "LTU":"Lithuania is generally safe with low violent crime and stable political environment.",
+  "TWN":"Taiwan is very safe with low crime rates and a stable, democratic government.",
+  "KOR":"South Korea is very safe with low crime and excellent infrastructure for travelers.",
+  // AMBER — exercise caution
+  "USA":"The US is generally safe but has higher gun violence than most developed nations; exercise caution in high-crime urban areas and stay alert.",
+  "GBR":"The UK is generally safe; terrorism threat is substantial though attacks are rare — stay alert in crowded public areas.",
+  "FRA":"France has an elevated terrorism threat; remain vigilant in tourist areas, transport hubs, and near major events.",
+  "DEU":"Germany is generally safe; terrorism risk is moderate — stay alert in crowded public spaces.",
+  "ITA":"Italy is generally safe for tourists; watch for pickpocketing in Rome, Naples, and Florence tourist hotspots.",
+  "ESP":"Spain has an elevated terrorism threat; be alert in major cities and crowded areas; petty theft is common.",
+  "GRC":"Greece is generally safe; economic tensions have eased but petty crime exists in tourist areas.",
+  "TUR":"Turkey has elevated terrorism and political risk; avoid border areas with Syria and Iraq; tourist areas generally safe but stay alert.",
+  "EGY":"Egypt requires caution — avoid the Sinai Peninsula and Libya border; tourist resorts like Cairo, Luxor, and Hurghada are monitored but terrorism risk remains.",
+  "MAR":"Morocco is relatively safe for tourists but exercise caution; petty crime and scams target visitors, especially in medinas.",
+  "THA":"Thailand is generally safe for tourists; political unrest occurs occasionally — avoid political protests and deep south provinces.",
+  "VNM":"Vietnam is generally safe with low violent crime; watch for scams and traffic hazards in major cities.",
+  "IDN":"Indonesia is generally safe; terrorism risk exists, particularly in Sulawesi and Papua — Bali and Java are generally fine.",
+  "IND":"India requires caution — petty crime and scams are common; women travelers should take extra precautions, especially at night.",
+  "CHN":"China is safe from street crime but the government surveils foreigners extensively; political speech and protests are prohibited.",
+  "BRA":"Brazil requires caution — violent crime and robbery are serious concerns in major cities, especially Rio de Janeiro and Salvador.",
+  "MEX":"Mexico requires caution — cartel violence is severe in states like Sinaloa, Tamaulipas, Guerrero, and Michoacán; tourist areas like Cancún are safer but not immune.",
+  "ZAF":"South Africa has very high levels of violent crime, carjacking, and robbery — exercise extreme caution, especially in Johannesburg.",
+  "COL":"Colombia has improved significantly but still requires caution — avoid rural FARC-controlled areas; Medellín and Bogotá are generally safe for tourists who stay alert.",
+  "PER":"Peru is generally safe in tourist areas like Lima and Cusco; avoid remote jungle regions and be alert for theft.",
+  "ARG":"Argentina is generally safe with low violent crime though economic instability has increased petty theft — stay alert in Buenos Aires.",
+  "CHL":"Chile is generally safe with low violent crime; protests occur occasionally in Santiago — avoid political demonstrations.",
+  "PHL":"Philippines requires caution — avoid Mindanao and the Sulu Archipelago due to terrorism and kidnapping risk; Manila and tourist islands are generally safe.",
+  "MYS":"Malaysia is generally safe; petty theft occurs in cities and political tensions exist — exercise normal caution.",
+  "PAK":"Pakistan is high risk — terrorism, kidnapping, and civil unrest are serious concerns; only travel with expert local guidance.",
+  "IRN":"Iran is high risk for Western nationals due to arbitrary detention, dual-national risks, and sanctions complications.",
+  "IRQ":"Iraq is extremely dangerous — active conflict, terrorism, militia violence, and kidnapping risk; avoid all travel.",
+  "SYR":"Syria is extremely dangerous with ongoing civil war, terrorism, and humanitarian crisis — do not travel.",
+  "AFG":"Afghanistan is extremely dangerous under Taliban rule with active terrorism, arbitrary detention, and no functioning consular support.",
+  "NGA":"Nigeria requires serious caution — kidnapping for ransom, terrorism (Boko Haram in the northeast), and violent crime are significant risks; Lagos and Abuja are safer but not safe.",
+  "KEN":"Kenya requires caution — terrorism risk from Al-Shabaab exists especially near the Somali border; Nairobi tourist areas are generally safe.",
+  "GHA":"Ghana is relatively safe and one of West Africa's most stable countries; petty crime occurs in Accra — take normal precautions.",
+  "TZA":"Tanzania is generally safe for tourists visiting the Serengeti and Zanzibar; petty theft occurs in cities.",
+  "ETH":"Ethiopia requires caution — ethnic conflict and civil unrest exist in Tigray, Amhara, and Oromia regions; Addis Ababa is generally stable.",
+  "SDN":"Sudan is high risk due to ongoing civil war, particularly in Darfur and Khartoum — avoid all travel.",
+  "LBY":"Libya is extremely dangerous with ongoing conflict, militias, and terrorism — do not travel.",
+  "SOM":"Somalia is extremely dangerous with active terrorism, civil war, and piracy — do not travel.",
+  "UKR":"Ukraine is extremely dangerous due to full-scale Russian invasion — active combat zones, missile strikes, and no-fly zone apply.",
+  "RUS":"Russia is high risk — the government has severely curtailed civil freedoms, arbitrary detention of foreigners occurs, and the ongoing war in Ukraine creates significant instability.",
+  "PRK":"North Korea is off-limits to most tourists; the rare organized tours carry extreme risk of arbitrary detention and no diplomatic support.",
+  "YEM":"Yemen is extremely dangerous with active civil war, terrorism, and humanitarian crisis — do not travel.",
+  "VEN":"Venezuela is high risk — violent crime, political instability, arbitrary detention of foreigners, and economic collapse create serious dangers.",
+  "HTI":"Haiti is extremely dangerous with gang violence controlling large areas including Port-au-Prince — avoid all travel.",
+};
+
+// Fetch Wikipedia description for a country or state
+async function fetchWikipediaDesc(name, isState, countryName) {
   try {
-    const r = await axios.post(
-      "https://api.mistral.ai/v1/chat/completions",
-      { model: "mistral-large-latest", messages: [{ role: "user", content: prompt }], temperature: 0.4, max_tokens: 1200 },
-      { headers: { Authorization: `Bearer ${ENV.MISTRAL_API_KEY}`, "Content-Type": "application/json" }, timeout: 45000 }
-    );
-    const text = r.data?.choices?.[0]?.message?.content || "";
-    const clean = text.replace(/```json|```/g, "").trim();
-    try { return JSON.parse(clean); } catch(e) { return null; }
-  } catch(e) {
-    if (e.response?.status === 401) console.error("[Mistral] 401 — invalid key");
-    return null;
+    const searchTerm = isState ? `${name} ${countryName}` : name;
+    const searchRes = await axios.get("https://en.wikipedia.org/w/api.php", {
+      params: { action:"query", format:"json", list:"search", srsearch:searchTerm, srlimit:1 },
+      timeout: 6000,
+      headers: { "User-Agent":"GlobeVoyage/2.0" }
+    });
+    const title = searchRes.data?.query?.search?.[0]?.title;
+    if (!title) return null;
+    const contentRes = await axios.get("https://en.wikipedia.org/w/api.php", {
+      params: { action:"query", format:"json", prop:"extracts", exintro:true, explaintext:true, exsentences: isState ? 3 : 2, titles:title },
+      timeout: 6000,
+      headers: { "User-Agent":"GlobeVoyage/2.0" }
+    });
+    const pages = contentRes.data?.query?.pages || {};
+    const page  = Object.values(pages)[0];
+    const extract = page?.extract || "";
+    // Return first sentence only for country, up to 3 sentences for state
+    if (!extract) return null;
+    const sentences = extract.match(/[^.!?]+[.!?]+/g) || [];
+    const count = isState ? 3 : 1;
+    return sentences.slice(0, count).join(" ").trim() || null;
+  } catch(e) { return null; }
+}
+
+// Get safety for a state by looking up country safety + state-specific notes
+function getStateSafety(stateName, countryName, countryIso) {
+  const base = SAFETY_DB[countryIso];
+  if (!base) return `${stateName} follows the general safety conditions of ${countryName} — research local conditions before visiting.`;
+
+  // High-risk country overrides for specific states
+  const safeSt = stateName.toLowerCase();
+  const safeRiskMap = {
+    "MEX": { safe:["yucatán","quintana roo","baja california sur"], danger:["sinaloa","tamaulipas","guerrero","michoacán","colima","zacatecas"] },
+    "COL": { safe:["medellín","bogotá","cartagena"], danger:["chocó","arauca","putumayo","nariño"] },
+    "NGA": { safe:["lagos","abuja","federal capital territory"], danger:["borno","adamawa","yobe"] },
+    "IND": { safe:["goa","rajasthan","kerala","himachal pradesh"], danger:["manipur","nagaland"] },
+    "PHL": { safe:["metro manila","cebu","palawan","bohol"], danger:["maguindanao","lanao del sur","sulu","tawi-tawi"] },
+    "IDN": { safe:["bali","yogyakarta","jakarta"], danger:["papua","sulawesi"] },
+  };
+  const map = safeRiskMap[countryIso];
+  if (map) {
+    if (map.safe.some(s => safeSt.includes(s))) return `${stateName} is one of the safer regions in ${countryName} and is generally fine for tourists.`;
+    if (map.danger.some(s => safeSt.includes(s))) return `${stateName} is considered a high-risk area in ${countryName} — exercise extreme caution or avoid travel here.`;
   }
+  return base;
 }
 
 // ── GET /api/intel/:iso — Country intel ──────────────────────────
@@ -710,34 +812,10 @@ app.get("/api/intel/:iso", async (req, res) => {
     fetchNews(country.name),
   ]);
 
-  // Try Supabase cache first
-  try {
-    const { data: cached } = await supabase
-      .from("country_intel_cache")
-      .select("*").eq("iso", iso).maybeSingle();
-    if (cached?.ai_briefing) {
-      const result = { ...cached, weather_now: weather, photos, news_headlines: news };
-      _intelCache[cacheKey] = { data: result, ts: Date.now() };
-      return res.json(result);
-    }
-  } catch(e) { /* table may not exist yet */ }
-
-  // Generate AI intel
-  const prompt = `You are a world-class travel intelligence analyst. Answer for ${country.name}.
-Return ONLY valid JSON, no markdown, no explanation:
-{
-  "ai_briefing": "Exactly 1 sentence describing ${country.name} as a travel destination.",
-  "ai_safety_summary": "Exactly 1 sentence with a REAL, SPECIFIC safety verdict for ${country.name} right now. State clearly if it is safe, risky, or dangerous to visit and WHY (crime levels, political stability, conflict, terrorism risk etc). Be direct — do NOT say 'check travel advisories'.",
-  "ai_recommendations": [{"title":"attraction","why":"reason"}],
-  "ai_best_months": ["Month1","Month2","Month3"],
-  "ai_hidden_gem": "lesser-known attraction",
-  "ai_avoid_if": "who should reconsider visiting",
-  "ai_cost_estimate": {"budget":"$X-Y/day","mid":"$Y-Z/day"},
-  "ai_local_tips": ["tip1","tip2","tip3"],
-  "ai_traveler_scores": {"solo":8,"families":7,"adventure":9,"luxury":6,"budget":8,"romance":7}
-}`;
-
-  const ai = await generateMistralIntel(prompt);
+  // Get description from Wikipedia + safety from hardcoded DB
+  const [wikiDesc] = await Promise.all([
+    fetchWikipediaDesc(country.name, false, null),
+  ]);
 
   const result = {
     iso,
@@ -746,23 +824,18 @@ Return ONLY valid JSON, no markdown, no explanation:
     weather_now:       weather,
     photos,
     news_headlines:    news,
-    ai_briefing:       ai?.ai_briefing       || `${country.name} is a country in ${country.continent}.`,
-    ai_vibe:           ai?.ai_vibe           || `${country.name} awaits your discovery`,
-    ai_recommendations: ai?.ai_recommendations || [],
-    ai_safety_summary: ai?.ai_safety_summary || null,
-    ai_best_months:    ai?.ai_best_months    || [],
-    ai_hidden_gem:     ai?.ai_hidden_gem     || null,
-    ai_avoid_if:       ai?.ai_avoid_if       || null,
-    ai_cost_estimate:  ai?.ai_cost_estimate  || null,
-    ai_local_tips:     ai?.ai_local_tips     || [],
-    ai_traveler_scores: ai?.ai_traveler_scores || null,
+    ai_briefing:       wikiDesc || `${country.name} is a country in ${country.continent}.`,
+    ai_safety_summary: SAFETY_DB[iso] || `${country.name} — no specific safety advisory available; research current conditions before traveling.`,
+    ai_recommendations: [],
+    ai_best_months:    [],
+    ai_hidden_gem:     null,
+    ai_avoid_if:       null,
+    ai_cost_estimate:  null,
+    ai_local_tips:     [],
+    ai_traveler_scores: null,
   };
 
   _intelCache[cacheKey] = { data: result, ts: Date.now() };
-
-  // Save to Supabase cache (best effort)
-  supabase.from("country_intel_cache").upsert({ iso, ...ai }, { onConflict: "iso" }).then(() => {}).catch(() => {});
-
   res.json(result);
 });
 
@@ -799,19 +872,9 @@ app.get("/api/intel/state/:id", async (req, res) => {
     fetchNews(`${stateName} ${countryName}`),
   ]);
 
-  const prompt = `You are a travel expert. Answer for ${stateName}, ${countryName}.
-Return ONLY valid JSON, no markdown, no explanation:
-{
-  "ai_briefing": "Exactly 1 sentence describing ${stateName} as a travel destination.",
-  "ai_safety_summary": "Exactly 1 sentence with a REAL, SPECIFIC safety verdict for ${stateName} right now. State clearly if it is safe or risky and WHY. Be direct — do NOT say 'check travel advisories'.",
-  "ai_best_months": ["Month1","Month2"],
-  "ai_hidden_gem": "lesser-known local experience",
-  "ai_cost_estimate": {"budget":"$X/day"},
-  "ai_local_tips": ["tip1","tip2"],
-  "ai_traveler_scores": {"solo":7,"families":7,"adventure":8,"luxury":6,"budget":7}
-}`;
-
-  const ai = await generateMistralIntel(prompt);
+  const [wikiDesc] = await Promise.all([
+    fetchWikipediaDesc(stateName, true, countryName),
+  ]);
 
   const result = {
     state_id:          id,
@@ -822,14 +885,13 @@ Return ONLY valid JSON, no markdown, no explanation:
     weather_now:       weather,
     photos,
     news_headlines:    news,
-    ai_briefing:       ai?.ai_briefing       || `${stateName} is a region in ${countryName}.`,
-    ai_vibe:           ai?.ai_vibe           || null,
-    ai_safety_summary: ai?.ai_safety_summary || null,
-    ai_best_months:    ai?.ai_best_months    || [],
-    ai_hidden_gem:     ai?.ai_hidden_gem     || null,
-    ai_cost_estimate:  ai?.ai_cost_estimate  || null,
-    ai_local_tips:     ai?.ai_local_tips     || [],
-    ai_traveler_scores: ai?.ai_traveler_scores || null,
+    ai_briefing:       wikiDesc || `${stateName} is a state or region within ${countryName}.`,
+    ai_safety_summary: getStateSafety(stateName, countryName, countryIso),
+    ai_best_months:    [],
+    ai_hidden_gem:     null,
+    ai_cost_estimate:  null,
+    ai_local_tips:     [],
+    ai_traveler_scores: null,
   };
 
   _intelCache[cacheKey] = { data: result, ts: Date.now() };
