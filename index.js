@@ -4,21 +4,49 @@ const https   = require("https");
 const http    = require("http");
 const { createClient } = require("@supabase/supabase-js");
 
+// ── Crash protection ────────────────────────────────────────────
+// Without these, ANY unhandled error anywhere in the app (a bad route,
+// a missing function, a bad promise) kills the entire Node process,
+// and Render then has to cold-boot a brand new instance from scratch —
+// which is exactly what produces ERR_CONNECTION_CLOSED for every route,
+// not just the one that errored.
+process.on("unhandledRejection", (err) => {
+  console.error("[unhandledRejection]", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+// ── Supabase client (non-fatal if misconfigured) ──────────────────
+// createClient() throws SYNCHRONOUSLY if SUPABASE_URL is missing/invalid.
+// That throw happens at module load, outside any try/catch, so a bad or
+// missing env var here would previously crash the whole server on every
+// boot attempt — a permanent crash loop, not just a slow cold start.
+let supabase = null;
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("[Supabase] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing — running in memory-fallback mode.");
+} else {
+  try {
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  } catch (e) {
+    console.error("[Supabase] Failed to create client:", e.message);
+    supabase = null;
+  }
+}
 
 // ── Self-ping keepalive ───────────────────────────────────────────
+// Every 5s was excessive (17k+ requests/day) for no benefit — Render's
+// free tier only needs *some* traffic within its inactivity window.
+// Every 4 minutes is plenty to keep it from sleeping.
 const SELF = process.env.RENDER_EXTERNAL_URL || "https://globevoyage-admin.onrender.com";
 setInterval(() => {
   const mod = SELF.startsWith("https") ? https : http;
   mod.get(SELF + "/", r => r.resume()).on("error", () => {});
-}, 5000);
+}, 4 * 60 * 1000);
 
 // ══════════════════════════════════════════════════════════════════
 // COMPLETE WORLD GEO — 195 countries + all states
@@ -225,6 +253,7 @@ const WORLD_GEO = {
 // SEED world_geo TABLE ON STARTUP
 // ══════════════════════════════════════════════════════════════════
 async function seedWorldGeo() {
+  if (!supabase) { console.log("[Seed] Skipped — no Supabase client configured."); return; }
   console.log("[Seed] Starting world_geo seed…");
   const { count } = await supabase.from("world_geo").select("*", { count:"exact", head:true });
   if (count && count > 100) { console.log(`[Seed] Already seeded (${count} rows)`); return; }
@@ -916,6 +945,39 @@ app.get("/api/intel/state/:id", async (req, res) => {
   res.json(result);
 });
 
+// ── Mistral AI completion helper ──────────────────────────────────
+// This was being CALLED below but never defined — every request to
+// /api/intel/area threw "generateMistralIntel is not defined", which
+// (thanks to the new unhandledRejection guard above) now just logs an
+// error and returns null instead of taking the whole server down.
+async function generateMistralIntel(prompt) {
+  if (!ENV.MISTRAL_API_KEY) return null;
+  try {
+    const r = await axios.post(
+      "https://api.mistral.ai/v1/chat/completions",
+      {
+        model: "mistral-small-latest",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        response_format: { type: "json_object" },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${ENV.MISTRAL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 20000,
+      }
+    );
+    const text = r.data?.choices?.[0]?.message?.content;
+    if (!text) return null;
+    return JSON.parse(text);
+  } catch (e) {
+    console.error("[Mistral] generation failed:", e.message);
+    return null;
+  }
+}
+
 // ── POST /api/intel/area — Area intel ────────────────────────────
 app.post("/api/intel/area", async (req, res) => {
   const { area, state, country, iso } = req.body || {};
@@ -1012,5 +1074,3 @@ app.listen(PORT, async () => {
 ╚══════════════════════════════════════════════════════════╝`);
   try { await seedWorldGeo(); } catch(e) { console.error("[Startup] Seed error:", e.message); }
 });
-
-module.exports = app;
